@@ -23,6 +23,7 @@ import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.sql.Connection;
 import java.sql.Driver;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
 import java.sql.Statement;
@@ -868,13 +869,15 @@ public class WSManagedConnectionFactoryImpl extends WSManagedConnectionFactory i
                             if ("URL".equals(name) || "url".equals(name)) {
                                 url = str;
                                 if (isTraceOn && tc.isDebugEnabled())
-                                    Tr.debug(this, tc, name + '=' + str); // TODO obscure values of any possible passwords in URL value?
+                                    Tr.debug(this, tc, name + '=' + PropertyService.filterURL(str));
                             } else if ((user == null || !"user".equals(name)) && (pwd == null || !"password".equals(name))) {
                                 // Decode passwords
-                                if (PropertyService.isPassword(name) && PasswordUtil.getCryptoAlgorithm(str) != null) {
+                                if (PropertyService.isPassword(name)) {
                                     if (isTraceOn && tc.isDebugEnabled())
                                         Tr.debug(this, tc, "prop " + name + '=' + (str == null ? null : "***"));
-                                    str = PasswordUtil.decode(str);
+                                    if (PasswordUtil.getCryptoAlgorithm(str) != null) {
+                                        str = PasswordUtil.decode(str);
+                                    }
                                 } else {
                                     if (isTraceOn && tc.isDebugEnabled())
                                         Tr.debug(this, tc, "prop " + name + '=' + str);
@@ -897,11 +900,24 @@ public class WSManagedConnectionFactoryImpl extends WSManagedConnectionFactory i
                             Tr.debug(this, tc, "prop password=" + (pwd == null ? null : "***"));
                         }
                     }
-                    return ((Driver) dataSourceOrDriver).connect(url, conProps);
+                    Connection conn = ((Driver) dataSourceOrDriver).connect(url, conProps);
+                    
+                    //Although possible, this shouldn't happen since the JDBC Driver has indicated it can accept the URL
+                    if(conn == null) {
+                        //return beginning on JDBC url (ex jdbc:db2:
+                        String urlPrefix = "";
+                        int first = url.indexOf(":");
+                        int second = url.indexOf(":", first+1);
+                        if(first < 0 || second < 0) {
+                            urlPrefix = url.substring(0, 10);
+                        } else {
+                            urlPrefix = url.substring(0, second);
+                        }
+                        throw new ResourceException(AdapterUtil.getNLSMessage("DSRA4006.null.connection", dsConfig.get().id, vendorImplClass.getName(), urlPrefix));
+                    }
+                    return conn;
                 }
             });
-            
-            //TODO need to handle null connection here, otherwise we'll get a null pointer below
 
             try {
                 postGetConnectionHandling(conn);
@@ -1348,7 +1364,8 @@ public class WSManagedConnectionFactoryImpl extends WSManagedConnectionFactory i
                         if(!Driver.class.equals(type)) {
                             ((CommonDataSource) dataSourceOrDriver).setLogWriter(out);
                         } else {
-                            //TODO behavior for java.sql.Driver
+                            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                                Tr.debug(this, tc, "Unable to set logwriter on Driver type");
                         }
                         return null;
                     }
@@ -1408,7 +1425,7 @@ public class WSManagedConnectionFactoryImpl extends WSManagedConnectionFactory i
             if(!Driver.class.equals(type)) {
                 return ((CommonDataSource) dataSourceOrDriver).getLogWriter();
             }
-            //TODO behavior for java.sql.driver
+            //Return null for Driver since that is the default value which can't be modified
             return null;
         } catch (SQLException se) {
             FFDCFilter.processException(se, getClass().getName(), "1656", this);
@@ -1426,7 +1443,7 @@ public class WSManagedConnectionFactoryImpl extends WSManagedConnectionFactory i
             if(!Driver.class.equals(type)) {
                 return ((CommonDataSource) dataSourceOrDriver).getLoginTimeout();
             }
-            //TODO behavior for java.sql.Driver
+            //Return that the default value is being used when using the Driver type
             return 0;
         } catch (SQLException sqlX) {
             FFDCFilter.processException(sqlX, getClass().getName(), "1670", this);
