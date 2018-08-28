@@ -56,11 +56,13 @@ Subsystem-Name: Contexts and Dependency Injection 2.0
 -bundles=com.ibm.ws.org.jboss.weld.3.0.5, \
  com.ibm.ws.org.jboss.jdeparser.1.0.0, \
  com.ibm.ws.managedobject, \
- com.ibm.ws.org.jboss.logging.3.3.0, \
+ com.ibm.ws.org.jboss.logging, \
  com.ibm.ws.org.jboss.classfilewriter.1.2.3, \
  com.ibm.ws.cdi.weld, \
  com.ibm.ws.cdi.internal, \
  com.ibm.ws.cdi.2.0.weld, \
+ com.ibm.websphere.javaee.jaxb.2.2; apiJar=false; required-osgi-ee:="(&(osgi.ee=JavaSE)(version>=9))"; location:="dev/api/spec/,lib/",\
+ com.ibm.websphere.javaee.jaxws.2.2; apiJar=false; required-osgi-ee:="(&(osgi.ee=JavaSE)(version>=9))"; location:="dev/api/spec/,lib/", \
  com.ibm.websphere.javaee.jstl.1.2; apiJar=false; location:="dev/api/spec/,lib/"; mavenCoordinates="javax.servlet:jstl:1.2", \
  com.ibm.websphere.javaee.websocket.1.1; apiJar=false; location:="dev/api/spec/,lib/"; mavenCoordinates="javax.websocket:javax.websocket-api:1.1", \
  com.ibm.ws.cdi.interfaces
