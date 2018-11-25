@@ -21,6 +21,8 @@ import org.junit.runners.Suite.SuiteClasses;
                 BasicCdiInEE8Test.class,
                 HeaderPropagationTest.class,
                 MultiClientCdiTest.class,
-                AsyncMethodTest.class
+                AsyncMethodTest.class,
+                ProduceConsumeTest.class,
+                PropsTest.class
 })
 public class FATSuite {}

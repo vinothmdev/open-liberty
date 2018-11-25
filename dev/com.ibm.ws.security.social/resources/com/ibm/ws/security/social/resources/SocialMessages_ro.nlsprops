@@ -1,8 +1,13 @@
-# IBM Confidential OCO Source Material
-# (C) COPYRIGHT International Business Machines Corp. 2016.
-# The source code for this program is not published or otherwise divested
-# of its trade secrets, irrespective of what has been deposited with the
-# U.S. Copyright Office.
+###############################################################################
+# Copyright (c) 2016, 2018 IBM Corporation and others.
+# All rights reserved. This program and the accompanying materials
+# are made available under the terms of the Eclipse Public License v1.0
+# which accompanies this distribution, and is available at
+# http://www.eclipse.org/legal/epl-v10.html
+#
+# Contributors:
+#     IBM Corporation - initial API and implementation
+###############################################################################
 # -------------------------------------------------------------------------------------------------
 #CMVCPATHNAME com.ibm.ws.security/resources/com/ibm/ws/security/social/resources/SocialMessages.nlsprops
 #COMPONENTPREFIX CWWKS
@@ -537,6 +542,16 @@ REQUEST_URL_NOT_VALID=CWWKS5499E: Caracteristica de logare social\u0103 nu poate
 REQUEST_URL_NOT_VALID.explanation=URL-ul original de cerere nu este un URL valid. URL-ul ar putea include caractere care nu sunt valide sau e posibil ca URL-ul s\u0103 fie format gre\u015fit.
 REQUEST_URL_NOT_VALID.useraction=Verifica\u0163i c\u0103 URL-ul de cerere care este specificat \u00een mesaj se potrive\u015fte cu URL-ul de cerere de resurs\u0103 protejat\u0103 original\u0103. Verifica\u0163i c\u0103 URL-ul este bine format \u015fi con\u0163ine doar caractere URI valide.
 
-INVALID_CONFIG_PARAM=CWWKS5500E: Un atribut de configura\u0163ie [{0}] care este cerut \u00eentr-o configura\u0163ie de logare la o aplica\u0163ie social\u0103 care o valoare care nu este valid\u0103 [{1}].
-INVALID_CONFIG_PARAM.explanation=Caracteristica de logare social\u0103 nu poate g\u0103si o valoare valid\u0103 pentru un atribut de configurare necesar. Este necesar\u0103 o valoare valid\u0103 pentru a procesa cererea.
-INVALID_CONFIG_PARAM.useraction=Verifica\u0163i c\u0103 atributul specificat din configura\u0163ia de logare social\u0103 este configurat \u015fi este setat la o valoare valid\u0103.
+INVALID_CONFIG_PARAM=CWWKS5500E: Un parametru de configura\u0163ie {0} lipse\u015fte sau are o valoare invalid\u0103 {1}
+INVALID_CONFIG_PARAM.explanation=Codul runtime de logare social\u0103 nu au g\u0103sit un parametru cerut c\u00e2nd au procesat cererea clientului.
+INVALID_CONFIG_PARAM.useraction=Verifica\u0163i \u00een configura\u0163ie parametrul lips\u0103 \u015fi asigura\u0163i-v\u0103 c\u0103 este specificat \u015fi este corect.
+
+OIDC_CLIENT_DISCOVERY_SSL_ERROR=CWWKS5501E: Caracteristica de logare social\u0103 a e\u015fuat s\u0103 ob\u0163in\u0103 informa\u0163iile de punct final furnizor OpenID Connect prin URL-ul de punct final descoperire [{0}]. Actualiza\u0163i configura\u0163ia pentru clientul OIDC Social Login (configura\u0163ia oidcLogin) cu URL-ul HTTPS de punct final descoperire corect. 
+OIDC_CLIENT_DISCOVERY_SSL_ERROR.explanation=Configura\u0163ia oidcLogin este configurat\u0103 pentru a descoperi punctele finale furnizor OpenID Connect prin URL-ul de descoperire, dar procesul de descoperire a e\u015fuat. Caracteristica de logare social\u0103 nu va putea procesa cererile de autentificare p\u00e2n\u0103 c\u00e2nd nu este corectat\u0103 configura\u0163ia discoveryEndpoint sau p\u00e2n\u0103 c\u00e2nd descoperirea este reu\u015fit\u0103.
+OIDC_CLIENT_DISCOVERY_SSL_ERROR.useraction=Corecta\u0163i configura\u0163ia oidcLogin pentru a v\u0103 asigura c\u0103 1) URL-ul de punct final descoperire se refer\u0103 la furnizorul OpenID Connect corect, 2) URL-ul de punct final descoperire este HTTPS, 3) caracteristica SSL \u015fi elementele de depozit de chei sunt configurate cu \u00eencredere pentru furnizorul OpenID Connect \u015fi 4) asigura\u0163i-v\u0103 c\u0103 punctul final de descoperire al furnizorului este func\u0163ional.
+
+OIDC_CLIENT_DISC_RESPONSE_ERROR=CWWKS5502E: Nu a fost returnat un mesaj de succes de la URL-ul de [{0}]. Starea de r\u0103spuns [{1}] \u015fi eroarea [{2}] sunt de la cererea de descoperire.
+OIDC_CLIENT_DISC_RESPONSE_ERROR.explanation=Caracteristica de logare social\u0103 a e\u015fuat s\u0103 acceseze punctul final descoperire furnizor OpenID Connect \u015fi mesajul poate con\u0163ine mai multe informa\u0163ii despre eroare.
+OIDC_CLIENT_DISC_RESPONSE_ERROR.useraction=Asigura\u0163i-v\u0103 c\u0103 furnizorul OpenID Connect este disponibil \u015fi c\u0103 punctul final de descoperire specificat este corect.
+
+

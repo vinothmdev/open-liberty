@@ -6,7 +6,7 @@
  * http://www.eclipse.org/legal/epl-v10.html
  *
  * Contributors:
- *     IBM Corporation - initial API and implementation
+ * IBM Corporation - initial API and implementation
  *******************************************************************************/
 package com.ibm.ws.security.openidconnect.clients.common;
 
@@ -43,9 +43,11 @@ import org.jmock.integration.junit4.JUnit4Mockery;
 import org.jmock.lib.legacy.ClassImposteriser;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
+import org.junit.rules.TestRule;
 
 import com.google.gson.JsonObject;
 import com.ibm.websphere.ras.annotation.Sensitive;
@@ -70,8 +72,13 @@ import com.ibm.wsspi.ssl.SSLSupport;
 import com.ibm.wsspi.webcontainer.servlet.IExtendedRequest;
 
 import test.common.SharedOutputManager;
+import test.common.junit.rules.MaximumJavaLevelRule;
 
 public class OIDCClientAuthenticatorUtilTest {
+
+    // Cap this unit test to Java 8 because it relies on legacy cglib which is not supported post JDK 8
+    @ClassRule
+    public static TestRule maxJavaLevel = new MaximumJavaLevelRule(8);
 
     protected static SharedOutputManager outputMgr = SharedOutputManager.getInstance();
 
@@ -202,7 +209,7 @@ public class OIDCClientAuthenticatorUtilTest {
         map.put("refresh_token", new String[] { "refresh_token_content" });
         map.put("code", new String[] { "YMKexUVcHci2dhDJzNRHW2w9rhf70u" });
         map.put("state", new String[] { "001534964952438QID21LdnF" });
-        
+
         JsonObject jsonObject = new JsonObject();
         Set<Map.Entry<String, String[]>> entries = map.entrySet();
         for (Map.Entry<String, String[]> entry : entries) {
@@ -213,7 +220,7 @@ public class OIDCClientAuthenticatorUtilTest {
             }
         }
         String requestParameters = jsonObject.toString();
-        
+
         String localEncoded = null;
         try {
             localEncoded = Base64Coder.toString(Base64Coder.base64Encode(requestParameters.getBytes(ClientConstants.CHARSET)));
@@ -223,9 +230,9 @@ public class OIDCClientAuthenticatorUtilTest {
 
         // digest with the client_secret value
         String tmpStr = new String(localEncoded);
-        tmpStr = tmpStr.concat("_").concat(convClientConfig.getClass().getName()+clientSecret);
-        
-        encodedReqParams = new String(localEncoded).concat("_").concat(HashUtils.digest(tmpStr));   
+        tmpStr = tmpStr.concat("_").concat(convClientConfig.toString() + clientSecret);
+
+        encodedReqParams = new String(localEncoded).concat("_").concat(HashUtils.digest(tmpStr));
         reqParameterCookie = new Cookie(ClientConstants.WAS_OIDC_CODE, encodedReqParams);
     }
 
@@ -776,6 +783,8 @@ public class OIDCClientAuthenticatorUtilTest {
                 will(returnValue(false));
                 one(clientConfig).getAuthorizationEndpointUrl(); // TODO: Refactor code to remove duplicate calls
                 will(returnValue(TEST_AUTHORIZATION_ENDPOINT));
+                allowing(clientConfig).getUseSystemPropertiesForHttpClientConnections();
+                will(returnValue(false));
             }
         });
     }
@@ -882,6 +891,8 @@ public class OIDCClientAuthenticatorUtilTest {
                 will(returnValue(false));
                 one(clientConfig).getTokenEndpointAuthMethod();
                 will(returnValue(authMethod));
+                allowing(clientConfig).getUseSystemPropertiesForHttpClientConnections();
+                will(returnValue(false));
             }
         });
 
@@ -893,7 +904,7 @@ public class OIDCClientAuthenticatorUtilTest {
             {
                 one(oidcClientUtil).getTokensFromAuthzCode(TEST_TOKEN_ENDPOINT, CLIENT01, SHARED_KEY,
                         TEST_REDIRECT_URL, TEST_AUTHORIZATION_CODE,
-                        TEST_GRANT_TYPE, sslSocketFactory, false, authMethod, null);
+                        TEST_GRANT_TYPE, sslSocketFactory, false, authMethod, null, null, false);
                 will(returnValue(tokens));
             }
         });
@@ -1069,7 +1080,8 @@ public class OIDCClientAuthenticatorUtilTest {
             {
                 one(oidcClientUtil).getTokensFromAuthzCode(TEST_TOKEN_ENDPOINT, CLIENT01, SHARED_KEY,
                         TEST_REDIRECT_URL, TEST_AUTHORIZATION_CODE,
-                        TEST_GRANT_TYPE, sslSocketFactory, false, authMethod, null);
+                        TEST_GRANT_TYPE, sslSocketFactory, false, authMethod, null, null, false);
+
                 will(throwException(throwable));
             }
         });
@@ -1521,7 +1533,10 @@ public class OIDCClientAuthenticatorUtilTest {
                 SSLSocketFactory sslSocketFactory,
                 boolean b,
                 String authMethod,
-                String resources) throws HttpException, IOException {
+                String resources, 
+                HashMap<String, String> customParams, 
+                boolean useJvmProps) throws HttpException, IOException {
+
             if (ioe != null) {
                 throw ioe;
             }
