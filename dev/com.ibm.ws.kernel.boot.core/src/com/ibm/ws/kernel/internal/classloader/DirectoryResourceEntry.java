@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.security.cert.Certificate;
-import java.util.jar.Manifest;
 
 /**
  */
@@ -36,11 +35,6 @@ public class DirectoryResourceEntry implements ResourceEntry {
     }
 
     @Override
-    public Manifest getManifest() throws IOException {
-        return handler.getManifest();
-    }
-
-    @Override
     public Certificate[] getCertificates() {
         return null;
     }
@@ -54,11 +48,6 @@ public class DirectoryResourceEntry implements ResourceEntry {
         } finally {
             JarFileClassLoader.close(in);
         }
-    }
-
-    @Override
-    public URL toExternalURL() {
-        return JarFileClassLoader.toURL(file);
     }
 
     @Override

@@ -93,8 +93,8 @@ import org.apache.cxf.ws.addressing.EndpointReferenceType;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.cxf.client.component.AsyncClientRunnableWrapperManager;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
-import com.ibm.ws.jaxrs20.client.component.AsyncClientRunnableWrapperManager;
 
 /*
  * HTTP Conduit implementation.
@@ -671,7 +671,7 @@ public abstract class HTTPConduit
         try {
             if (in != null) {
                 int count = 0;
-                byte buffer[] = new byte[1024];
+                byte[] buffer = new byte[1024];
                 while (in.read(buffer) != -1
                     && count < 25) {
                     //don't do anything, we just need to pull off the unread data (like
@@ -1287,10 +1287,10 @@ public abstract class HTTPConduit
                         ex.execute(runnable);
                     }
                 } catch (RejectedExecutionException rex) {
-                    if (allowCurrentThread
-                        && policy != null
+                    if (!allowCurrentThread
+                        || (policy != null
                         && policy.isSetAsyncExecuteTimeoutRejection()
-                        && policy.isAsyncExecuteTimeoutRejection()) {
+                        && policy.isAsyncExecuteTimeoutRejection())) {
                         throw rex;
                     }
                     if (!hasLoggedAsyncWarning) {
@@ -1322,7 +1322,7 @@ public abstract class HTTPConduit
 
             // If this is a GET method we must not touch the output
             // stream as this automagically turns the request into a POST.
-            if (getMethod().equals("GET") || cachedStream == null) {
+            if ("GET".equals(getMethod()) || cachedStream == null) {
                 handleNoOutput();
                 return;
             }
@@ -1506,6 +1506,7 @@ public abstract class HTTPConduit
             case HttpURLConnection.HTTP_MOVED_TEMP:
             case HttpURLConnection.HTTP_SEE_OTHER:
             case 307:
+            case 308:
                 return redirectRetransmit();
             case HttpURLConnection.HTTP_UNAUTHORIZED:
             case HttpURLConnection.HTTP_PROXY_AUTH:
@@ -1654,7 +1655,7 @@ public abstract class HTTPConduit
             }
             if (exchange != null) {
                 exchange.put(Message.RESPONSE_CODE, rc);
-                if (rc == 404 || rc == 503) {
+                if (rc == 404 || rc == 503 || rc == 429) {
                     exchange.put("org.apache.cxf.transport.service_not_available", true);
                 }
             }
@@ -1690,8 +1691,10 @@ public abstract class HTTPConduit
             }
             propagateConduit(exchange, inMessage);
 
-            if (!doProcessResponse(outMessage, responseCode)
-                || HttpURLConnection.HTTP_ACCEPTED == responseCode) {
+            if ((!doProcessResponse(outMessage, responseCode)
+                || HttpURLConnection.HTTP_ACCEPTED == responseCode)
+                && MessageUtils.getContextualBoolean(outMessage, 
+                    Message.PROCESS_202_RESPONSE_ONEWAY_OR_PARTIAL, true)) {
                 in = getPartialResponse();
                 if (in == null
                     || !MessageUtils.getContextualBoolean(outMessage, Message.PROCESS_ONEWAY_RESPONSE, false)) {
@@ -1986,7 +1989,7 @@ public abstract class HTTPConduit
         // retransmit, it means we have already supplied information
         // which must have been wrong, or we wouldn't be here again.
         // Otherwise, the server may be 401 looping us around the realms.
-        if (authURLs.contains(currentURL.toString() + realm)) {
+        if (!authURLs.add(currentURL.toString() + realm)) {
             String logMessage = "Authorization loop detected on Conduit \""
                 + conduitName
                 + "\" on URL \""
@@ -2000,7 +2003,5 @@ public abstract class HTTPConduit
 
             throw new IOException(logMessage);
         }
-        // Register that we have been here before we go.
-        authURLs.add(currentURL.toString() + realm);
     }
 }

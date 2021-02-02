@@ -15,6 +15,9 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.security.AccessController;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -30,8 +33,6 @@ import org.apache.cxf.endpoint.Server;
 import org.apache.cxf.frontend.WSDLGetInterceptor;
 import org.apache.cxf.frontend.WSDLGetUtils;
 import org.apache.cxf.interceptor.Interceptor;
-import org.apache.cxf.interceptor.LoggingInInterceptor;
-import org.apache.cxf.interceptor.LoggingOutInterceptor;
 import org.apache.cxf.jaxws.support.JaxWsEndpointImpl;
 import org.apache.cxf.message.Message;
 import org.apache.cxf.transport.http.AbstractHTTPDestination;
@@ -45,6 +46,8 @@ import com.ibm.ws.jaxws.metadata.JaxWsModuleMetaData;
 import com.ibm.ws.jaxws.support.JaxWsInstanceManager;
 import com.ibm.ws.jaxws.support.JaxWsInstanceManager.InterceptException;
 import com.ibm.ws.jaxws.support.LibertyJaxWsCompatibleWSDLGetInterceptor;
+import com.ibm.ws.jaxws.support.LibertyLoggingInInterceptor;
+import com.ibm.ws.jaxws.support.LibertyLoggingOutInterceptor;
 import com.ibm.ws.jaxws.utils.JaxWsUtils;
 import com.ibm.ws.jaxws.utils.StringUtils;
 
@@ -106,13 +109,11 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
         boolean wsdlLocationExisted = true;
         boolean wsdlLocationEmpty = StringUtils.isEmpty(wsdlLocation);
         //check whether there is jax-ws-catalog enabled
-        if (!wsdlLocationEmpty && wsdlUrl == null)
-        {
+        if (!wsdlLocationEmpty && wsdlUrl == null) {
             wsdlLocationExisted = false;
             OASISCatalogManager catalogManager = jaxWsModuleMetaData.getServerMetaData().getServerBus().getExtension(OASISCatalogManager.class);
             String resolvedLocation = null;
-            if (catalogManager != null)
-            {
+            if (catalogManager != null) {
 
                 try {
                     resolvedLocation = catalogManager.resolveSystem(wsdlLocation);
@@ -127,8 +128,7 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
                 }
 
             }
-            if (resolvedLocation != null)
-            {
+            if (resolvedLocation != null) {
                 wsdlLocationExisted = true;
             }
 
@@ -150,12 +150,26 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
 
     protected void customizeLoggingInOutIntercetptor(EndpointInfo libertyEndpointInfo) {
         Map<String, String> endpointProperties = libertyEndpointInfo.getEndpointProperties();
+
         if (null != endpointProperties && Boolean.valueOf(endpointProperties.get(JaxWsConstants.ENABLE_lOGGINGINOUTINTERCEPTOR))) {
+            // If we're here we know this property is set in the config and is true. We enable pretty logging of the SOAP Message
+            // by LibertyLoggingIn(Out)Interceptors
+            // TODO Create a way of enabling and disabling logging for individual endpoints. 
+            if (tc.isDebugEnabled()) {
+                Tr.debug(tc, JaxWsConstants.ENABLE_lOGGINGINOUTINTERCEPTOR
+                             + " has been enabled, enabling SOAP Message Logging with the LibertyLoggingInInterceptor and LibertyLoggingOutInterceptor");
+            }
             List<Interceptor<? extends Message>> inInterceptors = server.getEndpoint().getInInterceptors();
-            inInterceptors.add(new LoggingInInterceptor());
+            // Remove LoggingInInterceptor if one already exists
+            inInterceptors.remove(LibertyLoggingInInterceptor.INSTANCE);
+            inInterceptors.add(new LibertyLoggingInInterceptor(true));
+
             List<Interceptor<? extends Message>> outInterceptors = server.getEndpoint().getOutInterceptors();
-            outInterceptors.add(new LoggingOutInterceptor());
+            // Remove LoggingOutInterceptor if one already exists
+            outInterceptors.remove(LibertyLoggingOutInterceptor.INSTANCE);
+            outInterceptors.add(new LibertyLoggingOutInterceptor(true));
         }
+
     }
 
     public AbstractHTTPDestination getDestination() {
@@ -178,7 +192,20 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
     public void invoke(HttpServletRequest request, HttpServletResponse response) throws ServletException {
         try {
             updateDestination(request);
-            destination.invoke(servletConfig, servletConfig.getServletContext(), request, response);
+
+            final HttpServletRequest req = request;
+            final HttpServletResponse resp = response;
+            try {
+                AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
+                    @Override
+                    public Void run() throws IOException {
+                        destination.invoke(servletConfig, servletConfig.getServletContext(), req, resp);
+                        return null;
+                    }
+                });
+            } catch (PrivilegedActionException pae) {
+                throw (IOException) pae.getException();
+            }
         } catch (IOException e) {
             throw new ServletException(e);
         }
@@ -200,7 +227,7 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
 
     /**
      * Configure common endpoint properties
-     * 
+     *
      * @param endpointInfo
      */
     protected void configureEndpointInfoProperties(EndpointInfo libertyEndpointInfo, org.apache.cxf.service.model.EndpointInfo cxfEndpointInfo) {
@@ -261,7 +288,7 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
 
     /**
      * Calculate the base URL based on the HttpServletRequest instance
-     * 
+     *
      * @param request
      * @return
      */
@@ -276,7 +303,7 @@ public abstract class AbstractJaxWsWebEndpoint implements JaxWsWebEndpoint {
         if (!"/".equals(pathInfo) || reqPrefix.endsWith("/")) {
             StringBuilder sb = new StringBuilder();
             // request.getScheme(), request.getLocalName() and request.getLocalPort()
-            // should be marginally cheaper - provided request.getLocalName() does 
+            // should be marginally cheaper - provided request.getLocalName() does
             // return the actual name used in request URI as opposed to localhost
             // consistently across the Servlet stacks
 

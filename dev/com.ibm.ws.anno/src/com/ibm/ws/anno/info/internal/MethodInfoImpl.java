@@ -11,6 +11,7 @@
 package com.ibm.ws.anno.info.internal;
 
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -26,6 +27,7 @@ import com.ibm.wsspi.anno.info.MethodInfo;
 public class MethodInfoImpl extends InfoImpl implements MethodInfo {
 
     public static final TraceComponent tc = Tr.register(MethodInfoImpl.class);
+    @SuppressWarnings("hiding")
     public static final String CLASS_NAME = MethodInfoImpl.class.getName();
 
     @Override
@@ -81,8 +83,8 @@ public class MethodInfoImpl extends InfoImpl implements MethodInfo {
     //
 
     @Override
-    protected String internName(String name) {
-        return getInfoStore().internMethodName(name);
+    protected String internName(String useName) {
+        return getInfoStore().internMethodName(useName);
     }
 
     @Override
@@ -193,15 +195,22 @@ public class MethodInfoImpl extends InfoImpl implements MethodInfo {
         return parameterAnnotations;
     }
 
-    public void setParameterAnnotations(AnnotationInfoImpl[][] parmAnnos) {
-        if (parmAnnos == null) {
+    public void setParameterAnnotations(List<AnnotationInfoImpl>[] parmAnnos) {
+        if ( (parmAnnos == null) || (parmAnnos.length == 0) ) {
             parameterAnnotations = Collections.emptyList();
+
         } else {
-            List<? extends AnnotationInfo>[] parmInfos = new List[parmAnnos.length];
-            for (int i = 0; i < parmAnnos.length; ++i) {
-                parmInfos[i] = Arrays.asList(parmAnnos[i]);
+            List<List<? extends AnnotationInfo>> storeParmAnnos = new ArrayList<>(parmAnnos.length);
+            for ( int parmNo = 0; parmNo < parmAnnos.length; parmNo++ ) {
+                List<AnnotationInfoImpl> oneParmAnnos = parmAnnos[parmNo];
+                if ( (oneParmAnnos == null) || oneParmAnnos.isEmpty() ) {
+                    oneParmAnnos = Collections.emptyList();
+                } else {
+                    oneParmAnnos = new ArrayList<>(oneParmAnnos);
+                }
+                storeParmAnnos.add(parmNo, oneParmAnnos);
             }
-            parameterAnnotations = Arrays.asList(parmInfos);
+            parameterAnnotations = storeParmAnnos;
         }
     }
 

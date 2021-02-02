@@ -16,9 +16,12 @@ import org.jboss.shrinkwrap.api.spec.WebArchive;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import com.ibm.websphere.simplicity.ShrinkHelper;
+import com.ibm.websphere.simplicity.ShrinkHelper.DeployOptions;
 
+import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
 import componenttest.topology.impl.LibertyServer;
@@ -29,6 +32,7 @@ import componenttest.topology.impl.LibertyServerFactory;
  */
 
 @Mode(TestMode.FULL)
+@RunWith(FATRunner.class)
 public class WSConfigurationHelperTest extends ServletRunner {
 
     private static final String CONTEXT_ROOT = "confighelper";
@@ -54,7 +58,7 @@ public class WSConfigurationHelperTest extends ServletRunner {
     }
 
     @BeforeClass
-    public static void setUpForMetatypeProviderTests() throws Exception {
+    public static void setUpForWSConfigurationHelperTest() throws Exception {
 
         // Use the feature/bundle from the merged config tests
         server.copyFileToLibertyInstallRoot("lib/features", "internalFeatureForFat/mergedConfigTest-1.0.mf");
@@ -62,7 +66,7 @@ public class WSConfigurationHelperTest extends ServletRunner {
         server.copyFileToLibertyInstallRoot("lib/features", "internalFeatureForFat/configfatlibertyinternals-1.0.mf");
 
         WebArchive configHelperApp = ShrinkHelper.buildDefaultApp("confighelper", "test.config.helper");
-        ShrinkHelper.exportAppToServer(server, configHelperApp);
+        ShrinkHelper.exportAppToServer(server, configHelperApp, DeployOptions.DISABLE_VALIDATION);
 
         server.startServer("helperTest.log");
         //make sure the URL is available

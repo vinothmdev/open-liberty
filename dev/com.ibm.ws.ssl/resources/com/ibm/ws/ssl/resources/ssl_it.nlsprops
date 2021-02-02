@@ -119,13 +119,13 @@ ssl.client.handshake.error.CWPKI0022E=CWPKI0022E: ERRORE HANDSHAKE SSL:  Un firm
 ssl.client.handshake.error.CWPKI0022E.explanation=Si \u00e8 verificato un errore durante l'handshake SSL.  Potrebbe essere necessaria un'esportazione/importazione del firmatario dall'host di destinazione al TrustStore del client.
 ssl.client.handshake.error.CWPKI0022E.useraction=Esaminare il messaggio di errore esteso da TrustManager per determinare le modifiche da effettuare tra la configurazione SSL di destinazione e la configurazione SSL client.
 # -------------------------------------------------------------------------------------------------
-ssl.client.alias.not.found.CWPKI0023E=CWPKI0023E: L''alias del certificato {0} specificato dalla propriet\u00e0 com.ibm.ssl.keyStoreClientAlias non \u00e8 stato individuato nel KeyStore {1}.
-ssl.client.alias.not.found.CWPKI0023E.explanation=L'alias del certificato specificato per questa configurazione SSL non \u00e8 nel KeyStore specificato. 
-ssl.client.alias.not.found.CWPKI0023E.useraction=Aggiungere un certificato nel KeyStore con l'alias del certificato specificato oppure modificare tale alias in modo che corrisponda a un alias trovato nel KeyStore client.
+ssl.client.alias.not.found.CWPKI0023E=CWPKI0023E: L''alias del certificato {0} specificato dall''attributo clientKeyAlias non \u00e8 stato trovato nel KeyStore {1} o non \u00e8 valido.
+ssl.client.alias.not.found.CWPKI0023E.explanation=L'alias del certificate specificato per questa configurazione SSL non \u00e8 nel KeyStore specificato o \u00e8 presente ma non \u00e8 valido. Un certificato scaduto \u00e8 un esempio di certificato non valido.
+ssl.client.alias.not.found.CWPKI0023E.useraction=Aggiungere un certificato nel KeyStore con l'alias del certificato specificato oppure sostituire o rinnovare il certificato non valido con l'alias del certificato specificato trovato nel KeyStore del client.
 # -------------------------------------------------------------------------------------------------
-ssl.server.alias.not.found.CWPKI0024E=CWPKI0024E: L''alias del certificato {0} specificato dalla propriet\u00e0 com.ibm.ssl.keyStoreServerAlias non \u00e8 stato individuato nel KeyStore {1}.
-ssl.server.alias.not.found.CWPKI0024E.explanation=L'alias del certificate specificato per questa configurazione SSL non \u00e8 nel KeyStore specificato. 
-ssl.server.alias.not.found.CWPKI0024E.useraction=Aggiungere un certificato nel KeyStore con l'alias del certificato specificato oppure modificare tale alias in modo che corrisponda a un alias trovato nel KeyStore server.
+ssl.server.alias.not.found.CWPKI0024E=CWPKI0024E: L''alias del certificato {0} specificato dall''attributo serverKeyAlias non \u00e8 stato trovato nel KeyStore {1} o non \u00e8 valido.
+ssl.server.alias.not.found.CWPKI0024E.explanation=L'alias del certificate specificato per questa configurazione SSL non \u00e8 nel KeyStore specificato o \u00e8 presente ma non \u00e8 valido. Un certificato scaduto \u00e8 un esempio di certificato non valido.
+ssl.server.alias.not.found.CWPKI0024E.useraction=Aggiungere un certificato nel KeyStore con l'alias del certificato specificato oppure sostituire o rinnovare il certificato non valido con l'alias del certificato specificato trovato nel KeyStore del server.
 # -------------------------------------------------------------------------------------------------
 ssl.load.https.stream.handler.CWPKI0025E=CWPKI0025E: Il sistema non \u00e8 stato in grado di caricare la classe del gestore https {0}. Messaggio di errore esteso: {1}
 ssl.load.https.stream.handler.CWPKI0025E.explanation=Si \u00e8 verificato un errore caricamento classe durante il tentativo di caricare la classe HTTPS URLStreamHandler. 
@@ -556,9 +556,13 @@ ssl.create.certificate.end=CWPKI0803A: Certificato SSL creato in {0} secondi. Fi
 ssl.create.certificate.end.explanation=Il certificato SSL \u00e8 stato generato nell'intervallo di tempo specificato.
 ssl.create.certificate.end.useraction=Non \u00e8 richiesta alcuna azione.
 #--------------------------------------------------------------------------------------------------
-ssl.create.certificate.error=CWPKI0804E: Errore di creazione del certificato SSL. Impossibile creare il file della chiave SSL: {0}
+ssl.create.certificate.error=CWPKI0804E: Errore di creazione del certificato SSL. {0}
 ssl.create.certificate.error.explanation=Non \u00e8 stato possibile creare il certificato SSL nell'ubicazione specificata.
-ssl.create.certificate.error.useraction=Verificare che l'ubicazione sia accessibile da parte del processo del server. La presenza di FFDC pu\u00f2 indicare un errore irreversibile durante la creazione o il caricamento delle chiavi.
+ssl.create.certificate.error.useraction=Verificare che l'ubicazione sia accessibile da parte del processo del server. Esaminare i log FFDC per ulteriori errori associati alla generazione o al caricamento delle chiavi.
+
+# Messages for the CWPKI0804E message descriptor {0}.
+ssl.create.certificate.error.reason1=Impossibile creare il file della chiave SSL: {0}
+ssl.create.certificate.error.reason2=L''errore \u00e8: {0}
 #--------------------------------------------------------------------------------------------------
 ssl.default.keystore.config.error=CWPKI0805E: Manca una password richiesta per il keystore predefinito.
 ssl.default.keystore.config.error.explanation=La configurazione del keystore non specifica una password per il keystore predefinito.
@@ -596,8 +600,8 @@ ssl.unrecoverablekey.error.CWPKI0813E=CWPKI0813E: Errore durante il tentativo di
 ssl.unrecoverablekey.error.CWPKI0813E.explanation=Si \u00e8 verificato un errore durante il tentativo di inizializzare il gestore chiavi.  Impossibile creare un SSLContext quando la password della chiave privata non \u00e8 corretta o un keystore ha pi\u00f9 chiavi con password differenti. 
 ssl.unrecoverablekey.error.CWPKI0813E.useraction=Verificare che la password della chiave privata sia corretta e che il keystore non abbia pi\u00f9 chiavi con password differenti prima di utilizzare il keystore per le connessioni SSL.
 #--------------------------------------------------------------------------------------------------
-ssl.hwkeystore.load.error.CWPKI0814E=CWPKI0814E: Si \u00e8 verificato un errore durante l''inizializzazione del keystore hardware [{0}].  Controllare il file di configurazione hardware {1} per assicurarsi che gli attributi siano impostati correttamente. L''eccezione restituita dal provider \u00e8 {2}.
-ssl.hwkeystore.load.error.CWPKI0814E.explanation=Si \u00e8 verificato un problema con la configurazione dell'hardware che impedisce al keystore di essere utilizzato. Se esiste una configurazione SSL che fa riferimento a questo keystore, non sar\u00e0 utilizzabile.
+ssl.hwkeystore.load.error.CWPKI0814E=CWPKI0814E: Si \u00e8 verificato un errore durante l''inizializzazione del keystore hardware [{0}].  Controllare il file di configurazione hardware {1} per assicurarsi che gli attributi siano impostati correttamente.  L''eccezione restituita dal provider \u00e8 {2}.
+ssl.hwkeystore.load.error.CWPKI0814E.explanation=Si \u00e8 verificato un problema con la configurazione dell'hardware che impedisce al keystore di essere utilizzato.  Se esiste una configurazione SSL che fa riferimento a questo keystore, non sar\u00e0 utilizzabile.
 ssl.hwkeystore.load.error.CWPKI0814E.useraction=Verificare che il file di configurazione hardware contenga gli attributi, il nome e la libreria richiesti. Assicurarsi che altri attributi nel file di configurazione seguano la specifica del dispositivo hardware.
 #--------------------------------------------------------------------------------------------------
 ssl.dynamicSelection.conflict.CWPKI0815W=CWPKI0815W: Pi\u00f9 di un elemento OutboundConnection specifica l''host [{0}] e la porta [{1}] come filtro. Verr\u00e0 utilizzato l''elemento OutboundConnection configurato sull''elemento SSL [{2}].
@@ -614,15 +618,14 @@ ssl.defaultKeyStore.expected.CWPKI0817A.useraction=Se l'SSL non \u00e8 richiesto
 #--------------------------------------------------------------------------------------------------
 ssl.defaultSSLConfig.noSuchKeyStore.CWPKI0818E=CWPKI0818E: La configurazione SSL predefinita fa riferimento a un elemento <keyStore> con un valore id di {0}, che non esiste nella configurazione o nella sua definizione manca una password. Definire un keystore con id {0} o aggiornare <ssl id="defaultSSLConfig" keyStoreRef="{0}" /> per fare riferimento a un keystore esistente.
 ssl.defaultSSLConfig.noSuchKeyStore.CWPKI0818E.explanation=La configurazione SSL predefinita prevede un elemento keystore, che non esiste.
-ssl.defaultSSLConfig.noSuchKeyStore.CWPKI0818E.useraction=Esaminare la configurazione e modificarela per riferimento a un keystore esistente, oppure definire il keystore di riferimento.
+ssl.defaultSSLConfig.noSuchKeyStore.CWPKI0818E.useraction=Esaminare la configurazione e modificarla per riferimento a un keystore esistente, oppure definire il keystore di riferimento.
 #--------------------------------------------------------------------------------------------------
 ssl.defaultKeyStore.not.created.CWPKI0819I=CWPKI0819I: Il keystore predefinito non viene creato perch\u00e9 non \u00e8 configurata una password nell'elemento <keyStore id="defaultKeyStore"/> e la variabile di ambiente 'keystore_password' non \u00e8 impostata. 
 ssl.defaultKeyStore.not.created.CWPKI0819I.explanation=Il keystore predefinito non viene creato perch\u00e9 non \u00e8 configurata una password nell'elemento <keyStore id="defaultKeyStore"/> e la variabile di ambiente 'keystore_password' non \u00e8 impostata.
 ssl.defaultKeyStore.not.created.CWPKI0819I.useraction=Non sono richieste azioni.
 #--------------------------------------------------------------------------------------------------
 ssl.defaultKeyStore.env.password.CWPKI0820A=CWPKI0820A: Il keystore predefinito \u00e8 stato creato utilizzando la variabile di ambiente 'keystore_password'.
-ssl.defaultKeyStore.env.password.CWPKI0820A.explanation=Il keystore predefinito \u00e8 stato creato utilizzando la variabile di ambiente 'keystore_password'. \
-Questa \u00e8 generata nel file server.env durante la creazione del server o sovrascritta nell'ambiente da cui \u00e8 stato avviato il server.
+ssl.defaultKeyStore.env.password.CWPKI0820A.explanation=Il keystore predefinito \u00e8 stato creato utilizzando la variabile di ambiente 'keystore_password'. Questa \u00e8 generata nel file server.env durante la creazione del server o sovrascritta nell'ambiente da cui \u00e8 stato avviato il server.
 ssl.defaultKeyStore.env.password.CWPKI0820A.useraction=Non sono richieste azioni.
 #--------------------------------------------------------------------------------------------------
 ssl.defaultKeyStore.loaded.CWPKI0821I=CWPKI0821I: Il keystore predefinito {1} con il tipo di keystore {2} \u00e8 stato caricato.
@@ -632,3 +635,36 @@ ssl.defaultKeyStore.loaded.CWPKI0821I.useraction=Non sono richieste azioni.
 ssl.defaultKeyStore.loaded.jksAndPKCS12Exist.CWPKI0822W=CWPKI0822W: \u00c8 stata specificata una configurazione minima del keystore predefinito e i keystore key.jks e key.p12 esistono entrambi nell'ubicazione del keystore predefinito. key.jks verr\u00e0 utilizzato come keystore predefinito.
 ssl.defaultKeyStore.loaded.jksAndPKCS12Exist.CWPKI0822W.explanation=Con una configurazione minima del keystore predefinito e con i file key.jks e key.p12 entrambi definiti nell'ubicazione del keystore predefinito, il file key.jks verr\u00e0 utilizzato come keystore predefinito.
 ssl.defaultKeyStore.loaded.jksAndPKCS12Exist.CWPKI0822W.useraction=Per rendere il file key.p12 il keystore predefinito, modificare la configurazione del keystore in modo che specifichi l'ubicazione di key.p12 o rimuovere il file key.jks dalla configurazione. Per impostare il file key.jks come keystore predefinito, non sono necessarie modifiche. 
+#--------------------------------------------------------------------------------------------------
+ssl.client.handshake.error.CWPKI0823E=CWPKI0823E: ERRORE HANDSHAKE SSL:  Un firmatario con DN soggetto [{0}] \u00e8 stato inviato dall''host [{1}].  Potrebbe essere necessario aggiungere il firmatario al truststore locale [{2}], presente nell''alias di configurazione SSL [{3}].  Il messaggio di errore esteso proveniente dall''eccezione handshake SSL \u00e8: [{4}].
+ssl.client.handshake.error.CWPKI0823E.explanation=Si \u00e8 verificato un errore durante l'handshake SSL.  Potrebbe essere necessaria un'esportazione/importazione del firmatario dall'host di destinazione al TrustStore del client.
+ssl.client.handshake.error.CWPKI0823E.useraction=Esaminare il messaggio di errore esteso da TrustManager per determinare le modifiche da effettuare tra la configurazione SSL di destinazione e la configurazione SSL client.
+# -------------------------------------------------------------------------------------------------
+ssl.client.handshake.error.CWPKI0824E=CWPKI0824E: ERRORE HANDSHAKE SSL: errore di verifica del nome host durante la connessione all''host [{0}].  Il nome host utilizzato per accedere al server non corrisponde alle informazioni DN soggetto o Nome alternativo soggetto del certificato server.  Il messaggio di errore esteso proveniente dall''eccezione handshake SSL \u00e8: [{1}].
+ssl.client.handshake.error.CWPKI0824E.explanation=Si \u00e8 verificato un errore durante l'handshake SSL.  La verifica del nome host \u00e8 abilitata e l'identit\u00e0 del server non pu\u00f2 essere verificata.  Il nome host utilizzato per accedere al server non corrisponde alle informazioni DN soggetto o Nome alternativo soggetto del certificato server.
+ssl.client.handshake.error.CWPKI0824E.useraction=Quando la verifica del nome host \u00e8 abilitata, il server a cui si accede deve essere configurato con un certificato contenente le informazioni corrette necessarie per verificare l'identit\u00e0 del server.
+# -------------------------------------------------------------------------------------------------
+ssl.cacerts.error.CWPKI0825W=CWPKI0825W: L''attributo trustDefaultCerts \u00e8 abilitato ma il truststore predefinito non \u00e8 stato inizializzato. Poich\u00e9 il truststore predefinito non \u00e8 stato inizializzato, viene utilizzato solo quello configurato dalla configurazione SSL {0}. L''eccezione restituita \u00e8: {1}. 
+ssl.cacerts.error.CWPKI0825W.explanation=Il truststore predefinito non \u00e8 stato inizializzato perch\u00e9 non \u00e8 stato possibile richiamarlo dal gestore di trust. Il truststore predefinito non \u00e8 utilizzato per il trust. Viene utilizzata solo la configurazione SSL configurata.
+ssl.cacerts.error.CWPKI0825W.useraction=Verificare che il file truststore predefinito esista e sia accessibile
+# -------------------------------------------------------------------------------------------------
+ssl.environment.cert.error.CWPKI0826W=CWPKI0826W: Il certificato non \u00e8 stato richiamato dalla variabile di ambiente {0}. Il certificato non \u00e8 stato aggiunto al truststore {1}.  L''eccezione restituita \u00e8: {2}.
+ssl.environment.cert.error.CWPKI0826W.explanation=Il certificato specificato nella variabile di ambiente non \u00e8 accessibile e non \u00e8 incluso nel truststore. Questo problema potrebbe essere causato dalla variabile di ambiente, dal nome file o dal certificato. La mancata aggiuta del certificato non invalida la configurazione SSL, ma potrebbe causare problemi nello stabilire il trust per le connessioni in uscita.
+ssl.environment.cert.error.CWPKI0826W.useraction=Questo problema potrebbe avere varie cause. Assicurarsi che la variabile di ambiente o il file siano popolati con un certificato 64-bit base.
+# -------------------------------------------------------------------------------------------------
+ssl.using.cacerts.CWPKI0827I=CWPKI0827I: La configurazione SSL {0} utilizza il truststore predefinito in aggiunta al truststore configurato.
+ssl.using.cacerts.CWPKI0827I.explanation=Il truststore predefinito e quello configurato per la configurazione SSL sono entrambi utilizzati per il trust.
+ssl.using.cacerts.CWPKI0827I.useraction=Nessuna azione richiesta.
+# -------------------------------------------------------------------------------------------------
+ssl.client.handshake.cacerts.error.CWPKI0828E=CWPKI0828E: L''attributo trustDefaultCerts \u00e8 abilitato ma il trust non \u00e8 stato stabilito utilizzando il truststore predefinito. Il messaggio di errore esteso proveniente dall''eccezione handshake SSL \u00e8: {0}.
+ssl.client.handshake.cacerts.error.CWPKI0828E.explanation=Il truststore predefinito non \u00e8 correttamente configurato per stabilire il trust.  
+ssl.client.handshake.cacerts.error.CWPKI0828E.useraction=Esaminare il messaggio di errore esteso per determinare cosa modificare nella configurazione.
+# -------------------------------------------------------------------------------------------------
+ssl.update.certificate.error=CWPKI0829E: Errore di aggiornamento del certificato SSL. {0}
+ssl.update.certificate.error.explanation=Non \u00e8 stato possibile aggiornare il certificato SSL nell'ubicazione specificata.
+ssl.update.certificate.error.useraction=Verificare che l'ubicazione sia accessibile da parte del processo del server.  Esaminare i log FFDC per ulteriori errori associati alla generazione o al caricamento delle chiavi.
+# -------------------------------------------------------------------------------------------------
+ssl.certificate.add.CWPKI0830I=CWPKI0830I: Certificato con il DN soggetto {0} dalla variabile di ambiente {1} \u00e8 in fase di aggiunta al Keystore {2}.
+ssl.certificate.add.CWPKI0830I.explanation=Un certificato \u00e8 stato richiamato da una variabile di ambiente nella configurazione e viene aggiunto al file keystore.
+ssl.certificate.add.CWPKI0830I.useraction=Non sono richieste azioni.
+# -------------------------------------------------------------------------------------------------

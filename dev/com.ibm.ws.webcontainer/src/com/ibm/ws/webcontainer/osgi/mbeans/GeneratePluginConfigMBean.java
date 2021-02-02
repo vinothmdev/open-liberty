@@ -37,7 +37,8 @@ import com.ibm.wsspi.webcontainer.osgi.mbeans.GeneratePluginConfig;
 public class GeneratePluginConfigMBean extends StandardMBean implements GeneratePluginConfig, com.ibm.websphere.webcontainer.GeneratePluginConfigMBean, PluginUtilityConfigGenerator, ServerQuiesceListener  {
     private static final String DEFAULT_SERVER_NAME = "defaultServer";
     
-    private static final TraceComponent tc = Tr.register(GeneratePluginConfigMBean.class);
+    private static final TraceComponent tc = Tr.register(GeneratePluginConfigMBean.class,com.ibm.ws.webcontainer.osgi.osgi.WebContainerConstants.TR_GROUP,
+                                                         com.ibm.ws.webcontainer.osgi.osgi.WebContainerConstants.NLS_PROPS);
 
     /** Required, static reference to the module runtime container */
     private ModuleRuntimeContainer webContainer;
@@ -274,7 +275,7 @@ public class GeneratePluginConfigMBean extends StandardMBean implements Generate
      * @see com.ibm.wsspi.kernel.service.utils.ServerQuiesceListener#serverStopping()
      */
     @Override
-    public synchronized void serverStopping() {
+    public void serverStopping() {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "serverStopping", "generate in progress = " + generateInProgress);
         }

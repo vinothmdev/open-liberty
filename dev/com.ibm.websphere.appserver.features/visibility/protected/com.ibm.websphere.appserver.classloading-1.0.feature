@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.classloading-1.0
+WLP-DisableAllFeatures-OnConflict: false
 visibility=protected
 IBM-API-Package: \
   javax.activity; type=spec; require-java:=9
@@ -18,3 +19,4 @@ IBM-Process-Types: server, client
 -files=dev/spi/ibm/javadoc/com.ibm.websphere.appserver.spi.classloading_1.4-javadoc.zip
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

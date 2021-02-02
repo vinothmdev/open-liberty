@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2013 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,7 +12,12 @@
 package com.ibm.ws.anno.util.internal;
 
 import java.text.MessageFormat;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Set;
+
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.ConfigurationPolicy;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -20,8 +25,10 @@ import com.ibm.ws.anno.service.internal.AnnotationServiceImpl_Logging;
 import com.ibm.wsspi.anno.util.Util_BidirectionalMap;
 import com.ibm.wsspi.anno.util.Util_Exception;
 import com.ibm.wsspi.anno.util.Util_Factory;
+import com.ibm.wsspi.anno.util.Util_InternMap;
 import com.ibm.wsspi.anno.util.Util_InternMap.ValueType;
 
+@Component(configurationPolicy = ConfigurationPolicy.IGNORE, property = { "service.vendor=IBM"})
 public class UtilImpl_Factory implements Util_Factory {
     private static final TraceComponent tc = Tr.register(UtilImpl_Factory.class);
     public static final String CLASS_NAME = UtilImpl_Factory.class.getName();
@@ -63,7 +70,7 @@ public class UtilImpl_Factory implements Util_Factory {
 
     @Override
     public Set<String> createIdentityStringSet() {
-        return new UtilImpl_IdentityStringSet();
+        return Collections.newSetFromMap(new IdentityHashMap<String, Boolean>());
     }
 
     @Override
@@ -99,8 +106,8 @@ public class UtilImpl_Factory implements Util_Factory {
                                       Util_BidirectionalMap.IS_ENABLED);
     }
 
-    public UtilImpl_BidirectionalMap createBidirectionalMap(String holderTag, UtilImpl_InternMap holderInternMap,
-                                                            String heldTag, UtilImpl_InternMap heldInternMap,
+    public UtilImpl_BidirectionalMap createBidirectionalMap(String holderTag, Util_InternMap holderInternMap,
+                                                            String heldTag, Util_InternMap heldInternMap,
                                                             boolean isEnabled) {
         return new UtilImpl_BidirectionalMap(this, holderTag, heldTag, holderInternMap, heldInternMap, isEnabled);
     }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2018 IBM Corporation and others.
+ * Copyright (c) 2009, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,6 +13,7 @@ package com.ibm.ws.http.dispatcher.internal.channel;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.nio.charset.Charset;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -20,14 +21,12 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 
-import com.ibm.websphere.channelfw.osgi.CHFWBundle;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.http.channel.h2internal.H2InboundLink;
 import com.ibm.ws.http.channel.internal.HttpChannelConfig;
-import com.ibm.ws.http.channel.internal.HttpConfigConstants;
 import com.ibm.ws.http.channel.internal.inbound.HttpInboundChannel;
 import com.ibm.ws.http.channel.internal.inbound.HttpInboundLink;
 import com.ibm.ws.http.channel.internal.inbound.HttpInboundServiceContextImpl;
@@ -101,6 +100,8 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
     private SSLContext sslinfo = null;
     /** Reference to the HTTP channel context object */
     private HttpInboundServiceContextImpl isc = null;
+    /** Reference remote InetAddress object */
+    private InetAddress remoteAddress = null;
     /** Cached local host name */
     private String localCanonicalHostName = null;
     /** Cached local host:port alias */
@@ -149,7 +150,7 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
     public void close(VirtualConnection conn, Exception e) {
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-            Tr.debug(tc, "Close called , vc ->" + this.vc);
+            Tr.debug(tc, "Close called , vc ->" + this.vc + " hc: " + this.hashCode());
         }
 
         if (this.vc == null) {
@@ -238,8 +239,14 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
 
         // don't call close, if the channel has already seen the stop(0) signal, or else this will cause race conditions in the channels below us.
         if (myChannel.getStop0Called() == false) {
-            super.close(conn, e);
-            this.myChannel.decrementActiveConns();
+            try {
+                super.close(conn, e);
+            } finally {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "decrement active connection count");
+                }
+                this.myChannel.decrementActiveConns();
+            }
         }
     }
 
@@ -285,21 +292,22 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
 
         super.destroy();
         this.isc = null;
+        this.remoteAddress = null;
         this.request = null;
         this.response = null;
         this.sslinfo = null;
     }
 
     /**
-     * Handle a new HTTP/2 link initialized via SSL
+     * Handle a new HTTP/2 link initialized via ALPN or directly via h2-with-prior-knowledge
      */
-    public void alpnHttp2Ready() {
+    public void directHttp2Ready() {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-            Tr.entry(tc, "handleHttp2 entry: " + this);
+            Tr.entry(tc, "directHttp2Ready entry: " + this);
         }
         H2InboundLink h2link = new H2InboundLink(getHttpInboundLink2().getChannel(), vc, getTCPConnectionContext());
         h2link.reinit(this.getTCPConnectionContext(), vc, h2link);
-        h2link.handleHTTP2AlpnConnect(h2link);
+        h2link.handleHTTP2DirectConnect(h2link);
         this.setDeviceLink(h2link);
         h2link.processRead(vc, this.getTCPConnectionContext().getReadInterface());
     }
@@ -311,16 +319,18 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
     @FFDCIgnore(Throwable.class)
     public void ready(VirtualConnection inVC) {
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-            Tr.debug(tc, "Received HTTP connection: " + inVC);
+            Tr.debug(tc, "Received HTTP connection: " + inVC + " hc: " + this.hashCode());
+            Tr.debug(tc, "increment active connection count");
         }
 
         this.myChannel.incrementActiveConns();
         init(inVC);
         this.isc = (HttpInboundServiceContextImpl) getDeviceLink().getChannelAccessor();
+        this.remoteAddress = isc.getRemoteAddr();
 
         // if this is an http/2 link, process via that ready
-        if (this.getHttpInboundLink2().isAlpnHttp2Link(inVC)) {
-            alpnHttp2Ready();
+        if (this.getHttpInboundLink2().isDirectHttp2Link(inVC)) {
+            directHttp2Ready();
             return;
         }
 
@@ -651,8 +661,9 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
                     // show the host & port that were requested (potentially based on Host header)
                     // if the resource is not found, given that some translation may happen based on
                     // interjection of proxy headers, there has to be some way of showing what
-                    // ended up being requested..
-                    msg = getRequestedHost().getBytes();
+                    // ended up being requested.
+                    // Scrub the host header before returning it in the error response
+                    msg = encodeDataString(getRequestedHost()).getBytes();
                     body.write(msg);
                     body.write(port);
                     body.write(Integer.toString(getRequestedPort()).getBytes());
@@ -688,7 +699,7 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      * It is the value of the part before ":" in the Host header value, if any,
      * or the resolved server name, or the server IP address.
      *
-     * @param request the inbound request
+     * @param request        the inbound request
      * @param remoteHostAddr the requesting client IP address
      */
     @Override
@@ -719,12 +730,13 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      * the part after ":" in the Host header value, if any, or the server port
      * where the client connection was accepted on.
      *
-     * @param request the inbound request
-     * @param localPort the server port where the client connection was accepted on.
+     * @param request        the inbound request
+     * @param localPort      the server port where the client connection was accepted on.
      * @param remoteHostAddr the requesting client IP address
      */
     @Override
     public int getRequestedPort() {
+
         // Get the requested port: this takes into consideration whether or not we should trust the
         // contents of Host and $WS* headers..
         if (useTrustedHeaders()) {
@@ -733,20 +745,33 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
                 return Integer.parseInt(pluginPort);
         }
 
-        // Get the port from the absolute URI or Host header
         int port = request.getVirtualPort();
+
         if (port > 0) {
             return port;
-        } else if (request.getHeader(HttpHeaderKeys.HDR_HOST.getName()) != null) {
-            // There was a host header, but it had no port: infer it..
-            String scheme = request.getScheme();
+        } else {
+            //No port found from URL or host header, infer it..
+
+            //Scheme as defined by X-Forwarded-Proto or Forwarded "proto", or null
+            //if remoteIp is not enabled or client address not verified as trusted.
+            String scheme = getRemoteProto();
+
+            if (scheme == null && isc != null && !isc.useForwardedHeaders()) {
+                //if remoteIp is not enabled, still verify for the x-forwarded-proto
+                scheme = getTrustedHeader(HttpHeaderKeys.HDR_X_FORWARDED_PROTO.getName());
+            }
+
+            if (scheme == null && request.getHeader(HttpHeaderKeys.HDR_HOST.getName()) != null) {
+                scheme = request.getScheme();
+
+            }
+
             if ("http".equals(scheme)) {
                 return 80;
             } else if ("https".equals(scheme)) {
                 return 443;
             }
         }
-
         return getLocalPort();
     }
 
@@ -758,8 +783,8 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
         // We can avoid reprocessing as long as the HttpDispatcher (or WebContainer) configuration
         // hasn't been updated, in which case, we should try again.
         int lastUpdate = HttpDispatcher.getConfigUpdate();
-        if (useHeaders == UsePrivateHeaders.unknown || configUpdate != lastUpdate) {
-            useHeaders = usePrivateHeaders = UsePrivateHeaders.set(HttpDispatcher.usePrivateHeaders(contextRemoteHostAddress()));
+        if ((useHeaders == UsePrivateHeaders.unknown || configUpdate != lastUpdate) && remoteAddress != null) {
+            useHeaders = usePrivateHeaders = UsePrivateHeaders.set(HttpDispatcher.usePrivateHeaders(remoteAddress));
             configUpdate = lastUpdate;
         }
         return useHeaders.asBoolean();
@@ -832,12 +857,21 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      */
     @Override
     public String getRemoteHostAddress() {
-        String remoteAddr = getTrustedHeader(HttpHeaderKeys.HDR_$WSRA.getName());
-        if (remoteAddr != null) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
-                Tr.debug(tc, "getRemoteHostAddress isTrusted --> true, addr --> " + remoteAddr);
-        } else {
-            remoteAddr = contextRemoteHostAddress();
+
+        String remoteAddr = null;
+
+        if (isc != null && isc.useForwardedHeaders()) {
+            remoteAddr = isc.getForwardedRemoteAddress();
+
+        }
+        if (remoteAddr == null) {
+            remoteAddr = getTrustedHeader(HttpHeaderKeys.HDR_$WSRA.getName());
+            if (remoteAddr != null) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                    Tr.debug(tc, "getRemoteHostAddress isTrusted --> true, addr --> " + remoteAddr);
+            } else {
+                remoteAddr = contextRemoteHostAddress();
+            }
         }
 
         return remoteAddr;
@@ -867,23 +901,32 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      */
     @Override
     public String getRemoteHostName(final boolean canonical) {
-        String remoteHost = getTrustedHeader(HttpHeaderKeys.HDR_$WSRH.getName());
-        if (remoteHost != null) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
-                Tr.debug(tc, "getRemoteHost isTrusted --> true, host --> " + remoteHost);
-        } else {
-            final HttpInboundServiceContextImpl finalSc = this.isc;
-            remoteHost = AccessController.doPrivileged(new PrivilegedAction<String>() {
-                @Override
-                public String run() {
-                    if (canonical)
-                        return finalSc.getRemoteAddr().getCanonicalHostName();
-                    else
-                        return finalSc.getRemoteAddr().getHostName();
-                }
-            });
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
-                Tr.debug(tc, "getRemoteHost host --> " + remoteHost);
+        String remoteHost = null;
+        final HttpInboundServiceContextImpl finalSc = this.isc;
+
+        if (finalSc != null && finalSc.useForwardedHeaders()) {
+            remoteHost = finalSc.getForwardedRemoteHost();
+        }
+        if (remoteHost == null) {
+
+            remoteHost = getTrustedHeader(HttpHeaderKeys.HDR_$WSRH.getName());
+            if (remoteHost != null) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                    Tr.debug(tc, "getRemoteHost isTrusted --> true, host --> " + remoteHost);
+            } else {
+
+                remoteHost = AccessController.doPrivileged(new PrivilegedAction<String>() {
+                    @Override
+                    public String run() {
+                        if (canonical)
+                            return finalSc.getRemoteAddr().getCanonicalHostName();
+                        else
+                            return finalSc.getRemoteAddr().getHostName();
+                    }
+                });
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                    Tr.debug(tc, "getRemoteHost host --> " + remoteHost);
+            }
         }
         return remoteHost;
     }
@@ -893,6 +936,12 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      */
     @Override
     public int getRemotePort() {
+
+        if (isc != null && isc.useForwardedHeaders()) {
+            if (isc.getForwardedRemotePort() != -1)
+                return isc.getForwardedRemotePort();
+        }
+
         return this.isc.getRemotePort();
     }
 
@@ -950,7 +999,7 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
                 }
             }
         } else {
-            synchronized (WebConnCanCloseSync) { 
+            synchronized (WebConnCanCloseSync) {
                 if (WebConnCanClose) {
                     error = closeStreams();
                 }
@@ -958,6 +1007,80 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
         }
 
         close(getVirtualConnection(), error);
+    }
+
+    /**
+     * Searches the passed in String for any characters that could be
+     * used in a cross site scripting attack (<, >, +, &, ", ', (, ), %, ;)
+     * and converts them to their browser equivalent name or code specification.
+     *
+     * This method should stay in sync with webcontainer ResponseUtils.encodeDataString()
+     *
+     * @param iString contains the String to be encoded
+     *
+     * @return an encoded String
+     */
+    private static String encodeDataString(String iString) {
+        if (iString == null)
+            return "";
+
+        int strLen = iString.length(), i;
+
+        if (strLen < 1)
+            return iString;
+
+        // convert any special chars to their browser equivalent specification
+        StringBuffer retString = new StringBuffer(strLen * 2);
+
+        for (i = 0; i < strLen; i++) {
+            switch (iString.charAt(i)) {
+                case '<':
+                    retString.append("&lt;");
+                    break;
+
+                case '>':
+                    retString.append("&gt;");
+                    break;
+
+                case '&':
+                    retString.append("&amp;");
+                    break;
+
+                case '\"':
+                    retString.append("&quot;");
+                    break;
+
+                case '+':
+                    retString.append("&#43;");
+                    break;
+
+                case '(':
+                    retString.append("&#40;");
+                    break;
+
+                case ')':
+                    retString.append("&#41;");
+                    break;
+
+                case '\'':
+                    retString.append("&#39;");
+                    break;
+
+                case '%':
+                    retString.append("&#37;");
+                    break;
+
+                case ';':
+                    retString.append("&#59;");
+                    break;
+
+                default:
+                    retString.append(iString.charAt(i));
+                    break;
+            }
+        }
+
+        return retString.toString();
     }
 
     private Exception closeStreams() { // This is seperated for Upgrade Servlet3.1 WebConnection
@@ -1073,46 +1196,18 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      */
     @Override
     public boolean isHTTP2UpgradeRequest(Map<String, String> headers, boolean checkEnabledOnly) {
-
         if (isc != null) {
-
             //Returns whether HTTP/2 is enabled for this channel/port
             if (checkEnabledOnly) {
-
-                boolean isHTTP2Enabled = false;
-
-                //If servlet-3.1 is enabled, HTTP/2 is optional and by default off.
-                if (HttpConfigConstants.OPTIONAL_DEFAULT_OFF_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
-                    //If so, check if the httpEndpoint was configured for HTTP/2
-
-                    isHTTP2Enabled = (isc.getHttpConfig().getUseH2ProtocolAttribute() != null && isc.getHttpConfig().getUseH2ProtocolAttribute());
-                }
-
-                //If servlet-4.0 is enabled, HTTP/2 is optional and by default on.
-                else if (HttpConfigConstants.OPTIONAL_DEFAULT_ON_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
-                    //If not configured as an attribute, getUseH2ProtocolAttribute will be null, which returns true
-                    //to use HTTP/2.
-                    isHTTP2Enabled = (isc.getHttpConfig().getUseH2ProtocolAttribute() == null || isc.getHttpConfig().getUseH2ProtocolAttribute());
-                }
-
-                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    Tr.debug(tc, "Has HTTP/2 been enabled on this port: " + isHTTP2Enabled);
-
-                }
-
-                return isHTTP2Enabled;
+                return isc.isHttp2Enabled();
             }
-
             //Check headers for HTTP/2 upgrade header
             else {
-
                 HttpInboundLink link = isc.getLink();
                 if (link != null) {
-
                     return link.isHTTP2UpgradeRequest(headers);
                 }
             }
-
         }
         return false;
     }
@@ -1124,13 +1219,13 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
      * @return false if some error occurred while servicing the upgrade request
      */
     @Override
-    public boolean handleHTTP2UpgradeRequest(Map<String, String> headers) {
+    public boolean handleHTTP2UpgradeRequest(Map<String, String> http2Settings) {
         HttpInboundLink link = isc.getLink();
         HttpInboundChannel channel = link.getChannel();
         VirtualConnection vc = link.getVirtualConnection();
         H2InboundLink h2Link = new H2InboundLink(channel, vc, getTCPConnectionContext());
 
-        boolean upgraded = h2Link.handleHTTP2UpgradeRequest(headers, link);
+        boolean upgraded = h2Link.handleHTTP2UpgradeRequest(http2Settings, link);
         if (upgraded) {
             h2Link.startAsyncRead(true);
         } else {
@@ -1141,11 +1236,10 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
         boolean rc = h2Link.getStream(1).waitForConnectionInit();
 
         if (!rc) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "handleHTTP2UpgradeRequest connection initialization timed out waiting for client");
-            }
+            // A problem occurred with the connection start up, a trace message will be issued from waitForConnectionInit()
             vc.getStateMap().put(h2InitError, true);
         }
+
         return rc;
     }
 
@@ -1154,6 +1248,42 @@ public class HttpDispatcherLink extends InboundApplicationLink implements HttpIn
             return isc.getLink();
         }
         return null;
+    }
+
+    /**
+     * @return
+     */
+    @Override
+    public String getRemoteProto() {
+
+        if (isc != null && isc.useForwardedHeaders()) {
+            return isc.getForwardedRemoteProto();
+        }
+        return null;
+
+    }
+
+    @Override
+    public boolean useForwardedHeaders() {
+
+        if (isc != null) {
+            return isc.useForwardedHeaders();
+        }
+        return false;
+    }
+
+    /**
+     * Calls function to set the supress 0 byte chunk flag.
+     */
+    public void setSuppressZeroByteChunk(boolean suppress0ByteChunk) {
+        if (this.isc != null) {
+            this.isc.setSuppress0ByteChunk(suppress0ByteChunk);
+        } else {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Failed to set isc zero byte chunk because isc is null");
+            }
+        }
+
     }
 
 }

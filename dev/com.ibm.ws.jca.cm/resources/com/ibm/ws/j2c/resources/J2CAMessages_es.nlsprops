@@ -112,7 +112,7 @@ NO_VALID_TRANSACTION_CONTEXT_J2CA0040.explanation=Se ha producido un error inter
 NO_VALID_TRANSACTION_CONTEXT_J2CA0040.useraction=CMSG0002
 
 # --------------------------------
-POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: La conexi\u00f3n no est\u00e1 disponible al invocar el m\u00e9todo {0} para el recurso {1}.
+POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: La conexi\u00f3n no est\u00e1 disponible al invocar el m\u00e9todo {0} para el recurso {1}. Se ha excedido el tiempo de espera de {2} milisegundo(s) con las {3} solicitudes de espera restantes y las {4} conexiones totales actuales utilizadas.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.explanation=Se ha producido un tiempo de espera excedido de conexi\u00f3n. Se ha generado una excepci\u00f3n ConnectionWaitTimeoutException.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.useraction=Vuelva a configurar la agrupaci\u00f3n de conexiones.  Puede aumentar el n\u00famero m\u00e1ximo de conexiones o incremente el tiempo de espera de conexi\u00f3n para evitar este error.
 
@@ -320,6 +320,11 @@ DUPLICATE_CONNECTOR_PROPERTY_J2CA0308.useraction=Se ha especificado una propieda
 POOL_MANAGER_NOT_FOUND_J2CA0695=J2CA0695E: No se encuentra el gestor de agrupaciones primario durante el proceso de sustituci\u00f3n por anomal\u00eda de un recurso con el nombre JNDI {0}.
 POOL_MANAGER_NOT_FOUND_J2CA0695.explanation=Se ha producido un error interno durante el proceso de sustituci\u00f3n por anomal\u00eda.
 POOL_MANAGER_NOT_FOUND_J2CA0695.useraction=CMSG0002
+
+# ---------------------------------
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W=J2CA0695W: Se ha realizado una solicitud de conexi\u00f3n para el recurso de XA {0} utilizando la autenticaci\u00f3n SPNEGO, pero no se ha configurado ning\u00fan alias de datos de autenticaci\u00f3n de recuperaci\u00f3n. El recurso de XA no puede participar en la recuperaci\u00f3n XA automatizada a menos que se configure un alias de datos de autenticaci\u00f3n de recuperaci\u00f3n.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.explanation=La recuperaci\u00f3n XA es un proceso en segundo plano automatizado, pero la autenticaci\u00f3n SPNEGO necesita entrada de usuario manual. Como resultado, la autenticaci\u00f3n SPNEGO no se puede utilizar para la recuperaci\u00f3n de XA autom\u00e1tica.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.useraction=Configure un alias de datos de autenticaci\u00f3n de recuperaci\u00f3n en el recurso de XA.
 
 # ---------------------------------
 FREEPOOL_GETFREECONNECTION_ERROR_J2CA1002=J2CA1002E: MCWrapper {0} no v\u00e1lido de la agrupaci\u00f3n libre para el recurso {1}.

@@ -27,10 +27,16 @@ src: \
     test-applications/WebListener.war/src
 	
 	
-javac.source: 1.7
-javac.target: 1.7
 	
 test.project: true
+
+tested.features: \
+	cdi-2.0,\
+	servlet-4.0,\
+	jsf-2.3,\
+	servlet-5.0,\
+	faces-3.0,\
+	cdi-3.0
 
 -buildpath: \
 	com.ibm.websphere.javaee.ejb.3.2;version=latest,\

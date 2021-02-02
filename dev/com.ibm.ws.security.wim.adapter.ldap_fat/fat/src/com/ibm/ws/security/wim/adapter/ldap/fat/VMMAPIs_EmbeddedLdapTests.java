@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 20148 IBM Corporation and others.
+ * Copyright (c) 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -18,13 +18,6 @@ import static org.junit.Assert.assertNotNull;
 
 import java.util.Map;
 
-import org.apache.directory.api.ldap.model.entry.Attribute;
-import org.apache.directory.api.ldap.model.entry.DefaultAttribute;
-import org.apache.directory.api.ldap.model.entry.DefaultModification;
-import org.apache.directory.api.ldap.model.entry.Entry;
-import org.apache.directory.api.ldap.model.entry.Modification;
-import org.apache.directory.api.ldap.model.entry.ModificationOperation;
-import org.apache.directory.api.ldap.model.name.Dn;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -37,8 +30,12 @@ import com.ibm.websphere.simplicity.config.wim.LdapCache;
 import com.ibm.websphere.simplicity.config.wim.LdapRegistry;
 import com.ibm.websphere.simplicity.config.wim.SearchResultsCache;
 import com.ibm.websphere.simplicity.log.Log;
-import com.ibm.ws.apacheds.EmbeddedApacheDS;
+import com.ibm.ws.com.unboundid.InMemoryLDAPServer;
 import com.ibm.ws.security.wim.test.VmmServiceServletConnection;
+import com.unboundid.ldap.sdk.Attribute;
+import com.unboundid.ldap.sdk.Entry;
+import com.unboundid.ldap.sdk.Modification;
+import com.unboundid.ldap.sdk.ModificationType;
 
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
@@ -54,6 +51,14 @@ import componenttest.vulnerability.LeakedPasswordChecker;
  * Server starts with mostly empty server.xml
  * Add/remove custom embedded ldapserver and libertyserver config.
  */
+
+/*
+ * This test is disabled for the time being due to the cache implementation.
+ * The LDAP cache implementation is a 3-layered cache that swaps the levels every 1/3 of the timeout interval.
+ * The timer task it uses to do this starts running from cache instantiation and therefore when the test starts running, we cannot be sure where we are in that interval.
+ * Since the test can't be sure where it is in the interval (is there enough time left to run, or not?) it can't be stable enough without making the test extraordinarily long.
+ * Since we have unit tests that adequately tests this functionality, we decided to disable this test and revisit it in the future.
+ */
 @RunWith(FATRunner.class)
 @Mode(TestMode.FULL)
 public class VMMAPIs_EmbeddedLdapTests {
@@ -62,7 +67,7 @@ public class VMMAPIs_EmbeddedLdapTests {
     private static VmmServiceServletConnection servlet;
     private final LeakedPasswordChecker passwordChecker = new LeakedPasswordChecker(server);
 
-    private static EmbeddedApacheDS ldapServer = null;
+    private static InMemoryLDAPServer ds;
     private static final String LDAP_BASE_ENTRY = "o=ibm,c=us";
 
     private static ServerConfiguration serverConfiguration = null;
@@ -111,9 +116,14 @@ public class VMMAPIs_EmbeddedLdapTests {
     public void tearDownLdapserver() throws Exception {
 
         Log.info(c, "tearDown", "Stopping the ldap server...");
-        if (ldapServer != null) {
-            ldapServer.stopService();
+        try {
+            if (ds != null) {
+                ds.shutDown(true);
+            }
+        } catch (Exception e) {
+            Log.error(c, "teardown", e, "LDAP server threw error while shutting down. " + e.getMessage());
         }
+
     }
 
     /**
@@ -133,25 +143,25 @@ public class VMMAPIs_EmbeddedLdapTests {
     public void getUserRemoveAttribute() throws Exception {
         final String methodName = "getUserRemoveAttribute";
         Log.info(c, methodName, "Starting LDAP server setup");
-        ldapServer = new EmbeddedApacheDS("getUserRemoveAttribute");
-        ldapServer.addPartition("testing", LDAP_BASE_ENTRY);
-        ldapServer.startServer();
-        Entry entry = ldapServer.newEntry(LDAP_BASE_ENTRY);
-        entry.add("objectclass", "organization");
-        entry.add("o", "ibm");
-        ldapServer.add(entry);
+
+        ds = new InMemoryLDAPServer(LDAP_BASE_ENTRY);
+
+        Entry entry = new Entry(LDAP_BASE_ENTRY);
+        entry.addAttribute("objectclass", "organization");
+        entry.addAttribute("o", "ibm");
+        ds.add(entry);
         String userName = "blueuser1";
         String password = "password";
         String mailaddr = "bluemail5@ibm.com";
         String userDn = "uid=" + userName + "," + LDAP_BASE_ENTRY;
-        entry = ldapServer.newEntry(userDn);
-        entry.add("objectclass", "inetorgperson");
-        entry.add("uid", userName);
-        entry.add("sn", userName);
-        entry.add("cn", userName);
-        entry.add("userPassword", password);
-        entry.add("mail", mailaddr);
-        ldapServer.add(entry);
+        entry = new Entry(userDn);
+        entry.addAttribute("objectclass", "inetorgperson");
+        entry.addAttribute("uid", userName);
+        entry.addAttribute("sn", userName);
+        entry.addAttribute("cn", userName);
+        entry.addAttribute("userPassword", password);
+        entry.addAttribute("mail", mailaddr);
+        ds.add(entry);
         Log.info(c, methodName, "Finished LDAP server setup");
 
         Log.info(c, methodName, "Starting Liberty server update");
@@ -159,13 +169,13 @@ public class VMMAPIs_EmbeddedLdapTests {
         LdapRegistry ldap = new LdapRegistry();
         ldap.setRealm("LdapCustom");
         ldap.setHost("localhost");
-        ldap.setPort(String.valueOf(ldapServer.getLdapServer().getPort()));
+        ldap.setPort(String.valueOf(ds.getLdapPort()));
         ldap.setBaseDN(LDAP_BASE_ENTRY);
-        ldap.setBindDN(EmbeddedApacheDS.getBindDN());
-        ldap.setBindPassword(EmbeddedApacheDS.getBindPassword());
+        ldap.setBindDN(InMemoryLDAPServer.getBindDN());
+        ldap.setBindPassword(InMemoryLDAPServer.getBindPassword());
         ldap.setLdapType("Custom");
         // The cache time outs are short because we need to timeout within the test. SearchCache needs to be shorter than the AttributesCache for regression testing.
-        ldap.setLdapCache(new LdapCache(new AttributesCache(true, 4444, 2222, "6s"), new SearchResultsCache(true, 5555, 3333, "2s")));
+        ldap.setLdapCache(new LdapCache(new AttributesCache(true, 4444, 2222, "20s"), new SearchResultsCache(true, 5555, 3333, "10s")));
         serverConfig.getLdapRegistries().add(ldap);
         LDAPFatUtils.createFederatedRepository(serverConfig, "LDAPRealmAttr", new String[] { LDAP_BASE_ENTRY });
         updateConfigDynamically(server, serverConfig);
@@ -182,7 +192,7 @@ public class VMMAPIs_EmbeddedLdapTests {
         assertEquals("The uid did not match", userName, resultMap.get("uid"));
         assertEquals("The mail attribute did not match", mailaddr, resultMap.get("mail"));
 
-        Thread.sleep(2100); // sleep to timeout searchCache
+        Thread.sleep(9100); // sleep to timeout searchCache
         Log.info(c, methodName, "Get User, refresh searchCache");
         servlet.login(userName, password);
         resultMap = servlet.getUser(userDn);
@@ -191,9 +201,9 @@ public class VMMAPIs_EmbeddedLdapTests {
         assertEquals("The mail attribute did not match", mailaddr, resultMap.get("mail"));
 
         Log.info(c, methodName, "Remove mail addr from Ldap");
-        Attribute att = new DefaultAttribute("mail");
-        Modification modification = new DefaultModification(ModificationOperation.REMOVE_ATTRIBUTE, att);
-        ldapServer.modify(new Dn(userDn), modification);
+        Attribute att = new Attribute("mail");
+        Modification modification = new Modification(ModificationType.DELETE, att.getName());
+        ds.modify(userDn, modification);
 
         Log.info(c, methodName, "Get user again, mail attribute should still be in the attributesCache");
         resultMap = servlet.getUser(userDn);
@@ -201,7 +211,7 @@ public class VMMAPIs_EmbeddedLdapTests {
         assertEquals("The uid did not match", userName, resultMap.get("uid"));
         assertEquals("The mail attribute did not match", mailaddr, resultMap.get("mail"));
 
-        Thread.sleep(4100); // now sleep to time out the attributesCache, mail should be gone
+        Thread.sleep(18100); // now sleep to time out the attributesCache, mail should be gone
         Log.info(c, methodName, "Get user after sleep.");
         resultMap = servlet.getUser(userDn);
         System.out.println("Result from getUser : " + result.toString());

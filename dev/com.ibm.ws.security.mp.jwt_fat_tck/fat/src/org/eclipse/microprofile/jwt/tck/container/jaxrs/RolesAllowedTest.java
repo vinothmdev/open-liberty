@@ -44,7 +44,7 @@ import org.junit.runner.RunWith;
 
 import com.ibm.websphere.simplicity.ShrinkHelper;
 
-import componenttest.annotation.ExpectedFFDC;
+import componenttest.annotation.AllowedFFDC;
 import componenttest.annotation.Server;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.topology.impl.LibertyServer;
@@ -110,12 +110,13 @@ public class RolesAllowedTest extends FATServletClient {
                         .addClass(TCKApplication.class)
                         .addAsWebInfResource("beans.xml", "beans.xml")
                         .addAsWebInfResource("web.xml", "web.xml")
-                        .addAsManifestResource("permissions.xml"); 
+                        .addAsManifestResource("permissions.xml");
         System.out.printf("WebArchive: %s\n", webArchive.toString(true));
         ShrinkHelper.exportToServer(server1, "apps", webArchive);
 
         baseURL = "http://localhost:" + server1.getHttpDefaultPort() + "/RolesAllowedTest";
         server1.startServer();
+        server1.waitForStringInLog("CWWKS4105I", 30000); // wait for ltpa keys to be created and service ready, which can happen after startup.
     }
 
     @AfterClass
@@ -143,8 +144,7 @@ public class RolesAllowedTest extends FATServletClient {
         Assert2.assertEquals(response.getStatus(), HttpURLConnection.HTTP_UNAUTHORIZED);
     }
 
-    @ExpectedFFDC(value = { "com.ibm.websphere.security.jwt.InvalidTokenException",
-                            "org.jose4j.jwt.consumer.InvalidJwtException" })
+    @AllowedFFDC(value = { "com.ibm.websphere.security.jwt.InvalidTokenException", "org.jose4j.jwt.consumer.InvalidJwtException" })
     @Test //@Test(groups = TCKConstants.TEST_GROUP_JAXRS, description = "Attempting access with BASIC auth header should fail with HTTP_UNAUTHORIZED")
     public void callEchoBASIC() throws Exception {
         Reporter.log("callEchoBASIC, expect HTTP_UNAUTHORIZED");

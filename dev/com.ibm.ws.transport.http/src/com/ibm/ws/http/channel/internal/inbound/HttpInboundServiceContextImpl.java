@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2016 IBM Corporation and others.
+ * Copyright (c) 2004, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,11 +11,13 @@
 package com.ibm.ws.http.channel.internal.inbound;
 
 import java.io.IOException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import com.ibm.websphere.channelfw.osgi.CHFWBundle;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
-import com.ibm.ws.genericbnf.internal.GenericUtils;
 import com.ibm.ws.http.channel.h2internal.H2HttpInboundLinkWrap;
 import com.ibm.ws.http.channel.internal.CallbackIDs;
 import com.ibm.ws.http.channel.internal.HttpBaseMessageImpl;
@@ -32,7 +34,6 @@ import com.ibm.wsspi.bytebuffer.WsByteBuffer;
 import com.ibm.wsspi.channelfw.ConnectionLink;
 import com.ibm.wsspi.channelfw.InterChannelCallback;
 import com.ibm.wsspi.channelfw.VirtualConnection;
-import com.ibm.wsspi.genericbnf.BNFHeaders;
 import com.ibm.wsspi.genericbnf.HeaderStorage;
 import com.ibm.wsspi.genericbnf.exception.IllegalResponseObjectException;
 import com.ibm.wsspi.genericbnf.exception.MessageSentException;
@@ -72,16 +73,19 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
 
     /** Link associated with this SC instance */
     private HttpInboundLink myLink = null;
-    /** Flag on whether we've parsed the Accept-Encoding header yet or not */
-    private boolean bCheckedAcceptEncoding = false;
-    /** Flag on whether compression is allowed or not */
-    private boolean bCompressionAllowed = false;
     /** Flag on whether the request is a "large" one over the standard limit */
     private boolean bContainsLargeMessage = false;
     /** Start time of the request (when access logging is enabled) */
     private long startTime = 0;
     /** Remote user of the request, as set by WebContainer */
     private String remoteUser = "";
+
+    private boolean forwardedHeaderInitialized = false;
+    private int forwardedRemotePort = -1;
+    private String forwardedRemoteAddress = null;
+    private String forwardedProto = null;
+    private String forwardedHost = null;
+    private boolean suppress0ByteChunk = false;
 
     /**
      * Constructor for an HTTP inbound service context object.
@@ -158,9 +162,15 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
             Tr.debug(tc, "Clearing ISC: " + this);
         }
         super.clear();
-        this.bCheckedAcceptEncoding = false;
         this.bContainsLargeMessage = false;
         this.remoteUser = "";
+        this.forwardedHeaderInitialized = false;
+        this.forwardedHost = null;
+        this.forwardedProto = null;
+        this.forwardedRemoteAddress = null;
+        this.forwardedRemotePort = -1;
+        this.suppress0ByteChunk = false;
+
         if (getHttpConfig().runningOnZOS()) {
             // @311734 - clean the statemap of the final write mark
             getVC().getStateMap().remove(HttpConstants.FINAL_WRITE_MARK);
@@ -355,147 +365,47 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "isCompressionAllowed");
         }
-        // check on whether we've already done this step
-        if (this.bCheckedAcceptEncoding) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "isCompressionAllowed(1): " + this.bCompressionAllowed);
-            }
-            return this.bCompressionAllowed;
-        }
 
         boolean rc = false;
 
-        // check target compression first
-        byte[] name = null;
-        if (isGZipEncoded() || isXGZipEncoded()) {
-            // gzip and x-gzip are functionally the same
-            name = ContentEncodingValues.GZIP.getByteArray();
-        } else if (isZlibEncoded()) {
-            name = ContentEncodingValues.DEFLATE.getByteArray();
-        } else {
-            this.bCheckedAcceptEncoding = true;
-            this.bCompressionAllowed = false;
+        if (getRequest().getHeader(HttpHeaderKeys.HDR_ACCEPT_ENCODING).asString() == null) {
+            //If no accept-encoding field is present in a request, the server MAY assume
+            //that the client will accept any content coding.
             if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "isCompressionAllowed(2)", Boolean.FALSE);
+                Tr.exit(tc, "isCompressionAllowed(1)", Boolean.TRUE);
             }
-            return false;
+            return true;
         }
 
-        // comma separated values, < encoding[;q=x] > or < *[;q=x] >
-
-        // loop through looking for the matching encoding, then check the qvalue
-        // for 0 (not allowed). Keep track if * was found for a final check
-        // if the explicit encoding wasn't found.
-        int index = 0;
-        int x;
-        boolean bStarFound = false;
-        boolean bStarApproved = false;
-        byte[] data = getRequest().getHeader(HttpHeaderKeys.HDR_ACCEPT_ENCODING).asBytes();
-        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-            Tr.debug(tc, "isCompressionAllowed: parsing ["
-                         + getRequest().getHeader(HttpHeaderKeys.HDR_ACCEPT_ENCODING).asString()
-                         + "] against requested [" + new String(name) + "]");
+        if (acceptableEncodings.containsKey(this.preferredEncoding)) {
+            //found encoding, verify if value is non-zero
+            rc = (acceptableEncodings.get(this.preferredEncoding) > 0f);
         }
 
-        if (null != data) {
-            while (index < data.length) {
-                // search each encoding token (skip leading white space)
-                index = skipWhiteSpace(data, index);
-                if (index >= data.length) {
-                    // if the header value was just empty space then only
-                    // the identity encoding is acceptable
-                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                        Tr.debug(tc, "Ran out of data");
-                    }
-                    break;
-                }
-                // check for the asteric explicitly
-                if ('*' == data[index]) {
-                    bStarFound = true;
-                    if (++index < data.length && BNFHeaders.SEMICOLON == data[index]) {
-                        // now check for the qvalue and set the approved flag
-                        ReturnCodes myRC = parseQValue(data, ++index);
-                        bStarApproved = myRC.getBooleanValue();
-                        index = GenericUtils.skipToChar(data, myRC.getIntValue(), HttpBaseMessage.COMMA) + 1;
-                    } else {
-                        bStarApproved = true;
-                    }
-                    continue;
-                }
-
-                // compare the name, check for the x-gzip type values
-                if (index < data.length && ('x' == data[index] || 'X' == data[index])) {
-
-                    if (++index < data.length && '-' == data[index]) {
-                        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                            Tr.debug(tc, "skipping past [x-]");
-                        }
-                        index++;
-                    } else {
-                        // not x-, go back one for the name comparison
-                        index--;
-                    }
-                }
-                for (x = 0; x < name.length && index < data.length; x++, index++) {
-                    if (name[x] != data[index]) {
-                        // try the alternate case for a match
-                        if (GenericUtils.reverseCase(name[x]) != data[index]) {
-                            // no match found, break out of for loop
-                            break;
-                        }
-                    }
-                }
-
-                // check for the explicit failed match
-                if (x != name.length) {
-                    // didn't find a match, skip to the next comma
-                    index = GenericUtils.skipToChar(data, index, HttpBaseMessage.COMMA) + 1;
-                    continue;
-                }
-
-                // name match so far. If the next char is a comma, then no qvalue
-                // and this compression is allowed. If it is a semi-colon, then
-                // a qvalue is following. Anything else and this wasn't a full
-                // match
-                index = skipWhiteSpace(data, index);
-                if (index < data.length && HttpBaseMessage.COMMA == data[index]) {
-                    // this is allowed
-                    rc = true;
-                } else if (index < data.length && BNFHeaders.SEMICOLON == data[index]) {
-                    // parse the qvalue
-                    ReturnCodes myRC = parseQValue(data, ++index);
-                    rc = myRC.getBooleanValue();
-                } else if (index >= data.length) {
-                    // end of data... means we had a full match
-                    rc = true;
-                } else {
-                    // partial match... gzip against gzipMe
-                    index = GenericUtils.skipToChar(data, index, HttpBaseMessage.COMMA) + 1;
-                    continue;
-                }
-
-                break; // out of while loop
+        else if (ContentEncodingValues.GZIP.getName().equals(preferredEncoding)) {
+            //gzip and x-gzip are functionally the same
+            if (acceptableEncodings.containsKey(ContentEncodingValues.XGZIP.getName())) {
+                rc = (acceptableEncodings.get(ContentEncodingValues.XGZIP.getName()) > 0f);
             }
-        } else {
-            // a null (non present) header means that all encodings are accepted
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "Accept-Encoding header not present");
-            }
+        }
+
+        else if (ContentEncodingValues.IDENTITY.getName().equals(preferredEncoding)) {
+            //Identity is always acceptable unless specifically set to 0. Since it
+            //wasn't found in acceptableEncodings, return true
+
             rc = true;
         }
 
-        if (!rc && bStarFound && bStarApproved) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "No explicit match, but wildcard was found");
-            }
-            rc = true;
-        }
+        else {
+            //The special symbol "*" in an Accept-Encoding field matches any available
+            //content-coding not explicitly listed in the header field.
 
-        this.bCheckedAcceptEncoding = true;
-        this.bCompressionAllowed = rc;
+            rc = this.bStarEncodingParsed;
+
+        }
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-            Tr.exit(tc, "isCompressionAllowed(3): " + rc);
+            Tr.exit(tc, "isCompressionAllowed(2): " + rc);
         }
         return rc;
     }
@@ -550,7 +460,16 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
             getMyRequest().setHeaderChangeLimit(getHttpConfig().getHeaderChangeLimit());
         }
         setStartTime();
-        return getMyRequest();
+        HttpRequestMessageImpl req = getMyRequest();
+
+        // if applicable set the HTTP/2 specific content length
+        if (myLink instanceof H2HttpInboundLinkWrap) {
+            int len = ((H2HttpInboundLinkWrap) myLink).getH2ContentLength();
+            if (len != -1) {
+                req.setContentLength(len);
+            }
+        }
+        return req;
     }
 
     /**
@@ -636,7 +555,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
     /**
      * Send the headers for the outgoing response synchronously.
      *
-     * @throws IOException -- if a socket exception occurs
+     * @throws IOException          -- if a socket exception occurs
      * @throws MessageSentException -- if a finishMessage API was already used
      */
     @Override
@@ -747,9 +666,9 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @param body
      * @throws IOException
-     *             -- if a socket exception occurs
+     *                                  -- if a socket exception occurs
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public void sendResponseBody(WsByteBuffer[] body) throws IOException, MessageSentException {
@@ -808,7 +727,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @param bForce
      * @return VirtualConnection
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public VirtualConnection sendResponseBody(WsByteBuffer[] body, InterChannelCallback callback, boolean bForce) throws MessageSentException {
@@ -853,9 +772,9 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @param body
      * @throws IOException
-     *             -- if a socket error occurs
+     *                                  -- if a socket error occurs
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public void sendRawResponseBody(WsByteBuffer[] body) throws IOException, MessageSentException {
@@ -886,7 +805,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @param bForce
      * @return VirtualConnection
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public VirtualConnection sendRawResponseBody(WsByteBuffer[] body, InterChannelCallback callback, boolean bForce) throws MessageSentException {
@@ -970,11 +889,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * the zero-length chunk is automatically appended.
      *
      * @param body
-     *            (last set of buffers to send, null if no body data)
+     *                 (last set of buffers to send, null if no body data)
      * @throws IOException
-     *             -- if a socket exception occurs
+     *                                  -- if a socket exception occurs
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public void finishResponseMessage(WsByteBuffer[] body) throws IOException, MessageSentException {
@@ -1048,17 +967,30 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * be null and the callback always used.
      *
      * @param body
-     *            (last set of body data, null if no body information)
+     *                     (last set of body data, null if no body information)
      * @param callback
      * @param bForce
      * @return VirtualConnection
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public VirtualConnection finishResponseMessage(WsByteBuffer[] body, InterChannelCallback callback, boolean bForce) throws MessageSentException {
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "finishResponseMessage(body,cb)");
+        }
+        // H2 doesn't support asych writes, if we got here and this is H2, switch over to sync
+        if (isH2Connection()) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "finishResponseMessage: This is H2, calling sync finishResponseMessage(body)");
+            }
+            // Send the error response synchronously for H2
+            try {
+                finishResponseMessage(body);
+                return getVC();
+            } catch (IOException e) {
+                return null;
+            }
         }
         if (!headersParsed()) {
             // request message must have the headers parsed prior to sending
@@ -1115,11 +1047,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * been sent yet, then they will be prepended to the input data.
      *
      * @param body
-     *            -- null if there is no body data
+     *                 -- null if there is no body data
      * @throws IOException
-     *             -- if a socket exception occurs
+     *                                  -- if a socket exception occurs
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public void finishRawResponseMessage(WsByteBuffer[] body) throws IOException, MessageSentException {
@@ -1148,12 +1080,12 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * such that the callback is always used.
      *
      * @param body
-     *            -- null if there is no more body data
+     *                   -- null if there is no more body data
      * @param cb
      * @param bForce
      * @return VirtualConnection
      * @throws MessageSentException
-     *             -- if a finishMessage API was already used
+     *                                  -- if a finishMessage API was already used
      */
     @Override
     public VirtualConnection finishRawResponseMessage(WsByteBuffer[] body, InterChannelCallback cb, boolean bForce) throws MessageSentException {
@@ -1338,7 +1270,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * now that we're ready to read the next inbound request.
      *
      * @param callClose
-     *            (should this method call the close API itself)
+     *                      (should this method call the close API itself)
      */
     public void purgeBodyBuffers(boolean callClose) {
 
@@ -1368,11 +1300,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @return WsByteBuffer[]
      * @throws IOException
-     *             -- if a socket exceptions happens
+     *                                      -- if a socket exceptions happens
      * @throws IllegalHttpBodyException
-     *             -- if a malformed request body is
-     *             present such that the server should send an HTTP 400 Bad Request
-     *             back to the client.
+     *                                      -- if a malformed request body is
+     *                                      present such that the server should send an HTTP 400 Bad Request
+     *                                      back to the client.
      */
 
     @Override
@@ -1392,8 +1324,14 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
             throw ioe;
         }
 
+        // check for an HTTP/2 specific content length
+        int h2ContentLength = -1;
+        if (myLink instanceof H2HttpInboundLinkWrap) {
+            h2ContentLength = ((H2HttpInboundLinkWrap) myLink).getH2ContentLength();
+        }
+
         // check to see if a body is allowed before reading for one
-        if (!isIncomingBodyValid()) {
+        if (!isIncomingBodyValid() && h2ContentLength == -1) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
                 Tr.exit(tc, "getRequestBodyBuffers(sync): No body allowed");
             }
@@ -1443,7 +1381,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @return VirtualConnection (null if an async read is in progress,
      *         non-null if data is ready)
      * @throws BodyCompleteException
-     *             -- if the entire body has already been read
+     *                                   -- if the entire body has already been read
      */
     @Override
     public VirtualConnection getRequestBodyBuffers(InterChannelCallback callback, boolean bForce) throws BodyCompleteException {
@@ -1533,11 +1471,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @return WsByteBuffer
      * @throws IOException
-     *             -- if a socket exceptions happens
+     *                                      -- if a socket exceptions happens
      * @throws IllegalHttpBodyException
-     *             -- if a malformed request body is
-     *             present such that the server should send an HTTP 400 Bad Request
-     *             back to the client.
+     *                                      -- if a malformed request body is
+     *                                      present such that the server should send an HTTP 400 Bad Request
+     *                                      back to the client.
      */
     @Override
     public WsByteBuffer getRequestBodyBuffer() throws IOException, IllegalHttpBodyException {
@@ -1608,63 +1546,37 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @return VirtualConnection (null if an async read is in progress,
      *         non-null if data is ready)
      * @throws BodyCompleteException
-     *             -- if the entire body has already been read
+     *                                   -- if the entire body has already been read
      */
     @Override
     public VirtualConnection getRequestBodyBuffer(InterChannelCallback callback, boolean bForce) throws BodyCompleteException {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-            Tr.entry(tc, "getRequestBodyBuffer(async)");
+            Tr.entry(tc, "getRequestBodyBuffer(async) hc: " + this.hashCode());
         }
-        if (!headersParsed()) {
-            // request message must have the headers parsed prior to attempting
-            // to read a body (this is a completely invalid state in the channel
-            // above)
-            IOException ioe = new IOException("Request not read yet");
-            FFDCFilter.processException(ioe, CLASS_NAME + ".getRequestBodyBuffer", "1511");
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "Attempt to read a body without headers");
-            }
-            callback.error(getVC(), ioe);
-            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "getRequestBodyBuffer(async): no hdrs yet");
-            }
-            return null;
-        }
+        boolean isError = false;
 
-        // check to see if a read is even necessary
-        if (!isIncomingBodyValid() || incomingBuffersReady()) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "getRequestBodyBuffer(async): read not needed");
-            }
-            if (bForce) {
-                callback.complete(getVC());
-                return null;
-            }
-            return getVC();
-        }
-
-        if (isBodyComplete()) {
-            // throw new BodyCompleteException("No more body to read");
-            // instead of throwing an exception, just return the VC as though
-            // data is immediately ready and the caller will switch to their
-            // sync block and then get a null buffer back
-            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "getRequestBodyBuffer(async): body complete");
-            }
-            if (bForce) {
-                callback.complete(getVC());
-                return null;
-            }
-            return getVC();
-        }
-
-        setAppReadCallback(callback);
-        setForceAsync(bForce);
-        setMultiRead(false);
         try {
-            if (!readBodyBuffer(getRequestImpl(), true)) {
+            if (!headersParsed()) {
+                // request message must have the headers parsed prior to attempting
+                // to read a body (this is a completely invalid state in the channel
+                // above)
+                IOException ioe = new IOException("Request not read yet");
+                FFDCFilter.processException(ioe, CLASS_NAME + ".getRequestBodyBuffer", "1511");
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Attempt to read a body without headers");
+                }
+                callback.error(getVC(), ioe);
                 if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                    Tr.exit(tc, "getRequestBodyBuffer(async): read finished");
+                    Tr.exit(tc, "getRequestBodyBuffer(async): no hdrs yet");
+                }
+                isError = true;
+                return null;
+            }
+
+            // check to see if a read is even necessary
+            if (!isIncomingBodyValid() || incomingBuffersReady()) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                    Tr.exit(tc, "getRequestBodyBuffer(async): read not needed");
                 }
                 if (bForce) {
                     callback.complete(getVC());
@@ -1672,19 +1584,66 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
                 }
                 return getVC();
             }
-        } catch (IOException ioe) {
-            // no FFDC required
-            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.exit(tc, "getRequestBodyBuffer(async): exception: " + ioe);
-            }
-            callback.error(getVC(), ioe);
-            return null;
-        }
 
-        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-            Tr.exit(tc, "getRequestBodyBuffer(async): null");
+            if (isBodyComplete()) {
+                // throw new BodyCompleteException("No more body to read");
+                // instead of throwing an exception, just return the VC as though
+                // data is immediately ready and the caller will switch to their
+                // sync block and then get a null buffer back
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                    Tr.exit(tc, "getRequestBodyBuffer(async): body complete");
+                }
+                if (bForce) {
+                    callback.complete(getVC());
+                    return null;
+                }
+                return getVC();
+            }
+
+            setAppReadCallback(callback);
+            setForceAsync(bForce);
+            setMultiRead(false);
+            try {
+                if (!readBodyBuffer(getRequestImpl(), true)) {
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                        Tr.exit(tc, "getRequestBodyBuffer(async): read finished");
+                    }
+                    if (bForce) {
+                        callback.complete(getVC());
+                        return null;
+                    }
+                    return getVC();
+                }
+            } catch (IOException ioe) {
+                // no FFDC required
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                    Tr.exit(tc, "getRequestBodyBuffer(async): exception: " + ioe);
+                }
+                isError = true;
+                callback.error(getVC(), ioe);
+                return null;
+            }
+
+            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                Tr.exit(tc, "getRequestBodyBuffer(async): null");
+            }
+            return null;
+        } finally {
+            countDownFirstReadLatch(isError);
         }
-        return null;
+    }
+
+    public void countDownFirstReadLatch(boolean force) {
+        if (this.myLink instanceof H2HttpInboundLinkWrap) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "countDownFirstReadLatch. count down. force: " + force + " HISCI hc: " + this.hashCode());
+            }
+            ((H2HttpInboundLinkWrap) myLink).countDownFirstReadLatch(force);
+        } else {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, " can not count down countDownFirstReadLatch. HISCI hc: " + this.hashCode());
+            }
+        }
     }
 
     /**
@@ -1699,11 +1658,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @return WsByteBuffer
      * @throws IOException
-     *             -- if a socket exceptions happens
+     *                                      -- if a socket exceptions happens
      * @throws IllegalHttpBodyException
-     *             -- if a malformed request body is
-     *             present such that the server should send an HTTP 400 Bad Request
-     *             back to the client.
+     *                                      -- if a malformed request body is
+     *                                      present such that the server should send an HTTP 400 Bad Request
+     *                                      back to the client.
      */
     @Override
     public WsByteBuffer getRawRequestBodyBuffer() throws IOException, IllegalHttpBodyException {
@@ -1730,11 +1689,11 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      *
      * @return WsByteBuffer[]
      * @throws IOException
-     *             -- if a socket exceptions happens
+     *                                      -- if a socket exceptions happens
      * @throws IllegalHttpBodyException
-     *             -- if a malformed request body is
-     *             present such that the server should send an HTTP 400 Bad Request
-     *             back to the client.
+     *                                      -- if a malformed request body is
+     *                                      present such that the server should send an HTTP 400 Bad Request
+     *                                      back to the client.
      */
     @Override
     public WsByteBuffer[] getRawRequestBodyBuffers() throws IOException, IllegalHttpBodyException {
@@ -1767,7 +1726,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @param bForce
      * @return VirtualConnection
      * @throws BodyCompleteException
-     *             -- if the entire body has already been read
+     *                                   -- if the entire body has already been read
      */
     @Override
     public VirtualConnection getRawRequestBodyBuffer(InterChannelCallback cb, boolean bForce) throws BodyCompleteException {
@@ -1800,7 +1759,7 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
      * @param bForce
      * @return VirtualConnection
      * @throws BodyCompleteException
-     *             -- if the entire body has already been read
+     *                                   -- if the entire body has already been read
      */
     @Override
     public VirtualConnection getRawRequestBodyBuffers(InterChannelCallback cb, boolean bForce) throws BodyCompleteException {
@@ -2033,4 +1992,157 @@ public class HttpInboundServiceContextImpl extends HttpServiceContextImpl implem
         return this.remoteUser;
     }
 
+    public void initForwardedValues() {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.entry(tc, "initForwardedValues");
+        }
+        forwardedHeaderInitialized = true;
+        //Obtain the Regular Expression either from the configuration or default
+        Pattern pattern = getHttpConfig().getForwardedProxiesRegex();
+        Matcher matcher = null;
+
+        //First Check if connected endpoint IP addresses matches the regular expression
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "Verifying connected endpoint matches proxy regex");
+        }
+        String remoteIp = getTSC().getRemoteAddress().getHostAddress();
+        matcher = pattern.matcher(remoteIp);
+        if (matcher.matches()) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Connected endpoint matched, verifying forwarded FOR list addresses");
+            }
+            //if so, fetch the forwardedForList() from the base message
+            String[] forwardedForList = this.getMessageBeingParsed().getForwardedForList();
+            if (forwardedForList == null || forwardedForList.length == 0) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "No forwarded FOR addresses provided, forwarded values will not be used");
+                    Tr.exit(tc, "initForwardedValues");
+                }
+                return;
+            }
+            for (int i = forwardedForList.length - 1; i > 0; i--) {
+                matcher = pattern.matcher(forwardedForList[i]);
+                if (!matcher.matches()) {
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Found address not defined in proxy regex, forwarded values will not be used");
+                        Tr.exit(tc, "initForwardedValues");
+                    }
+                    return;
+                }
+            }
+            //if we get to the end, set the forwarded fields with correct values
+
+            //First check that the last node identifier is not an obfuscated address or
+            //unknown token
+            if (forwardedForList[0] == null || "unknown".equals(forwardedForList[0]) || forwardedForList[0].startsWith("_")) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Client address is unknown or obfuscated, forwarded values will not be used");
+                    Tr.exit(tc, "initForwardedValues");
+                }
+                return;
+            }
+
+            //Check if a port was included
+            if (this.getMessageBeingParsed().getForwardedPort() != null) {
+                //If this port does not resolve to an integer, because it is obfuscated,
+                //malformed, or otherwise, then the address cannot be verified as being
+                //the client. If so, exit now.
+                try {
+                    this.forwardedRemotePort = Integer.parseInt(getMessageBeingParsed().getForwardedPort());
+                } catch (NumberFormatException e) {
+
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Remote port provided was either obfuscated or malformed, forwarded values will not be used.");
+                        Tr.exit(tc, "initForwardedValues");
+                    }
+                    return;
+                }
+
+            }
+
+            this.forwardedRemoteAddress = forwardedForList[0];
+            this.forwardedHost = this.getMessageBeingParsed().getForwardedHost();
+            this.forwardedProto = this.getMessageBeingParsed().getForwardedProto();
+
+        }
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.exit(tc, "initForwardedValues");
+        }
+
+    }
+
+    public int getForwardedRemotePort() {
+        if (!forwardedHeaderInitialized)
+            initForwardedValues();
+
+        return this.forwardedRemotePort;
+    }
+
+    public String getForwardedRemoteAddress() {
+        if (!forwardedHeaderInitialized)
+            initForwardedValues();
+
+        return this.forwardedRemoteAddress;
+    }
+
+    public String getForwardedRemoteProto() {
+        if (!forwardedHeaderInitialized)
+            initForwardedValues();
+
+        return this.forwardedProto;
+    }
+
+    public String getForwardedRemoteHost() {
+        if (!forwardedHeaderInitialized)
+            initForwardedValues();
+
+        return this.forwardedHost;
+    }
+
+    public boolean useForwardedHeaders() {
+        return getHttpConfig().useForwardingHeaders();
+    }
+
+    public boolean useForwardedHeadersInAccessLog() {
+        return getHttpConfig().useForwardingHeadersInAccessLog();
+    }
+
+    /**
+     * Check if HTTP/2 is enabled for this context
+     *
+     * @return true if HTTP/2 is enabled for this link
+     */
+    public boolean isHttp2Enabled() {
+
+        boolean isHTTP2Enabled = false;
+
+        //If servlet-3.1 is enabled, HTTP/2 is optional and by default off.
+        if (CHFWBundle.isHttp2DisabledByDefault()) {
+            //If so, check if the httpEndpoint was configured for HTTP/2
+            isHTTP2Enabled = (getHttpConfig().getUseH2ProtocolAttribute() != null && getHttpConfig().getUseH2ProtocolAttribute());
+        }
+
+        //If servlet-4.0 is enabled, HTTP/2 is optional and by default on.
+        else if (CHFWBundle.isHttp2EnabledByDefault()) {
+            //If not configured as an attribute, getUseH2ProtocolAttribute will be null, which returns true
+            //to use HTTP/2.
+            isHTTP2Enabled = (getHttpConfig().getUseH2ProtocolAttribute() == null || getHttpConfig().getUseH2ProtocolAttribute());
+        }
+
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "Has HTTP/2 been enabled on this port: " + isHTTP2Enabled);
+        }
+        return isHTTP2Enabled;
+    }
+
+    /**
+     * @param suppress0ByteChunk
+     */
+    public void setSuppress0ByteChunk(boolean suppress0ByteChunk) {
+        this.suppress0ByteChunk = suppress0ByteChunk;
+    }
+
+    public boolean getSuppress0ByteChunk() {
+        return this.suppress0ByteChunk;
+    }
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2005, 2006 IBM Corporation and others.
+ * Copyright (c) 2005, 2006, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -33,7 +33,7 @@ import com.ibm.ws.tcpchannel.internal.NBAccept.EndPointActionInfo;
 
 /**
  * Non blocking accept selector.
- * 
+ *
  */
 public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelfIntrospectable {
 
@@ -61,11 +61,11 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
 
     /**
      * Constructor.
-     * 
+     *
      * @throws IOException
      */
     public NBAcceptChannelSelector(boolean argCheckStartup) throws IOException {
-        super(false);
+        super(false, argCheckStartup);
         this.checkStartup = argCheckStartup;
         this.selectorTimeout = TCPFactoryConfiguration.getChannelSelectorIdleTimeout();
         if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
@@ -78,6 +78,8 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
      */
     @Override
     protected void updateSelector() {
+        boolean trace = (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled());
+        if (trace) Tr.entry(this,tc,"updateSelector");
         final Queue<Object> queue = getWorkQueue();
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(this, tc, "updateSelector - processing " + queue.size() + " items");
@@ -87,85 +89,84 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
         while (!queue.isEmpty()) {
             work = (EndPointActionInfo) queue.remove();
 
-            // If we are in check for startup mode, we need to see if the server has completely started yet.
-//            if (this.checkStartup) {
-//                // need to get the Channel Framework thread which is starting channels on it's way, so notify now
-//                synchronized (work.syncObject) {
-//                    work.syncObject.notify();
-//                }
-//
-//                // then call into the CHFWBundle and wait till it says the server is all the way started
-//                // before continuing with the normal processing
-//                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-//                    Tr.debug(this, tc, "updateSelector will wait for server to completely start.  this hashcode is: " + this.hashCode());
-//                }
-//
-//                CHFWBundle.waitServerCompletelyStarted();
-//
-//                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-//                    Tr.debug(this, tc, "updateSelector wait completed");
-//                }
-//
-//                // only do this once for acceptor thread startup
-//                this.checkStartup = false;
-//            }
-
             if (work.action == NBAccept.REGISTER_ENDPOINT) {
                 try {
                     ServerSocket serverSocket = work.endPoint.getServerSocket();
-                    // Configure all inbound channels to be non-blocking
-                    serverSocket.getChannel().configureBlocking(false);
 
-                    if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
-                        Tr.event(this, tc, "Registering: " + serverSocket);
+                    // because opening a port during startup is now a two step process, the serverSocket
+                    // could have been destroyed before we get here.  Therefore we need to check if it is still valid
+                    if (serverSocket == null) {
+                        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                            Tr.debug(tc, "REGISTER_ENDPOINT: ServerSocket for this port has already been destroyed");
+                        }
+                    } else {
+                        // Configure all inbound channels to be non-blocking
+                        serverSocket.getChannel().configureBlocking(false);
+
+                        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                            Tr.event(this, tc, "Registering: " + serverSocket);
+                        }
+                        // Add a new listener socket in to the selector.
+                        serverSocket.getChannel().register(selector, SelectionKey.OP_ACCEPT, work.endPoint);
+                        ++usageCount;
                     }
-                    // Add a new listener socket in to the selector.
-                    serverSocket.getChannel().register(selector, SelectionKey.OP_ACCEPT, work.endPoint);
-                    ++usageCount;
                 } catch (Throwable t) {
-                    FFDCFilter.processException(t, getClass().getName() + ".updateSelector", "101", this, new Object[] { work });
+                    if (com.ibm.wsspi.kernel.service.utils.FrameworkState.isStopping() == false) {
+                        FFDCFilter.processException(t, getClass().getName() + ".updateSelector", "101", this, new Object[] { work });
+                    }
                     if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                         Tr.event(this, tc, "Error registering port(" + work.endPoint.getListenPort() + "); " + t);
                     }
-                }
-
-                synchronized (work.syncObject) {
-                    work.syncObject.notify();
+                } finally {
+                    synchronized (work.syncObject) {
+                        work.syncObject.notifyAll();
+                    }
                 }
 
             } else if (work.action == NBAccept.REMOVE_ENDPOINT) {
                 try {
                     ServerSocket serverSocket = work.endPoint.getServerSocket();
-                    if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
-                        Tr.event(this, tc, "Removing: " + serverSocket);
-                    }
-                    // cancel the key. Shouldn't need to do this, but there is a bug on HP
-                    // so we will just do it regardless of OS
-                    serverSocket.getChannel().keyFor(selector).cancel();
-                    // force selector to process key cancel before continuing
-                    selector.selectNow();
-                    --usageCount;
-                    if (usageCount <= 0) {
-                        shutDown();
-                    }
 
+                    // because opening a port during startup is now a two step process, the serverSocket
+                    // could have been destroyed before we get here.  Therefore we need to check if it is still valid.
+                    if (serverSocket == null) {
+                        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                            Tr.debug(tc, "REMOVE_ENDPOINT: ServerSocket for this port has already been destroyed");
+                        }
+                    } else {
+                        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                            Tr.event(this, tc, "Removing: " + serverSocket);
+                        }
+                        // cancel the key. Shouldn't need to do this, but there is a bug on HP
+                        // so we will just do it regardless of OS
+                        serverSocket.getChannel().keyFor(selector).cancel();
+                        // force selector to process key cancel before continuing
+                        selector.selectNow();
+                        --usageCount;
+                        if (usageCount <= 0) {
+                            shutDown();
+                        }
+                    }
                 } catch (Throwable t) {
-                    FFDCFilter.processException(t, getClass().getName() + ".updateSelector", "102", this, new Object[] { work });
+                    if (com.ibm.wsspi.kernel.service.utils.FrameworkState.isStopping() == false) {
+                        FFDCFilter.processException(t, getClass().getName() + ".updateSelector", "102", this, new Object[] { work });
+                    }
                     if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                         Tr.event(this, tc, "Error removing port(" + work.endPoint.getListenPort() + "); " + t);
                     }
-                }
-
-                synchronized (work.syncObject) {
-                    work.syncObject.notify();
+                } finally {
+                    synchronized (work.syncObject) {
+                        work.syncObject.notifyAll();
+                    }
                 }
             }
         } // process all items on the work queue
+        if (trace) Tr.exit(this,tc,"updateSelector");
     }
 
     /**
      * Query the number of listening ports using this selector.
-     * 
+     *
      * @return int
      */
     protected int getUsageCount() {
@@ -186,7 +187,7 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
 
     /**
      * Increment the number of accept() error conditions that have happened.
-     * 
+     *
      */
     private void incrementExceptions() {
         // if the gap between the first exception and this newest one is over
@@ -208,7 +209,7 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
 
     /**
      * Reset the looping exception handling variables.
-     * 
+     *
      */
     private void resetExceptions() {
         this.numExceptions = 0;
@@ -368,7 +369,7 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
     /**
      * Handle closing the socket channel with appropriate debug and error
      * protection.
-     * 
+     *
      * @param sc
      */
     private void closeSocketChannel(SocketChannel sc) {
@@ -384,6 +385,7 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
         try {
             sc.close();
         } catch (IOException ioe) {
+
             if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                 Tr.event(this, tc, "IOException caught while closing connection " + ioe);
             }
@@ -395,7 +397,7 @@ public class NBAcceptChannelSelector extends ChannelSelector implements FFDCSelf
      * timing window in various JDKs, namely AIX and HPUX, where getLocalPort()
      * or getLocalSocketAddress() may throw a runtime error if the client has
      * already closed the socket prior to these calls.
-     * 
+     *
      * @param sc
      * @return boolean - true means the socket is valid
      */

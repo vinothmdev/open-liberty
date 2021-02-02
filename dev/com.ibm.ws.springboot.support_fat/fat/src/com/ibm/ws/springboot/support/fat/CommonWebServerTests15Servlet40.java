@@ -16,26 +16,36 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.junit.AfterClass;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import componenttest.annotation.MaximumJavaLevel;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 
 @RunWith(FATRunner.class)
 @Mode(FULL)
+@MaximumJavaLevel(javaLevel = 8)
 public class CommonWebServerTests15Servlet40 extends CommonWebServerTests {
-    @AfterClass
-    public static void stopTestServer() throws Exception {
-        if (!javaVersion.startsWith("1.")) {
-            server.stopServer("CWWKC0265W");
-        }
-    }
 
-    @Test
-    public void testBasicSpringBootApplication15Servlet40() throws Exception {
-        testBasicSpringBootApplication();
+    @After
+    public void stopTestServer() throws Exception {
+        String methodName = testName.getMethodName();
+
+        if (!javaVersion.startsWith("1.")) {
+            if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+                super.stopServer(true, "CWWKC0265W", "CWWKT0015W");
+            } else {
+                super.stopServer(true, "CWWKC0265W");
+            }
+        } else {
+            if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+                super.stopServer(true, "CWWKT0015W");
+            } else {
+                super.stopServer();
+            }
+        }
     }
 
     @Override
@@ -46,6 +56,16 @@ public class CommonWebServerTests15Servlet40 extends CommonWebServerTests {
     @Override
     public String getApplication() {
         return SPRING_BOOT_15_APP_BASE;
+    }
+
+    @Test
+    public void testBasicSpringBootApplication15Servlet40() throws Exception {
+        testBasicSpringBootApplication();
+    }
+
+    @Test
+    public void testDefaultHostWithAppPort15() throws Exception {
+        testBasicSpringBootApplication();
     }
 
 }

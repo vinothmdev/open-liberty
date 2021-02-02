@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015, 2017 IBM Corporation and others.
+ * Copyright (c) 2015, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -29,6 +29,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -130,9 +131,9 @@ public class Bell implements LibraryChangeListener {
     /**
      * Configures this bell with a specific library and a possible set of service names
      *
-     * @param context the bundle context
+     * @param context  the bundle context
      * @param executor the executor service
-     * @param config the configuration settings
+     * @param config   the configuration settings
      */
     void update() {
         final BundleContext context = componentContext.getBundleContext();
@@ -155,7 +156,7 @@ public class Bell implements LibraryChangeListener {
             @Override
             public List<ServiceRegistration<?>> addingService(ServiceReference<Library> libraryRef) {
                 Library library = context.getService(libraryRef);
-                // Got the library not regisrter the services.
+                // Got the library now register the services.
                 // The list of registrations is returned so we don't have to store them ourselves.
                 return registerLibraryServices(library, serviceNames);
             }
@@ -218,6 +219,8 @@ public class Bell implements LibraryChangeListener {
             return Collections.emptyList();
         }
 
+        Set<String> servicesNotFound = serviceNames == null || serviceNames.isEmpty() ? Collections.EMPTY_SET : new TreeSet<String>(serviceNames);
+
         final List<ServiceInfo> serviceInfos = new LinkedList<ServiceInfo>();
         for (final ArtifactContainer ac : library.getContainers()) {
             final ArtifactEntry servicesFolder = ac.getEntry("META-INF/services");
@@ -227,8 +230,11 @@ public class Bell implements LibraryChangeListener {
                 }
                 continue;
             }
-            serviceInfos.addAll(getListOfServicesForContainer(servicesFolder.convertToContainer(), library, serviceNames));
+            serviceInfos.addAll(getListOfServicesForContainer(servicesFolder.convertToContainer(), library, serviceNames, servicesNotFound));
         }
+
+        for (String serviceName : servicesNotFound)
+            Tr.warning(tc, "bell.no.services.config", serviceName, library.id());
 
         final List<ServiceRegistration<?>> libServices;
         if (serviceInfos.size() == 0) {
@@ -278,29 +284,27 @@ public class Bell implements LibraryChangeListener {
         return new BufferedReader(input);
     }
 
-    private static List<ServiceInfo> getListOfServicesForContainer(final ArtifactContainer servicesFolder, final Library library, Set<String> serviceNames) {
+    private static List<ServiceInfo> getListOfServicesForContainer(final ArtifactContainer servicesFolder, final Library library,
+                                                                   Set<String> serviceNames, Set<String> servicesNotFound) {
         final List<ServiceInfo> serviceInfos = new LinkedList<ServiceInfo>();
         if (serviceNames.isEmpty()) {
             // just exposing all mete-inf services
             for (ArtifactEntry providerConfigFile : servicesFolder) {
-                getServiceInfos(providerConfigFile, providerConfigFile.getName(), library, serviceInfos);
+                getServiceInfos(providerConfigFile, providerConfigFile.getName(), servicesNotFound, library, serviceInfos);
             }
         } else {
             // only look for services that have been specified
             for (String serviceName : serviceNames) {
                 ArtifactEntry providerConfigFile = servicesFolder.getEntry(serviceName);
-                getServiceInfos(providerConfigFile, serviceName, library, serviceInfos);
+                getServiceInfos(providerConfigFile, serviceName, servicesNotFound, library, serviceInfos);
             }
         }
         return serviceInfos;
     }
 
-    private static void getServiceInfos(ArtifactEntry providerConfigFile, String serviceName, Library library, List<ServiceInfo> serviceInfos) {
-        if (providerConfigFile == null) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isWarningEnabled()) {
-                Tr.warning(tc, "bell.no.services.config", serviceName, library.id());
-            }
-        } else {
+    private static void getServiceInfos(ArtifactEntry providerConfigFile, String serviceName, Set<String> servicesNotFound,
+                                        Library library, List<ServiceInfo> serviceInfos) {
+        if (providerConfigFile != null) {
             try {
                 final BufferedReader reader = createReader(providerConfigFile);
                 try {
@@ -310,21 +314,22 @@ public class Bell implements LibraryChangeListener {
                         int index = line.indexOf(COMMENT_CHAR);
                         String implClass;
                         if (index != -1) {
-                          String propStr = line.substring(index + 1);
-                          implClass = line.substring(0, index).trim();
-                          if (implClass.length() == 0) {
-                            String[] prop = propStr.split("=");
-                            if (prop.length == 2) {
-                              props.put(prop[0].trim(), prop[1].trim());
+                            String propStr = line.substring(index + 1);
+                            implClass = line.substring(0, index).trim();
+                            if (implClass.length() == 0) {
+                                String[] prop = propStr.split("=");
+                                if (prop.length == 2) {
+                                    props.put(prop[0].trim(), prop[1].trim());
+                                }
                             }
-                          }
                         } else {
-                          implClass = line.trim();
+                            implClass = line.trim();
                         }
 
                         if (implClass.length() > 0) {
-                          serviceInfos.add(new ServiceInfo(providerConfigFile, implClass, props));
-                          props = new Hashtable<String, String>();
+                            serviceInfos.add(new ServiceInfo(providerConfigFile, implClass, props));
+                            servicesNotFound.remove(serviceName);
+                            props = new Hashtable<String, String>();
                         }
                     }
                 } finally {
@@ -412,7 +417,13 @@ public class Bell implements LibraryChangeListener {
         return new PrototypeServiceFactory() {
             @Override
             public Object getService(Bundle bundle, ServiceRegistration registration) {
-                // Not the following methods will produce messages if something goes wrong
+                if (library.id() == null) {
+                    // this is a case where the library has been deleted but we have not
+                    // gotten to unregister the service factory yet;
+                    // just return null instead of failing out here with exceptions
+                    return null;
+                }
+                // Note the following methods will produce messages if something goes wrong
                 Class<?> serviceType = findClass(serviceInfo.implClass, library, fileUrl);
                 if (serviceType != null) {
                     return createService(serviceType, library.id(), fileUrl);
@@ -424,7 +435,8 @@ public class Bell implements LibraryChangeListener {
             }
 
             @Override
-            public void ungetService(Bundle bundle, ServiceRegistration registration, Object service) {}
+            public void ungetService(Bundle bundle, ServiceRegistration registration, Object service) {
+            }
         };
     }
 

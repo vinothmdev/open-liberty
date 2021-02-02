@@ -20,12 +20,9 @@ import static org.junit.Assert.fail;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-
-import test.common.SharedOutputManager;
+import org.junit.rules.TestRule;
 
 import com.ibm.websphere.channelfw.FlowType;
 import com.ibm.ws.channelfw.internal.ChannelFrameworkImpl;
@@ -38,45 +35,16 @@ import com.ibm.wsspi.channelfw.exception.ChainException;
 import com.ibm.wsspi.channelfw.exception.ChannelException;
 import com.ibm.wsspi.channelfw.exception.InvalidRuntimeStateException;
 
+import test.common.SharedOutputManager;
+
 /**
  * The purpose of this class is to test the channel configuration methods
  * in ChannelFrameworkImpl.
  */
 public class ChannelLifeCycleTest {
-    private static SharedOutputManager outputMgr;
-
-    /**
-     * Capture stdout/stderr output to the manager.
-     * 
-     * @throws Exception
-     */
-    @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-        outputMgr = SharedOutputManager.getInstance();
-        outputMgr.captureStreams();
-    }
-
-    /**
-     * Final teardown work when class is exiting.
-     * 
-     * @throws Exception
-     */
-    @AfterClass
-    public static void tearDownAfterClass() throws Exception {
-        // Make stdout and stderr "normal"
-        outputMgr.restoreStreams();
-    }
-
-    /**
-     * Individual teardown after each test.
-     * 
-     * @throws Exception
-     */
-    @After
-    public void tearDown() throws Exception {
-        // Clear the output generated after each method invocation
-        outputMgr.resetStreams();
-    }
+    private static SharedOutputManager outputMgr = SharedOutputManager.getInstance();
+    @Rule
+    public TestRule managerRule = outputMgr;
 
     // Helper method to create valid tcp props to start a chain with TCP in it.
     protected Map<Object, Object> getTcpProps(String portProp, String defPort) {

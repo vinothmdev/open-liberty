@@ -112,7 +112,7 @@ NO_VALID_TRANSACTION_CONTEXT_J2CA0040.explanation=A fost o eroare intern\u0103 l
 NO_VALID_TRANSACTION_CONTEXT_J2CA0040.useraction=-CMSG0002
 
 # --------------------------------
-POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: Conexiunea nu este disponibil\u0103 c\u00e2nd se invoc\u0103 metoda {0} pentru resursa {1}.
+POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: Conexiunea nu este disponibil\u0103 c\u00e2nd se invoc\u0103 metoda {0} pentru resursa {1}. S-a generat timeout pentru {2} milisecunde cu {3} cereri \u00een a\u015fteptare r\u0103mase \u015fi {4} conexiuni \u00een total utilizate.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.explanation=A ap\u0103rut un timeout de a\u015fteptare a conexiunii. S-a creat o ConnectionWaitTimeoutException.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.useraction=Reconfigura\u0163i pool-ul de conexiuni. Cre\u015fte\u0163i num\u0103rul maxim de conexiuni sau cre\u015fte\u0163i timpul de a\u015fteptare a conexiunii pentru a evita aceast\u0103 eroare.
 
@@ -320,6 +320,11 @@ DUPLICATE_CONNECTOR_PROPERTY_J2CA0308.useraction=S-a specificat o proprietate pe
 POOL_MANAGER_NOT_FOUND_J2CA0695=J2CA0695E: Nu se poate g\u0103si managerul de pool primar \u00een timpul proces\u0103rii prelur\u0103ii la defect pentru o resurs\u0103 cu numele JNDI {0}.
 POOL_MANAGER_NOT_FOUND_J2CA0695.explanation=A ap\u0103rut o eroare intern\u0103 \u00een timpul proces\u0103rii prelu\u0103rii la defect.
 POOL_MANAGER_NOT_FOUND_J2CA0695.useraction=-CMSG0002
+
+# ---------------------------------
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W=J2CA0695W: A fost f\u0103cut\u0103 o cerere de conexiune pentru resursa XA {0} utiliz\u00e2nd autentificarea SPNEGO, dau nu a fost configurat niciun alias de date de autentificare pentru recuperare. Resursa XA nu poate participa la recuperarea XA automat\u0103 dec\u00e2t \u00een cazul \u00een care este configurat un alias de date de autentificare pentru recuperare.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.explanation=Recuperarea XA este un proces automat \u00een fundal, dar autentificarea SPNEGO necesit\u0103 ca utilizatorul s\u0103 realizeze o introducere manual\u0103. Ca urmare, autentificarea SPNEGO nu poate fi utilizat\u0103 pentru recuperarea XA automat\u0103.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.useraction=Configura\u0163i pentru resursa XA un alias de date de autentificare pentru recuperare.
 
 # ---------------------------------
 FREEPOOL_GETFREECONNECTION_ERROR_J2CA1002=J2CA1002E: MCWrapper invalid {0} de la pool-ul liber pentru resursa {1}.

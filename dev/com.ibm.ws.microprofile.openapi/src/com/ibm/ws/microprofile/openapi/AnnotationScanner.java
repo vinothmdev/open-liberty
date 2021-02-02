@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.container.service.annocache.AnnotationsBetaHelper;
 import com.ibm.ws.container.service.annotations.WebAnnotations;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.microprofile.openapi.utils.OpenAPIUtils;
@@ -44,6 +45,7 @@ public class AnnotationScanner {
     private static final String JAX_RS_APP_PATH_ANNOTATION_CLASS_NAME = "javax.ws.rs.ApplicationPath";
     private static final String JAX_RS_PATH_ANNOTATION_CLASS_NAME = "javax.ws.rs.Path";
     private static final String OPENAPI_SCHEMA_ANNOTATION_CLASS_NAME = "org.eclipse.microprofile.openapi.annotations.media.Schema";
+    private static final String MP_REGISTER_REST_CLIENT = "org.eclipse.microprofile.rest.client.inject.RegisterRestClient";
 
     private static final List<String> ANNOTATION_CLASS_NAMES = Arrays.asList(JAX_RS_PATH_ANNOTATION_CLASS_NAME,
                                                                              JAX_RS_APP_PATH_ANNOTATION_CLASS_NAME,
@@ -54,7 +56,7 @@ public class AnnotationScanner {
     private final WebAppConfig appConfig;
 
     public AnnotationScanner(ClassLoader classLoader, Container containerToAdapt) throws UnableToAdaptException {
-        webAnnotations = containerToAdapt.adapt(WebAnnotations.class);
+        webAnnotations = AnnotationsBetaHelper.getWebAnnotations(containerToAdapt);
         appConfig = containerToAdapt.adapt(WebModuleMetaData.class).getConfiguration();
     }
 
@@ -189,8 +191,13 @@ public class AnnotationScanner {
 
         try {
             annotationTargets = webAnnotations.getAnnotationTargets();
-            restAPIClasses = ANNOTATION_CLASS_NAMES.stream().flatMap(anno -> annotationTargets.getAnnotatedClasses(anno,
-                                                                                                                   AnnotationTargets_Targets.POLICY_SEED).stream()).collect(Collectors.toSet());
+            restAPIClasses = ANNOTATION_CLASS_NAMES.stream()//
+                            .flatMap(anno -> annotationTargets.getAnnotatedClasses(anno, AnnotationTargets_Targets.POLICY_SEED).stream())//
+                            .collect(Collectors.toSet());
+
+            // Remove any MP Rest Client interfaces from the OpenAPI view
+            Set<String> mpRestClientClasses = annotationTargets.getAnnotatedClasses(MP_REGISTER_REST_CLIENT);
+            restAPIClasses.removeAll(mpRestClientClasses);
         } catch (UnableToAdaptException e) {
             if (OpenAPIUtils.isEventEnabled(tc)) {
                 Tr.event(tc, "Unable to get annotated class names");
@@ -199,10 +206,16 @@ public class AnnotationScanner {
         return Collections.unmodifiableSet(restAPIClasses);
     }
 
-    public String getURLMapping() {
+    public String getURLMapping(Set<String> classesToScan) {
         this.urlMapping = null;
         try {
-            Set<String> appClassNames = getAllApplicationClasses();
+            Set<String> appClassNames = getAllApplicationClasses().stream()
+                    .filter(classesToScan::contains)
+                    .collect(Collectors.toSet());
+
+            if (OpenAPIUtils.isEventEnabled(tc)) {
+                Tr.event(tc, "Application classes after filtering: ", appClassNames);
+            }
 
             if (appClassNames.size() < 2) {
                 String urlMapping = null;

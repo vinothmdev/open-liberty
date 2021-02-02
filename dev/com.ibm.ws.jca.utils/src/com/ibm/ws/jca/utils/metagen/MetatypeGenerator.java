@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2018 IBM Corporation and others.
+ * Copyright (c) 2013, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -66,6 +66,7 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Sensitive;
 import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.container.service.annocache.AnnotationsBetaHelper;
 import com.ibm.ws.container.service.annotations.ModuleAnnotations;
 import com.ibm.ws.jca.utils.Utils;
 import com.ibm.ws.jca.utils.Utils.ConstructType;
@@ -150,7 +151,7 @@ public class MetatypeGenerator {
     /**
      * Add classes for creates.objectClass to the metatype.
      *
-     * @param MetatypeOcd ocd metatype object class definition.
+     * @param MetatypeOcd   ocd metatype object class definition.
      * @param interfaceName class name with which to start
      * @throws ClassNotFoundException if the class cannot be loaded
      */
@@ -510,8 +511,8 @@ public class MetatypeGenerator {
             //   The ConnectionDefinition and ConnectionDefinitions annotations are
             //   applied to the JavaBean class and are restricted to be applied only on JavaBean
             //   classes that implement the ManagedConnectionFactory interface (see
-            //   Section 5.3.2, “ManagedConnectionFactory JavaBean and Outbound
-            //   Communication” on page 5-8).
+            //   Section 5.3.2, "ManagedConnectionFactory JavaBean and Outbound
+            //   Communication" on page 5-8).
 
             //   The element managedconnectionfactory-class specifies
             //   the fully qualified name of the Java class that
@@ -1078,9 +1079,9 @@ public class MetatypeGenerator {
     /**
      * Converts an ra.xml config-property into a AD element for the metatype
      *
-     * @param adapterName the name of the resource adapter
+     * @param adapterName    the name of the resource adapter
      * @param configProperty the parsed ra.xml config-property to convert
-     * @param cType the construct type
+     * @param cType          the construct type
      * @return the generated metatype AD object
      * @throws InvalidPropertyException
      */
@@ -1090,7 +1091,8 @@ public class MetatypeGenerator {
 
         MetatypeAd ad_configProperty = new MetatypeAd(metaTypeFactoryService);
 
-        ad_configProperty.setId(configProperty.getName());
+        String propName = configProperty.getName();
+        ad_configProperty.setId(propName);
         if (configProperty.getWlpDefault() != null)
             ad_configProperty.setDefault(configProperty.getWlpDefault()); // wlp-ra.xml default overrules ra.xml default
         else if (configProperty.getDefault() != null)
@@ -1100,7 +1102,8 @@ public class MetatypeGenerator {
         else
             ad_configProperty.setRequired(false);
 
-        if (configProperty.getConfidential() != null && configProperty.getConfidential())
+        if (configProperty.getConfidential() != null && configProperty.getConfidential()
+            || propName.toUpperCase().contains("PASSWORD"))
             ad_configProperty.setIbmType("password");
 
         if (configProperty.getIgnore() != null && configProperty.getIgnore()) {
@@ -1179,7 +1182,7 @@ public class MetatypeGenerator {
      * Merge two metatypes together.
      *
      * @param metatype1 the metatype that will act as the base, into which the second
-     *            metatype will be merged into.
+     *                      metatype will be merged into.
      * @param metatype2 the metatype to merge into the first
      */
     private void mergeMetatypes(Metatype metatype1, Metatype metatype2) {
@@ -1354,7 +1357,7 @@ public class MetatypeGenerator {
      * Scans a RAR file for the wlp-/ra.xml files and parses them.
      *
      * @param adapterName the name of the resource adapter
-     * @param xmlFileSet the XmlFileSet that contains the RAR file
+     * @param xmlFileSet  the XmlFileSet that contains the RAR file
      * @throws IOException
      * @throws JAXBException
      * @throws SAXException
@@ -1388,8 +1391,7 @@ public class MetatypeGenerator {
         }
 
         if (config.useAnnotations()) {
-            moduleAnnotations = config.getRarContainer().adapt(ModuleAnnotations.class);
-
+            moduleAnnotations = getModuleAnnotations();
             if (trace && tc.isDebugEnabled()) {
                 Tr.debug(this, tc, "moduleAnnotations: " + moduleAnnotations);
             }
@@ -1419,6 +1421,10 @@ public class MetatypeGenerator {
             // no convenient way to do that.
             processJavaBeanProperties(xmlFileSet.parsedXml);
         }
+    }
+
+    private ModuleAnnotations getModuleAnnotations() throws UnableToAdaptException {
+        return AnnotationsBetaHelper.getModuleAnnotations(config.getRarContainer());
     }
 
     /**
@@ -1458,8 +1464,8 @@ public class MetatypeGenerator {
     /**
      * Process java bean properties and merge them into configuration properties.
      *
-     * @param className the java bean class name
-     * @param propertyList the existing property list to update
+     * @param className       the java bean class name
+     * @param propertyList    the existing property list to update
      * @param processDefaults true if java bean property default values should be merged for resource adapters
      */
     private void processJavaBeanProperties(String className,

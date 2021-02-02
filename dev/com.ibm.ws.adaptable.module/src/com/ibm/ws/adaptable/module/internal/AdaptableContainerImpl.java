@@ -61,8 +61,8 @@ public class AdaptableContainerImpl implements Container {
         com.ibm.wsspi.artifact.ArtifactContainer parent = delegate.getEnclosingContainer();
         if (parent != null) {
             if (delegate.isRoot()) {
-                //if the delegate has isRoot true, then the enclosingContainer is going to 
-                //be from the next root up.. which means a change of overlay.. 
+                //if the delegate has isRoot true, then the enclosingContainer is going to
+                //be from the next root up.. which means a change of overlay..
                 OverlayContainer newOverlay = rootOverlay.getParentOverlay();
                 //the container will be the container the artifact api gives us.
                 ArtifactContainer newDelegateContainer = delegate.getEnclosingContainer();
@@ -90,8 +90,8 @@ public class AdaptableContainerImpl implements Container {
         com.ibm.wsspi.artifact.ArtifactContainer parent = delegate.getEnclosingContainer();
         if (parent != null) {
             if (delegate.isRoot()) {
-                //if the delegate has isRoot true, then the entryInEnclosingContainer is going to 
-                //be from the next root up.. which means a change of overlay.. 
+                //if the delegate has isRoot true, then the entryInEnclosingContainer is going to
+                //be from the next root up.. which means a change of overlay..
                 OverlayContainer newOverlay = rootOverlay.getParentOverlay();
                 //the entry will be the entry the artifact api gives us.
                 ArtifactEntry newDelegateEntry = delegate.getEntryInEnclosingContainer();
@@ -148,6 +148,10 @@ public class AdaptableContainerImpl implements Container {
         //if this is the top level adaptable container.. allow conversion to an interpreted one..
         if (adaptTarget.equals(InterpretedContainer.class) && isRoot() && getEnclosingContainer() == null) {
             return (T) new InterpretedContainerImpl(delegate, rootOverlay, factoryHolder);
+        }
+        // The delegate is used to test for equivalent adaptable containers.
+        if (adaptTarget.equals(ArtifactContainer.class)) {
+            return (T) delegate;
         }
         //built in to adapt to entry..
         if (adaptTarget.equals(Entry.class)) {
@@ -218,5 +222,16 @@ public class AdaptableContainerImpl implements Container {
     @Override
     public boolean isRoot() {
         return delegate.isRoot();
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder(super.toString());
+        sb.append(" ( ");
+        for (URL url : getURLs()) {
+            sb.append(url).append(" ");
+        }
+        sb.append(")");
+        return sb.toString();
     }
 }

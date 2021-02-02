@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2015 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -28,7 +28,6 @@ import com.ibm.ws.security.wim.registry.dataobject.IDAndRealm;
 import com.ibm.ws.security.wim.util.SchemaConstantsInternal;
 import com.ibm.wsspi.security.wim.SchemaConstants;
 import com.ibm.wsspi.security.wim.exception.EntityNotFoundException;
-import com.ibm.wsspi.security.wim.exception.InvalidIdentifierException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
 import com.ibm.wsspi.security.wim.model.Context;
 import com.ibm.wsspi.security.wim.model.Control;
@@ -222,15 +221,25 @@ public class DisplayNameBridge {
                         } else if (mappedProp.equals(SchemaConstants.PROP_PRINCIPAL_NAME) && foundInURBridge) {
                             String outputUserPrincipalAttr = this.propertyMap.getOutputUserPrincipal(idAndRealm.getRealm());
                             if (!this.mappingUtils.isIdentifierTypeProperty(outputUserPrincipalAttr)) {
-                                returnValue = (String) personAccount.get(outputUserPrincipalAttr);
+                                Object value = personAccount.get(outputUserPrincipalAttr);
+                                if (value instanceof List<?>) {
+                                    returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                                } else {
+                                    returnValue = BridgeUtils.getStringValue(value);
+                                }
                             } else {
                                 returnValue = (String) personAccount.getIdentifier().get(outputUserPrincipalAttr);
                             }
                         } else {
-                            returnValue = (String) personAccount.get(mappedProp);
+                            Object value = personAccount.get(mappedProp);
+                            if (value instanceof List<?>) {
+                                returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                            } else {
+                                returnValue = BridgeUtils.getStringValue(value);
+                            }
                         }
                     } else {
-                        returnValue = (String) personAccount.getIdentifier().get(outputAttrName);
+                        returnValue = BridgeUtils.getStringValue(personAccount.getIdentifier().get(outputAttrName));
                     }
                 } else {
                     if (tc.isDebugEnabled()) {
@@ -239,20 +248,7 @@ public class DisplayNameBridge {
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, toCatch.getMessage(), toCatch);
-            }
-            // if (tc.isErrorEnabled()) {
-            //     Tr.error(tc, toCatch.getMessage());
-            // }// the user was not found
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof InvalidIdentifierException) {
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            }
-            // other cases
-            else {
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
         return returnValue;
     }
@@ -354,29 +350,18 @@ public class DisplayNameBridge {
                 if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
                     // get the property to return
                     Object value = group.get(outputAttrName);
-
-                    if (value instanceof String)
-                        returnValue = (String) value;
-                    else
-                        returnValue = String.valueOf(((List<?>) value).get(0));
+                    if (value instanceof List<?>) {
+                        returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                    } else {
+                        returnValue = BridgeUtils.getStringValue(value);
+                    }
                 } else {
                     // get the identifier to return
-                    returnValue = (String) group.getIdentifier().get(outputAttrName);
+                    returnValue = BridgeUtils.getStringValue(group.getIdentifier().get(outputAttrName));
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, toCatch.getMessage(), toCatch);
-            }
-            // the group was not found
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof InvalidIdentifierException) {
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            }
-            // other cases
-            else {
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
         return returnValue;
     }

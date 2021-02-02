@@ -10,6 +10,8 @@
  *******************************************************************************/
 package com.ibm.ws.jaxrs20.client.fat.test;
 
+import static org.junit.Assert.assertNotNull;
+
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -32,9 +34,11 @@ import org.junit.runner.RunWith;
 import com.ibm.websphere.simplicity.ShrinkHelper;
 
 import componenttest.annotation.Server;
+import componenttest.annotation.SkipForRepeat;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.topology.impl.LibertyServer;
 
+@SkipForRepeat("EE9_FEATURES") // Continue to skip this test for EE9 as com.ibm.ws.jaxrs.client.ltpa.handler is not supported 
 @RunWith(FATRunner.class)
 public class JAXRSClientLtpaTest extends AbstractTest {
 
@@ -66,14 +70,32 @@ public class JAXRSClientLtpaTest extends AbstractTest {
         } catch (Exception e) {
             System.out.println(e.toString());
         }
+        
+        // Pause for the smarter planet message
+        assertNotNull("The smarter planet message did not get printed on serverServer",
+                      serverServer.waitForStringInLog("CWWKF0011I"));
+
+        // wait for LTPA key to be available to avoid CWWKS4000E
+        assertNotNull("CWWKS4105I.* not recieved on serverServer",
+                      serverServer.waitForStringInLog("CWWKS4105I.*"));
+        
+        // Pause for the smarter planet message
+        assertNotNull("The smarter planet message did not get printed on clientServer",
+                      clientServer.waitForStringInLog("CWWKF0011I"));
+
+        // wait for LTPA key to be available to avoid CWWKS4000E
+        assertNotNull("CWWKS4105I.* not recieved on clientServer",
+                      clientServer.waitForStringInLog("CWWKS4105I.*"));        
     }
 
     @AfterClass
     public static void tearDown() throws Exception {
         if (serverServer != null) {
+            serverServer.dumpServer("jaxrs20.client.JAXRSLtpaServerTest");
             serverServer.stopServer();
         }
         if (clientServer != null) {
+            clientServer.dumpServer("jaxrs20.client.JAXRSLtpaClientTest");
             clientServer.stopServer();
         }
     }

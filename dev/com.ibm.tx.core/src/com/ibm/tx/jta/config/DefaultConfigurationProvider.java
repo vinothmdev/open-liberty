@@ -1,7 +1,7 @@
 package com.ibm.tx.jta.config;
 
 /*******************************************************************************
- * Copyright (c) 2007, 2013 IBM Corporation and others.
+ * Copyright (c) 2007, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -198,6 +198,20 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
         return _recoverOnStartup;
     }
 
+    protected static boolean _shutdownOnLogFailure = true;
+
+    @Override
+    public boolean isShutdownOnLogFailure() {
+        return _shutdownOnLogFailure;
+    }
+
+    protected static boolean _OnePCOptimization;
+
+    @Override
+    public boolean isOnePCOptimization() {
+        return _OnePCOptimization;
+    }
+
     protected static boolean _waitForRecovery;
 
     @Override
@@ -267,5 +281,137 @@ public class DefaultConfigurationProvider implements ConfigurationProvider {
     public void shutDownFramework() {
         // TODO Auto-generated method stub
 
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getLeaseCheckStrategy()
+     */
+    @Override
+    public String getLeaseCheckStrategy() {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getLeaseCheckInterval()
+     */
+    @Override
+    public int getLeaseCheckInterval() {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getLeaseLength()
+     */
+    @Override
+    public int getLeaseLength() {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#isSQLRecoveryLog()
+     */
+    @Override
+    public boolean isSQLRecoveryLog() {
+        return false;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#needToCoordinateServices()
+     */
+    @Override
+    public boolean needToCoordinateServices() {
+        // TODO Auto-generated method stub
+        return false;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#enableHADBPeerLocking()
+     */
+    @Override
+    public boolean enableHADBPeerLocking() {
+        // TODO Auto-generated method stub
+        return false;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getTimeBetweenHeartbeats()
+     */
+    @Override
+    public int getTimeBetweenHeartbeats() {
+        // TODO Auto-generated method stub
+        return 5;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getPeerTimeBeforeStale()
+     */
+    @Override
+    public int getPeerTimeBeforeStale() {
+        // TODO Auto-generated method stub
+        return 10;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getLightweightTransientErrorRetryTime()
+     */
+    @Override
+    public int getLightweightTransientErrorRetryTime() {
+        return 1;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getLightweightTransientErrorRetryAttempts()
+     */
+    @Override
+    public int getLightweightTransientErrorRetryAttempts() {
+        return 2;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getStandardTransientErrorRetryTime()
+     */
+    @Override
+    public int getStandardTransientErrorRetryTime() {
+        return 10;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.tx.config.ConfigurationProvider#getStandardTransientErrorRetryAttempts()
+     */
+    @Override
+    public int getStandardTransientErrorRetryAttempts() {
+        return 180;
+    }
+
+    @Override
+    public int getLeaseRenewalTime() {
+        return 90;
     }
 }

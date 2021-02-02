@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,14 +10,20 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.faulttolerance20.state.impl;
 
+import static com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder.RetriesOccurred.NO_RETRIES;
+import static com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder.RetriesOccurred.WITH_RETRIES;
+import static com.ibm.ws.microprofile.faulttolerance20.state.impl.DurationUtils.asClampedNanos;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 import java.time.Duration;
 import java.util.PrimitiveIterator;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.LongStream;
 
-import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder;
 import com.ibm.ws.microprofile.faulttolerance.spi.RetryPolicy;
+import com.ibm.ws.microprofile.faulttolerance.spi.RetryResultCategory;
 import com.ibm.ws.microprofile.faulttolerance20.impl.MethodResult;
 import com.ibm.ws.microprofile.faulttolerance20.state.RetryState;
 
@@ -28,9 +34,12 @@ public class RetryStateImpl implements RetryState {
     private int attempts = 0;
     private long startNanos;
 
-    public RetryStateImpl(RetryPolicy policy) {
+    private final MetricRecorder metricRecorder;
+
+    public RetryStateImpl(RetryPolicy policy, MetricRecorder metricRecorder) {
         this.policy = policy;
         delayStream = createDelayStream(policy.getDelay(), policy.getJitter());
+        this.metricRecorder = metricRecorder;
     }
 
     /** {@inheritDoc} */
@@ -42,7 +51,7 @@ public class RetryStateImpl implements RetryState {
     /** {@inheritDoc} */
     @Override
     public RetryResult recordResult(MethodResult<?> methodResult) {
-        RetryResultImpl result = new RetryResultImpl();
+        RetryResultCategory retryResultCategory = null;
 
         attempts++;
         long duration = System.nanoTime() - startNanos;
@@ -50,36 +59,43 @@ public class RetryStateImpl implements RetryState {
         if (methodResult.isFailure()) {
             // Failure case
             if (abortOn(methodResult.getFailure())) {
-                result.shouldRetry = false;
+                retryResultCategory = RetryResultCategory.EXCEPTION_IN_ABORT_ON;
             } else if (retryOn(methodResult.getFailure())) {
-                result.shouldRetry = true;
+                retryResultCategory = RetryResultCategory.EXCEPTION_IN_RETRY_ON;
             } else {
-                result.shouldRetry = false;
+                retryResultCategory = RetryResultCategory.EXCEPTION_NOT_IN_RETRY_ON;
             }
         } else {
             // Successful case
-            result.shouldRetry = false;
+            retryResultCategory = RetryResultCategory.NO_EXCEPTION;
         }
 
+        // Capture whether this result was considered a retry-able failure by the Retry
+        boolean resultWasRetryableFailure = shouldRetry(retryResultCategory);
+
         // If we want to retry based on the methodResult, check if there's some other reason we shouldn't
-        if (result.shouldRetry) {
+        if (resultWasRetryableFailure) {
             int maxAttempts = policy.getMaxRetries() + 1;
-            if (attempts >= maxAttempts) {
-                result.shouldRetry = false;
+            if (maxAttempts != 0 && attempts >= maxAttempts) {
+                retryResultCategory = RetryResultCategory.MAX_RETRIES_REACHED;
             } else if (overMaxDuration(duration)) {
-                result.shouldRetry = false;
+                retryResultCategory = RetryResultCategory.MAX_DURATION_REACHED;
             }
         }
 
-        if (result.shouldRetry) {
-            populateDelay(result);
+        if (shouldRetry(retryResultCategory)) {
+            metricRecorder.incrementRetriesCount();
+        } else {
+            // Finished execution, record metrics
+            metricRecorder.incrementRetryCalls(retryResultCategory, attempts > 1 ? WITH_RETRIES : NO_RETRIES);
         }
 
-        return result;
+        return createResult(retryResultCategory);
     }
 
     private boolean overMaxDuration(long duration) {
-        return Duration.ofNanos(duration).compareTo(policy.getMaxDuration()) >= 0; // duration >= policy.getMaxDuration()
+        return !policy.getMaxDuration().isZero() // Zero -> no duration limit
+               && Duration.ofNanos(duration).compareTo(policy.getMaxDuration()) >= 0; // duration >= policy.getMaxDuration()
     }
 
     private boolean abortOn(Throwable failure) {
@@ -101,36 +117,21 @@ public class RetryStateImpl implements RetryState {
         return false;
     }
 
-    private void populateDelay(RetryResultImpl result) {
-        result.delay = delayStream.nextLong();
-        if (result.delay < 0) {
-            result.delay = 0;
-        }
-        result.delayUnit = TimeUnit.NANOSECONDS;
-    }
+    private RetryResultImpl createResult(RetryResultCategory retryResultCategory) {
+        long delay = 0;
 
-    /**
-     * Convert a duration to nanoseconds, clamping between MIN_VALUE and MAX_LONG
-     * <p>
-     * Needed in case a user specifies something silly like delay = 5 MILLENNIA
-     * <p>
-     * protected only to allow unit testing
-     *
-     * @param duration the duration to convert
-     * @return duration as nanoseconds, clamped if required
-     */
-    @FFDCIgnore(ArithmeticException.class)
-    protected static long asClampedNanos(Duration duration) {
-        try {
-            return duration.toNanos();
-        } catch (ArithmeticException e) {
-            // Treat long overflow as an exceptional case
-            if (duration.isNegative()) {
-                return Long.MIN_VALUE;
-            } else {
-                return Long.MAX_VALUE;
+        if (shouldRetry(retryResultCategory)) {
+            delay = delayStream.nextLong();
+            if (delay < 0) {
+                delay = 0;
             }
         }
+
+        return new RetryResultImpl(retryResultCategory, delay, NANOSECONDS);
+    }
+
+    private static boolean shouldRetry(RetryResultCategory category) {
+        return category == RetryResultCategory.EXCEPTION_IN_RETRY_ON;
     }
 
     /**
@@ -138,7 +139,7 @@ public class RetryStateImpl implements RetryState {
      * <p>
      * protected only to allow unit testing
      *
-     * @param delay the delay duration
+     * @param delay  the delay duration
      * @param jitter the jitter duration
      * @return stream of times in nanoseconds within delay +/- jitter
      */
@@ -155,14 +156,20 @@ public class RetryStateImpl implements RetryState {
         }
     }
 
-    public static class RetryResultImpl implements RetryResult {
-        public boolean shouldRetry;
-        public long delay;
-        public TimeUnit delayUnit;
+    private static class RetryResultImpl implements RetryResult {
+        private final RetryResultCategory retryResultCategory;
+        private final long delay;
+        private final TimeUnit delayUnit;
+
+        private RetryResultImpl(RetryResultCategory reason, long delay, TimeUnit delayUnit) {
+            this.retryResultCategory = reason;
+            this.delay = delay;
+            this.delayUnit = delayUnit;
+        }
 
         @Override
         public boolean shouldRetry() {
-            return shouldRetry;
+            return RetryStateImpl.shouldRetry(retryResultCategory);
         }
 
         @Override
@@ -173,6 +180,16 @@ public class RetryStateImpl implements RetryState {
         @Override
         public TimeUnit getDelayUnit() {
             return delayUnit;
+        }
+
+        @Override
+        public RetryResultCategory getCategory() {
+            return retryResultCategory;
+        }
+
+        @Override
+        public String toString() {
+            return retryResultCategory.toString();
         }
     }
 

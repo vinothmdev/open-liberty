@@ -1,16 +1,16 @@
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * Copyright IBM Corp. 2018
- *
- * The source code for this program is not published or otherwise divested
- * of its trade secrets, irrespective of what has been deposited with the
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.artifact.zip.cache.internal;
 
+import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -20,6 +20,8 @@ import com.ibm.websphere.ras.annotation.Trivial;
 
 /**
  * Utility encapsulation of an ordered zip data collection.
+ * 
+ * Methods in this class are not thread safe and require synchronization by the user of the class.
  */
 public class ZipFileDataStore {
     public ZipFileDataStore(String name) {
@@ -110,7 +112,7 @@ public class ZipFileDataStore {
     }
     
     public static class Cell {
-        public ZipFileData data;
+        public final ZipFileData data;
 
         public Cell prev;
         public Cell next;
@@ -137,10 +139,10 @@ public class ZipFileDataStore {
         }
 
         @Trivial
-        public void putBetween(Cell prev, Cell next) {
-            if ( this == prev ) {
+        public void putBetween(Cell prevCell, Cell nextCell) {
+            if ( this == prevCell ) {
                 throw new IllegalArgumentException("Cannot put a cell after itself");
-            } else if ( this == next ) {
+            } else if ( this == nextCell ) {
                 throw new IllegalArgumentException("Cannot put a cell before itself");
             }
 
@@ -156,11 +158,11 @@ public class ZipFileDataStore {
             //      ==>
             //    A.next == B; C.prev == B; B.prev == A; B.next == C
 
-            this.next = next;
-            next.prev = this;
+            this.next = nextCell;
+            nextCell.prev = this;
 
-            this.prev = prev;
-            prev.next = this;
+            this.prev = prevCell;
+            prevCell.next = this;
         }
     }
 
@@ -324,19 +326,16 @@ public class ZipFileDataStore {
      *     size has not yet been reached.
      */
     public ZipFileData addLast(ZipFileData newLastData, int maximumSize) {
+        if ( (maximumSize == -1) || (cells.size() < maximumSize) ) {
+            addLast(newLastData);
+            return null;
+        }
+
         String newLastPath = newLastData.path;
 
         Cell dupCell = cells.get(newLastPath);
         if ( dupCell != null ) {
             throw new IllegalArgumentException("Path [ " + newLastPath + " ] is already stored");
-        }
-
-        int size = size();
-
-        if ( (maximumSize == -1) || (size < maximumSize) ) {
-            @SuppressWarnings("unused")
-            ZipFileData oldLastData = addLast(newLastData);
-            return null;
         }
 
         Cell oldFirstCell = anchor.next;
@@ -347,13 +346,10 @@ public class ZipFileDataStore {
             throw new IllegalStateException("Bad cell alignment on path [ " + oldFirstPath + " ]");
         }
 
-        oldFirstCell.data = newLastData;
-        cells.put(newLastPath,  oldFirstCell);
-
-        if ( size != 1 ) {
-            oldFirstCell.excise();
-            oldFirstCell.putBetween(anchor.prev, anchor);
-        }
+        Cell newLastCell = new Cell(newLastData);
+        cells.put(newLastPath,  newLastCell);
+        oldFirstCell.excise();
+        newLastCell.putBetween(anchor.prev, anchor);
 
         return oldFirstData;
     }
@@ -373,7 +369,7 @@ public class ZipFileDataStore {
         }
     }
 
-    public void display(int cellNo, Cell cell) {
+    private void display(int cellNo, Cell cell) {
         String thisCell = cellText(cellNo, cell);
         String prevCell = cellText(cellNo - 1, cell.prev);
         String nextCell = cellText(cellNo + 1, cell.next);
@@ -408,7 +404,7 @@ public class ZipFileDataStore {
         }
     }
 
-    public void validate(int cellNo, Cell cell, boolean nullData) {
+    private void validate(int cellNo, Cell cell, boolean nullData) {
         if ( nullData ) {
             if ( cell.data != null ) {
                 throw new IllegalStateException("Non-null data " + cellText(cellNo, cell));
@@ -435,6 +431,46 @@ public class ZipFileDataStore {
             throw new IllegalStateException("Null prev.next " + cellText(cellNo, cell) + " " + cellText(cellNo - 1, cell.prev));
         } else if ( cell.prev.next != cell ) {
             throw new IllegalStateException("Non-returning prev.next " + cellText(cellNo, cell) + " " + cellText(cellNo + 1, cell.prev) + " " + cellText(cellNo, cell.prev.next));            
+        }
+    }
+
+    //
+
+    protected static final boolean DISPLAY_FULLY = true;
+    protected static final boolean DISPLAY_SPARSELY = false;
+    
+    /**
+     * Display the state of this data store to a print writer.
+     * 
+     * According to the display parameter, show the complete
+     * information for the data, or display just the names of the
+     * data.
+     *
+     * @param output The print writer which will receive output. 
+     * @param displayFully Control parameter: When true, display the
+     *     full details of each element.  When false, display just
+     *     the names of each element.
+     * @param introspectAt When the introspection began.
+     */
+    protected void introspect(
+    	PrintWriter output,
+    	boolean displayFully,
+    	long introspectAt) {
+
+        output.println();
+        output.println("Zip File Data [ " + getName() + " ]");
+        if ( isEmpty() ) {
+            output.println("  ** NONE **");
+        } else {
+            Iterator<ZipFileData> values = values();
+            while ( values.hasNext() ) {
+                if ( displayFully ) {
+                    output.println();
+                    values.next().introspect(output, introspectAt);
+                } else {
+                    output.println( "  [ " + values.next().getPath() + " ]");
+                }
+            }
         }
     }
 }

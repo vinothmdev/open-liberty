@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2010 IBM Corporation and others.
+ * Copyright (c) 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -40,8 +40,8 @@ public class FrameworkConfigurator {
      * allow sub-classes to further massage framework initialization properties.
      *
      * @param config
-     *            BootstrapConfig object containing the active set of properties
-     *            that will be used to initialize the framework.
+     *                   BootstrapConfig object containing the active set of properties
+     *                   that will be used to initialize the framework.
      */
     public static void configure(BootstrapConfig config) {
         extraBootDelegationPackages(config);
@@ -70,14 +70,16 @@ public class FrameworkConfigurator {
     protected static void customize(BootstrapConfig config) {
         File workarea = config.getWorkareaFile(null);
 
+        // Enable logic in aries jndi-core to reset static JNDI NamingManager fields
+        // when the liberty jndi feature is activated/deactivated.
+        config.putIfAbsent("org.apache.aries.jndi.force.builder", "true");
+
         // Specify the storage area that this framework should use:
         // because information about installed/started bundles is contained in
         // that storage area, we use space specific to the server.
         config.put(org.osgi.framework.Constants.FRAMEWORK_STORAGE, workarea.getAbsolutePath());
 
-        // Use an equinox property to identify the location of the equinox
-        // configuration area.
-        config.put("osgi.configuration.area", workarea.getAbsolutePath());
+        config.put("osgi.logfile", new File(workarea, "equinox.log").getAbsolutePath());
 
         // Use an equinox property to identify the location of the equinox
         // user area (we'll treat the server directory as the user area)
@@ -97,7 +99,7 @@ public class FrameworkConfigurator {
         // the jar files we're installing (for file:// URLs) have changed if
         // osgi is not starting clean. If the bundle jar has changed, associated
         // cached data is tossed.
-        config.put("osgi.checkConfiguration", "true");
+        config.putIfAbsent("osgi.checkConfiguration", "true");
 
         // We do not want Bundle-ActivationPolicy: lazy to cause bundle
         // resolution to automatically start bundles.
@@ -110,8 +112,24 @@ public class FrameworkConfigurator {
         // It would be good if we could not set this, but it really craters the build image if we don't
         // this is because build image installs loads of bundles together that introduce enormous uses constraint issues.
         config.put("equinox.resolver.revision.batch.size", "1");
+
         // It is not clear that multi-threading really helps with performance of the resolver.
-        config.put("equinox.resolver.thead.count", "1");
+        config.putIfAbsent("equinox.resolver.thread.count", "1");
+
+        // Disable the capture of log locations since we do not use location in logging of our entries
+        // when tracing is enabled for the logservice
+        config.putIfAbsent("equinox.log.capture.entry.location", "false");
+
+        // By default use multiple threads for activating bundles from start-level
+        // Set to the min of 4 or Runtime.getRuntime().availableProcessors().
+        // Testing shows that going with more than 4 threads does not help
+        // with startup performance of Liberty
+        config.putIfAbsent("equinox.start.level.thread.count",
+                           Integer.toString(Math.min(4, Runtime.getRuntime().availableProcessors())));
+        config.putIfAbsent("equinox.start.level.restrict.parallel", "true");
+
+        // default module.lock.timeout value in seconds.
+        config.putIfAbsent("osgi.module.lock.timeout", "5");
 
         // The IBM shared class adapter issues a message if it's loaded on a
         // non-IBM JVM.  Since it does no harm, we'll suppress the message.
@@ -157,6 +175,7 @@ public class FrameworkConfigurator {
         config.put("org.apache.aries.blueprint.parser.service.ignore.unknown.namespace.handlers", "true");
 
         config.put("ds.global.extender", "true");
+        config.putIfAbsent("ds.cache.metadata", "true");
     }
 
     /**
@@ -174,9 +193,9 @@ public class FrameworkConfigurator {
         // adding org.apache.xml for defect 53421; hope to remove when strategic fix is available
         // adding org.apache.xerces for defect 94476
         final String defaultDelegation = "com.ibm.ws.kernel.boot.jmx.internal," +
-                                         "sun.*,com.sun.*,com.ibm.ws.boot.delegated.*,org.apache.xml.*,org.apache.xerces.*," +
-                                         "com.ibm.xylem.*,com.ibm.xml.*,com.ibm.xtq.*,com.ibm.net.ssl.*," +
-                                         "com.ibm.crypto.*,com.ibm.security.*,jdk.*";
+                                         "sun.*,com.sun.*,com.ibm.lang.management,com.ibm.ws.boot.delegated.*," +
+                                         "org.apache.xml.*,org.apache.xerces.*,com.ibm.xylem.*,com.ibm.xml.*," +
+                                         "com.ibm.xtq.*,com.ibm.net.ssl.*,com.ibm.crypto.*,com.ibm.security.*,jdk.*";
 
         String osgiDelegationPackages = config.get(org.osgi.framework.Constants.FRAMEWORK_BOOTDELEGATION);
         if (osgiDelegationPackages == null)
@@ -188,10 +207,7 @@ public class FrameworkConfigurator {
         config.put(org.osgi.framework.Constants.FRAMEWORK_BOOTDELEGATION, osgiDelegationPackages);
 
         // If the config does not contain osgi.resolver.preferSystemPackages, set to "false" by default
-        String preferSystem = config.get(BootstrapConstants.CONFIG_OSGI_PREFER_SYSTEM_PACKAGES);
-        if (preferSystem == null) {
-            config.put(BootstrapConstants.CONFIG_OSGI_PREFER_SYSTEM_PACKAGES, "false");
-        }
+        config.putIfAbsent(BootstrapConstants.CONFIG_OSGI_PREFER_SYSTEM_PACKAGES, "false");
     }
 
     /**
@@ -204,7 +220,7 @@ public class FrameworkConfigurator {
      *
      * @return non-null instance of the framework factory.
      * @throws LaunchException
-     *             if Factory can not be found or instantiated.
+     *                             if Factory can not be found or instantiated.
      * @see {@link KernelUtils#getServiceClass(BufferedReader)}
      */
     public static FrameworkFactory getFrameworkFactory(ClassLoader loader) {

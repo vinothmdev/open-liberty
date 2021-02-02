@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015, 2016 IBM Corporation and others.
+ * Copyright (c) 2015, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -43,7 +43,6 @@ import javax.interceptor.Interceptor;
 import org.jboss.weld.bootstrap.spi.Metadata;
 import org.jboss.weld.bootstrap.spi.helpers.MetadataImpl;
 import org.jboss.weld.resources.spi.ResourceLoadingException;
-import org.osgi.framework.Version;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -52,6 +51,8 @@ import com.ibm.ws.cdi.CDIException;
 import com.ibm.ws.cdi.CDIRuntimeException;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.util.ThreadContextAccessor;
+
+import org.jboss.weld.bean.proxy.ProxyObject;
 
 /**
  * Common constants and utility methods
@@ -374,30 +375,6 @@ public class CDIUtils {
         return false;
     }
 
-    @Trivial
-    public static Version getOSGIVersionWithoutQualifier(Version version) {
-        return new Version(version.getMajor(), version.getMinor(), version.getMicro());
-    }
-
-    //If BND names are different CDI failover will assume it's looking at two different applications and refuse to perform failover.
-    //Since BND names include version numbers we strip them down, this method provides a central location to control how version numbers
-    //are included in BND names.
-    @Trivial
-    public static String getOSGIVersionForBndName(Version version) {
-        return String.valueOf(version.getMajor());
-    }
-
-    //This method looks for bnd symbolic names that end with the string <number>.<number>.<number>
-    //And removes the last ".<number.<number>"
-    @Trivial
-    public static String getSymbolicNameWithoutMinorOrMicroVersionPart(String symbolicName) {
-        if (symbolicName.matches(".*\\d+\\.\\d+\\.\\d+$")) {
-            return symbolicName.replaceAll("\\.\\d+\\.\\d+$", "");
-        } else {
-            return symbolicName;
-        }
-    }
-
     /**
      * This method sets the thread context classloader, and returns whatever was the TCCL before it was updated.
      *
@@ -423,8 +400,7 @@ public class CDIUtils {
      * @return true if it is a proxy
      */
     public static boolean isWeldProxy(Class<?> clazz) {
-        boolean result = clazz.getSimpleName().contains(PROXY_CLASS_SIGNATURE);
-        return result;
+        return ProxyObject.class.isAssignableFrom(clazz);
     }
 
     /**

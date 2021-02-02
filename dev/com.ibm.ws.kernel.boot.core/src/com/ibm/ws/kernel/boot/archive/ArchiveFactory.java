@@ -16,8 +16,12 @@ import java.lang.reflect.Constructor;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.security.Policy;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.ibm.ws.kernel.boot.Debug;
+import com.ibm.ws.kernel.boot.security.WLPDynamicPolicy;
 
 /**
  * Create the archive.
@@ -68,6 +72,7 @@ public class ArchiveFactory {
         // could add other archive type in future
 
         try {
+            @SuppressWarnings("resource")
             URLClassLoader loader = new URLClassLoader(new URL[] { ARCHIVE_IMPL_BUNDLE_URL });
             @SuppressWarnings("unchecked")
             Class<? extends Archive> archiveImplClass = (Class<? extends Archive>) loader.loadClass(className);
@@ -79,4 +84,26 @@ public class ArchiveFactory {
 
     }
 
+    /**
+     * Perform the create by applying the archive impl to the security policy - package minify
+     *
+     * @param archiveFile
+     * @param j2security
+     * @return
+     * @throws IOException
+     */
+    public static Archive create(final File archiveFile, boolean j2security) throws IOException {
+        Archive arch = null;
+        if (j2security == true) {
+            List<URL> urlList = new ArrayList<URL>();
+            urlList.add(ARCHIVE_IMPL_BUNDLE_URL);
+            Policy wlpPolicy = new WLPDynamicPolicy(Policy.getPolicy(), urlList);
+            Policy.setPolicy(wlpPolicy);
+            wlpPolicy.refresh();
+            arch = create(archiveFile);
+        } else {
+            arch = create(archiveFile);
+        }
+        return arch;
+    }
 }

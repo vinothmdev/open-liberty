@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2010, 2013 IBM Corporation and others.
+ * Copyright (c) 2010, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,7 +11,14 @@
 
 package com.ibm.ws.config.xml.internal;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,10 +29,11 @@ import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -54,12 +62,9 @@ import com.ibm.ws.runtime.update.RuntimeUpdateListener;
 import com.ibm.ws.runtime.update.RuntimeUpdateManager;
 import com.ibm.ws.runtime.update.RuntimeUpdateNotification;
 import com.ibm.ws.threading.listeners.CompletionListener;
-import com.ibm.wsspi.kernel.service.location.VariableRegistry;
 import com.ibm.wsspi.kernel.service.location.WsLocationAdmin;
 import com.ibm.wsspi.kernel.service.utils.FrameworkState;
-import com.ibm.wsspi.kernel.service.utils.OnErrorUtil;
 import com.ibm.wsspi.kernel.service.utils.OnErrorUtil.OnError;
-import com.ibm.wsspi.kernel.service.utils.TimestampUtils;
 
 /**
  * Processes bundle's default configuration files (bundle*.xml) stored inside
@@ -70,10 +75,12 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
 
     private static final TraceComponent tc = Tr.register(BundleProcessor.class, XMLConfigConstants.TR_GROUP, XMLConfigConstants.NLS_PROPS);
 
+    private static final String EXTENDED_BUNDLE_CACHE = "extended.bundle.cache";
+    // increment this static by 1 each time the cache format changes
+    private static final int EXTENDED_BUNDLE_CACHE_VERSION = 0;
     private final BundleContext bundleContext;
     private final SystemConfiguration systemConfiguration;
     private final WsLocationAdmin locationService;
-    private final VariableRegistry variableRegistryService;
     private final MetaTypeRegistry metatypeRegistry;
     private final ConfigUpdater configUpdater;
     private final ChangeHandler changeHandler;
@@ -81,16 +88,10 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
     private final ConfigRetriever configRetriever;
 
     private boolean reprocessConfig;
-    private final Object bundleChangedLock = new Object() {};
-    private final Object metatypeChangedLock = new Object() {};
-
-    /** The queue of bundles to add on a feature change event */
-    private final Queue<Bundle> addFeatureBundles = new LinkedBlockingQueue<Bundle>();
-
-    /** The queue of bundles to remove on a feature change event */
-    private final Queue<Bundle> removeFeatureBundles = new LinkedBlockingQueue<Bundle>();
-
-    private final File lastUseDir;
+    private final Object bundleChangedLock = new Object() {
+    };
+    private final Object metatypeChangedLock = new Object() {
+    };
 
     /** The registration of this as an EventHandler for MTP changes */
     private final ServiceRegistration<EventHandler> eventHandlerService;
@@ -98,39 +99,37 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
     /** The registration of this as a RuntimeUpdateListener for feature changes */
     private final ServiceRegistration<RuntimeUpdateListener> updateListenerService;
 
+    private final Map<Bundle, ExtendedBundle> extendedBundles = new WeakHashMap<>();
+
     /**
      * Construct BundleProcessor and processes bundle's default configuration
      * files
      * for those bundles that are already installed.
      *
      * @param bc
-     *            BundleContext
+     *                               BundleContext
      * @param caImpl
-     *            ConfigurationAdmin
+     *                               ConfigurationAdmin
      * @param onError
-     *            whether to continue or not when config error is detected
+     *                               whether to continue or not when config error is detected
      * @param bundleResolveOrder
      * @throws ConfigUpdateException
      * @throws ConfigValidationException
      */
     public BundleProcessor(BundleContext bc, SystemConfiguration systemConfiguration,
-                           WsLocationAdmin locationService, VariableRegistry variableRegistryService,
+                           WsLocationAdmin locationService,
                            ConfigUpdater configUpdater,
                            ChangeHandler changeHandler,
                            ConfigValidator validator, ConfigRetriever configRetriever) {
         this.bundleContext = bc;
         this.systemConfiguration = systemConfiguration;
         this.locationService = locationService;
-        this.variableRegistryService = variableRegistryService;
         this.configUpdater = configUpdater;
         this.changeHandler = changeHandler;
         this.validator = validator;
         this.configRetriever = configRetriever;
 
-        this.lastUseDir = bc.getDataFile("config.last.use");
-        if (!lastUseDir.exists()) {
-            ConfigUtil.mkdirs(lastUseDir);
-        }
+        loadExtendedBundles();
 
         ServiceReference<MetaTypeRegistry> ref = bundleContext.getServiceReference(MetaTypeRegistry.class);
         this.metatypeRegistry = bundleContext.getService(ref);
@@ -146,6 +145,68 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
         updateListenerService = bundleContext.registerService(RuntimeUpdateListener.class, this, updateListenerProps);
     }
 
+    private void loadExtendedBundles() {
+        BundleContext systemContext = bundleContext.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).getBundleContext();
+        File extendedBundlesCache = bundleContext.getDataFile(EXTENDED_BUNDLE_CACHE);
+        if (extendedBundlesCache.isFile()) {
+            synchronized (extendedBundles) {
+                try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(extendedBundlesCache)))) {
+                    if (in.readInt() != EXTENDED_BUNDLE_CACHE_VERSION) {
+                        // ignore cache when it is a different version than we expect
+                        return;
+                    }
+                    int numBundles = in.readInt();
+                    for (int i = 0; i < numBundles; i++) {
+                        long id = in.readLong();
+                        long lastProcessed = in.readLong();
+                        String nameAndVersion = in.readUTF();
+                        boolean hasDefaultConfig = in.readBoolean();
+                        Bundle b = systemContext.getBundle(id);
+                        if (b != null) {
+                            extendedBundles.put(b, new ExtendedBundle(b, lastProcessed, nameAndVersion, hasDefaultConfig));
+                        }
+                    }
+                } catch (IOException e) {
+                    // auto FFDC is fine here
+                }
+            }
+        }
+    }
+
+    private void saveExtendedBundles() {
+        Collection<ExtendedBundle> saveExtendedBundles;
+        synchronized (extendedBundles) {
+            saveExtendedBundles = new ArrayList<>(extendedBundles.values());
+        }
+        File extendedBundlesCache = bundleContext.getDataFile(EXTENDED_BUNDLE_CACHE);
+        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(extendedBundlesCache)))) {
+            out.writeInt(EXTENDED_BUNDLE_CACHE_VERSION);
+            out.writeInt(saveExtendedBundles.size());
+            for (ExtendedBundle extendedBundle : saveExtendedBundles) {
+                out.writeLong(extendedBundle.getBundle().getBundleId());
+                out.writeLong(extendedBundle.getLastProcessed());
+                out.writeUTF(extendedBundle.getNameAndVersion());
+                out.writeBoolean(extendedBundle.hasDefaultConfig());
+            }
+        } catch (IOException e) {
+            // auto FFDC is fine here
+        }
+    }
+
+    ExtendedBundle getExtendedBundle(Bundle b) {
+        synchronized (extendedBundles) {
+            ExtendedBundle result = extendedBundles.get(b);
+            if (result != null) {
+                return result;
+            }
+            result = new ExtendedBundle(b);
+            extendedBundles.put(b, result);
+            return result;
+        }
+    }
+
+    private final Collection<Bundle> existingBundles = new ArrayList<Bundle>();
+
     void startProcessor(boolean reprocessConfig) {
         synchronized (this) {
             this.reprocessConfig = reprocessConfig;
@@ -160,7 +221,7 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
                         bundlesToProcess.add(b);
                     } else {
                         //add it to the queue for processing later
-                        addFeatureBundles.add(b);
+                        existingBundles.add(b);
                     }
                 }
             }
@@ -172,6 +233,7 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
         bundleContext.removeBundleListener(this);
         eventHandlerService.unregister();
         updateListenerService.unregister();
+        saveExtendedBundles();
     }
 
     @Override
@@ -186,18 +248,22 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
             Bundle b = event.getBundle();
             boolean isFeatureBundle = b.getLocation().startsWith(XMLConfigConstants.BUNDLE_LOC_FEATURE_TAG);
             if (type == BundleEvent.RESOLVED) {
+
                 if (isFeatureBundle) {
-                    //add it to the queue for processing later
-                    addFeatureBundles.add(b);
+
+                    if (tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Bundle resolved event for feature bundle {0}", b);
+                    }
+
                 } else {
+                    if (tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Adding bundle {0}", b);
+                    }
                     //process non-feature bundles immediately
                     addBundles(Arrays.asList(b));
                 }
             } else if (type == BundleEvent.UNRESOLVED) {
-                if (isFeatureBundle) {
-                    //add it to the queue for processing later
-                    removeFeatureBundles.add(b);
-                } else {
+                if (!isFeatureBundle) {
                     //process non-feature bundles immediately
                     removeBundles(Arrays.asList(b));
                 }
@@ -238,13 +304,18 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
 
             Set<String> updates = changeHandler.removeMetatypeConvertedConfig(sc, updatedPids);
             configUpdater.fireMetatypeDeletedEvents(updates);
+            if (tc.isDebugEnabled()) {
+                for (String update : updates) {
+                    Tr.debug(tc, "Removed metatype for PID " + update);
+                }
+            }
 
         }
 
     }
 
     @Override
-    public void notificationCreated(final RuntimeUpdateManager updateManager, RuntimeUpdateNotification notification) {
+    public void notificationCreated(final RuntimeUpdateManager updateManager, final RuntimeUpdateNotification notification) {
         if (FrameworkState.isStopping()) {
             // if the framework is stopping, just ignore incoming events
             return;
@@ -252,6 +323,7 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
 
         if (RuntimeUpdateNotification.FEATURE_BUNDLES_RESOLVED.equals(notification.getName())) {
             notification.onCompletion(new CompletionListener<Boolean>() {
+
                 @Override
                 public void successfulCompletion(Future<Boolean> future, Boolean result) {
                     if (FrameworkState.isStopping()) {
@@ -259,24 +331,54 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
                         return;
                     }
 
-                    RuntimeUpdateNotification notification = updateManager.createNotification(RuntimeUpdateNotification.FEATURE_BUNDLES_PROCESSED);
-                    synchronized (BundleProcessor.this) {
-                        List<Bundle> bundlesToProcess = new ArrayList<Bundle>();
-                        Bundle b;
+                    RuntimeUpdateNotification processed = updateManager.createNotification(RuntimeUpdateNotification.FEATURE_BUNDLES_PROCESSED);
+                    Map<String, Object> props = notification.getProperties();
+                    if (props != null) {
+                        @SuppressWarnings("unchecked")
+                        Set<Bundle> addedBundles = (Set<Bundle>) props.get(RuntimeUpdateNotification.INSTALLED_BUNDLES_IN_UPDATE);
+                        @SuppressWarnings("unchecked")
+                        Set<Bundle> removedBundles = (Set<Bundle>) props.get(RuntimeUpdateNotification.REMOVED_BUNDLES_IN_UPDATE);
 
-                        while ((b = removeFeatureBundles.poll()) != null) {
-                            bundlesToProcess.add(b);
+                        synchronized (BundleProcessor.this) {
+                            // We first add from 'existingBundles', which is the list of bundles that
+                            // existed in the cache at startup. We remove bundles after that as a feature
+                            // update may result in a cached bundle being removed. Finally, we add the bundles
+                            // installed in the feature update.
+
+                            if (!existingBundles.isEmpty()) {
+                                if (tc.isDebugEnabled()) {
+                                    for (Bundle bundle : existingBundles) {
+                                        Tr.debug(tc, "Processing cached bundle: " + bundle);
+                                    }
+                                }
+                                addBundles(existingBundles);
+                                existingBundles.clear();
+                            }
+
+                            if (removedBundles != null) {
+                                if (tc.isDebugEnabled()) {
+                                    for (Bundle bundle : removedBundles) {
+                                        Tr.debug(tc, "Processing removed bundle: " + bundle);
+                                    }
+                                }
+                                removeBundles(removedBundles);
+                            }
+                            if (addedBundles != null) {
+                                if (tc.isDebugEnabled()) {
+                                    for (Bundle bundle : addedBundles) {
+                                        Tr.debug(tc, "Processing added bundle: " + bundle);
+                                    }
+                                }
+                                addBundles(addedBundles);
+                            }
                         }
-
-                        removeBundles(bundlesToProcess);
-                        bundlesToProcess.clear();
-
-                        while ((b = addFeatureBundles.poll()) != null) {
-                            bundlesToProcess.add(b);
-                        }
-                        addBundles(bundlesToProcess);
                     }
-                    notification.setResult(true);
+
+                    if (processed != null) {
+                        // This can only be null if the server started shutting down after our shutdown check.
+                        processed.setResult(true);
+                    }
+
                 }
 
                 @Override
@@ -316,10 +418,14 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
                 if (FrameworkState.isStopping()) {
                     return;
                 }
+
                 Set<RegistryEntry> newEntries = new HashSet<RegistryEntry>();
                 for (Bundle b : bundles) {
                     if (b.getState() >= Bundle.RESOLVED) {
-                        newEntries.addAll(metatypeRegistry.addMetaType(b));
+                        Set<RegistryEntry> entries = metatypeRegistry.addMetaType(b);
+                        if (reprocessConfig || getExtendedBundle(b).needsReprocessing()) {
+                            newEntries.addAll(entries);
+                        }
                     }
                 }
 
@@ -363,7 +469,7 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
                 } catch (ConfigUpdateException e) {
                     handleConfigUpdateException(e);
                 }
-// Brent suggested this was what to call                   changeHandler.removeConfigAndCreateInfo(element, true);
+
                 metatypeRegistry.removeMetaType(bundle);
             }
             try {
@@ -406,20 +512,24 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
             }
         }
 
+        ExtendedBundle eb = getExtendedBundle(bundle);
         //reprocess any registry entries used in the default config from this bundle.
         Set<RegistryEntry> entriesToProcess = new HashSet<RegistryEntry>();
-        BaseConfiguration newDefaultConfig = systemConfiguration.loadDefaultConfiguration(bundle);
-        if (newDefaultConfig != null) {
-            Set<String> defaultConfigNames = newDefaultConfig.getConfigurationNames();
-            for (String defaultConfigName : defaultConfigNames) {
-                RegistryEntry entry = metatypeRegistry.getRegistryEntryByPidOrAlias(defaultConfigName);
-                if (entry != null) {
-                    entriesToProcess.add(entry);
+        if (eb.hasDefaultConfig()) {
+            BaseConfiguration newDefaultConfig = systemConfiguration.loadDefaultConfiguration(bundle);
+            if (newDefaultConfig != null) {
+                Set<String> defaultConfigNames = newDefaultConfig.getConfigurationNames();
+                for (String defaultConfigName : defaultConfigNames) {
+                    RegistryEntry entry = metatypeRegistry.getRegistryEntryByPidOrAlias(defaultConfigName);
+                    if (entry != null) {
+                        entriesToProcess.add(entry);
+                    }
                 }
+            } else {
+                eb.setHasDefaultConfig(false);
             }
         }
 
-        ExtendedBundle eb = new ExtendedBundle(bundle);
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "processBundle():  Processing bundle name/version=" + eb.getNameAndVersion());
         }
@@ -433,7 +543,7 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
             return Collections.emptySet();
         }
 
-        eb.writeTimestamp();
+        eb.updateLastProcessed();
         return entriesToProcess;
     }
 
@@ -781,41 +891,52 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
     }
 
     private class ExtendedBundle {
-
         private final Bundle bundle;
+        private final AtomicLong lastProcessed = new AtomicLong(Long.MIN_VALUE);
         private final String nameAndVersion;
-        private final File bundleInfoFile;
+        private final AtomicBoolean hasDefaultConfig = new AtomicBoolean(true);
 
         public ExtendedBundle(Bundle b) {
             this.bundle = b;
-            Version ver = bundle.getVersion();
+            Version ver = b.getVersion();
             if (ver == null)
                 ver = Version.emptyVersion;
-            this.nameAndVersion = bundle.getSymbolicName() + "_" + ver.toString();
-            this.bundleInfoFile = new File(lastUseDir, getNameAndVersion());
+            this.nameAndVersion = b.getSymbolicName() + "_" + ver.toString();
         }
 
-        /**
-         * Save bundle info (last.used time stamp)
-         */
-        public void writeTimestamp() {
-
-            TimestampUtils.writeTimeToFile(getInfoFile(), bundle.getLastModified());
+        public ExtendedBundle(Bundle b, long lastProcessed, String nameAndVersion, boolean hasDefaultConfig) {
+            this.bundle = b;
+            this.lastProcessed.set(lastProcessed);
+            this.nameAndVersion = nameAndVersion;
+            this.hasDefaultConfig.set(hasDefaultConfig);
         }
 
         public String getNameAndVersion() {
             return this.nameAndVersion;
         }
 
-        public File getInfoFile() {
-            return this.bundleInfoFile;
+        public long getLastProcessed() {
+            return lastProcessed.get();
+        }
+
+        public boolean hasDefaultConfig() {
+            return hasDefaultConfig.get();
         }
 
         public boolean needsReprocessing() {
-            // server.xml and included may not have changed, but bundle may have
-            // been updated. In such case, need to reprocess bundle.
-            long bundleTimestamp = TimestampUtils.readTimeFromFile(getInfoFile());
-            return (bundleTimestamp != bundle.getLastModified());
+            return lastProcessed.get() != bundle.getLastModified();
+        }
+
+        public Bundle getBundle() {
+            return bundle;
+        }
+
+        public void setHasDefaultConfig(boolean hasDefaultConfig) {
+            this.hasDefaultConfig.set(hasDefaultConfig);
+        }
+
+        public void updateLastProcessed() {
+            this.lastProcessed.set(bundle.getLastModified());
         }
     }
 
@@ -832,34 +953,6 @@ class BundleProcessor implements SynchronousBundleListener, EventHandler, Runtim
             // is already stopping: not an exceptional condition, as we
             // want to shutdown anyway.
         }
-    }
-
-    /**
-     * @return
-     */
-    private OnError getOnError(VariableRegistry variableRegistry) {
-        OnError onError;
-        String onErrorVar = "${" + OnErrorUtil.CFG_KEY_ON_ERROR + "}";
-        String onErrorVal = variableRegistry.resolveString(onErrorVar);
-
-        if ((onErrorVal.equals(onErrorVar))) {
-            onError = OnErrorUtil.OnError.WARN; // Default value if not set
-        } else {
-            String onErrorFormatted = onErrorVal.trim().toUpperCase();
-            try {
-                onError = Enum.valueOf(OnErrorUtil.OnError.class, onErrorFormatted);
-                // Correct the variable registry with a validated entry if needed
-                if (!onErrorVal.equals(onErrorFormatted))
-                    variableRegistry.replaceVariable(OnErrorUtil.CFG_KEY_ON_ERROR, onErrorFormatted);
-            } catch (IllegalArgumentException err) {
-                if (tc.isWarningEnabled()) {
-                    Tr.warning(tc, "warn.config.invalid.value", OnErrorUtil.CFG_KEY_ON_ERROR, onErrorVal, OnErrorUtil.CFG_VALID_OPTIONS);
-                }
-                onError = OnErrorUtil.OnError.WARN; // Default value if error
-                variableRegistry.replaceVariable(OnErrorUtil.CFG_KEY_ON_ERROR, OnErrorUtil.OnError.WARN.toString());
-            }
-        }
-        return onError;
     }
 
     private void handleConfigUpdateException(ConfigUpdateException e) {

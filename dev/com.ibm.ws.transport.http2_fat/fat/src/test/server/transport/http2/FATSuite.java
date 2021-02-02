@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -22,34 +22,30 @@ import componenttest.custom.junit.runner.AlwaysPassesTest;
  * Make sure to add any new test classes to the @SuiteClasses
  * annotation.
  *
- * Make sure to distinguish full mode tests using
+ * Make sure to distinguish FULL mode tests using
  * <code>@Mode(TestMode.FULL)</code>. Tests default to
- * use lite mode (<code>@Mode(TestMode.LITE)</code>).
+ * use LITE mode (<code>@Mode(TestMode.LITE)</code>).
  *
- * By default only lite mode tests are run. To also run
- * full mode tests a property must be specified to ant:
+ * By default only LITE mode tests are run. To also run
+ * full mode tests a property must be specified:
  *
- * Select the target build file (usually "build-test.xml").
- * Right click and chose "Run As>Ant Build…". Add
- * "fat.test.mode=full" to the properties tab, then launch the
- * build.
+ * -Dfat.test.mode=FULL.
  *
- * Alternatively, for a command line launch, add "-Dfat.test.mode=full".
- *
- * For additional information see:
- *
- * http://was.pok.ibm.com/xwiki/bin/view/Liberty/Test-FAT
  */
 @RunWith(Suite.class)
 @SuiteClasses({
                 AlwaysPassesTest.class, // LITE
                 Http2LiteModeTests.class, // LITE
+                Http2SecureTests.class, // LITE
                 Http2FullModeTests.class, // FULL
-                Http2ConfigTests.class, // FULL
-                //MultiSessionTests.class, // FULL; disabled for now
                 /** move tests to Http2FullTracingTests to diagnose failures via full tracing */
-                Http2FullTracingTests.class // FULL
+                Http2FullTracingTests.class, // FULL
+                Http2Config40H2Off.class, // FULL
+                Http2Config31H2Off.class, // FULL
+                Http2Config31H2On.class // FULL
+                //MultiSessionTests.class // FULL; disabled for now
 })
+
 public class FATSuite {
     private static final Class<?> c = FATSuite.class;
 

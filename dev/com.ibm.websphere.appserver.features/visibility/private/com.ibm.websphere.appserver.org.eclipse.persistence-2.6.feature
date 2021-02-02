@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.org.eclipse.persistence-2.6
+WLP-DisableAllFeatures-OnConflict: false
 singleton=true
 IBM-Process-Types: server, \
  client
@@ -8,3 +9,4 @@ IBM-Process-Types: server, \
 kind=ga
 edition=core
 
+WLP-Activation-Type: parallel

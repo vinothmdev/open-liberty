@@ -22,9 +22,11 @@ import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import componenttest.annotation.MaximumJavaLevel;
 import componenttest.custom.junit.runner.FATRunner;
 
 @RunWith(FATRunner.class)
+@MaximumJavaLevel(javaLevel = 8)
 public class SSLMutualAuthTests15 extends SSLCommonTests {
 
     @Override
@@ -68,13 +70,15 @@ public class SSLMutualAuthTests15 extends SSLCommonTests {
      */
     @Test
     public void testClientAuthNeedWithoutClientSideKeyStoreFor15() throws Exception {
-        try {
-            testSSLApplication();
-            Assert.fail("The connection should not succeed");
-        } catch (SocketException e) {
-            // we get different exceptions; this is from Oracle VM
-        } catch (SSLException e) {
-            // we get different exceptions; this is from IBM VM
+        if (javaVersion.startsWith("1.")) {
+            try {
+                testSSLApplication();
+                Assert.fail("The connection should not succeed");
+            } catch (SocketException e) {
+                // we get different exceptions; this is from Oracle VM
+            } catch (SSLException e) {
+                // we get different exceptions; this is from IBM VM
+            }
         }
     }
 

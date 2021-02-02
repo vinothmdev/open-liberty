@@ -22,6 +22,7 @@ import javax.json.JsonObject;
 import javax.json.JsonReader;
 
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -32,15 +33,20 @@ import com.ibm.websphere.simplicity.log.Log;
 import com.ibm.ws.security.fat.common.CommonSecurityFat;
 import com.ibm.ws.security.fat.common.actions.TestActions;
 import com.ibm.ws.security.fat.common.expectations.Expectations;
+import com.ibm.ws.security.fat.common.utils.CommonWaitForAppChecks;
+import com.ibm.ws.security.fat.common.utils.ServerFileUtils;
 import com.ibm.ws.security.fat.common.validation.TestValidationUtils;
+import com.ibm.ws.security.jwtsso.fat.actions.JwtFatActions;
+import com.ibm.ws.security.jwtsso.fat.actions.RunWithMpJwtVersion;
 import com.ibm.ws.security.jwtsso.fat.utils.CommonExpectations;
-import com.ibm.ws.security.jwtsso.fat.utils.JwtFatActions;
 import com.ibm.ws.security.jwtsso.fat.utils.JwtFatConstants;
 
 import componenttest.annotation.Server;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
+import componenttest.custom.junit.runner.RepeatTestFilter;
+import componenttest.rules.repeater.RepeatTests;
 import componenttest.topology.impl.LibertyServer;
 
 @Mode(TestMode.FULL)
@@ -49,11 +55,17 @@ public class BuilderTests extends CommonSecurityFat {
 
     protected static Class<?> thisClass = BuilderTests.class;
 
+    @ClassRule
+    public static RepeatTests r = RepeatTests.with(new RunWithMpJwtVersion(JwtFatConstants.NO_MPJWT))
+                    .andWith(new RunWithMpJwtVersion(JwtFatConstants.MPJWT_VERSION_11))
+                    .andWith(new RunWithMpJwtVersion(JwtFatConstants.MPJWT_VERSION_12));
+
     @Server("com.ibm.ws.security.jwtsso.fat")
     public static LibertyServer server;
 
     private final JwtFatActions actions = new JwtFatActions();
     private final TestValidationUtils validationUtils = new TestValidationUtils();
+    private static ServerFileUtils fatUtils = new ServerFileUtils();
 
     String protectedUrl = "https://" + server.getHostname() + ":" + server.getHttpDefaultSecurePort() + JwtFatConstants.SIMPLE_SERVLET_PATH;
     String defaultUser = JwtFatConstants.TESTUSER;
@@ -61,9 +73,12 @@ public class BuilderTests extends CommonSecurityFat {
 
     @BeforeClass
     public static void setUp() throws Exception {
+
+        fatUtils.updateFeatureFile(server, "jwtSsoFeatures", RepeatTestFilter.getMostRecentRepeatAction());
+
         server.addInstalledAppForValidation(JwtFatConstants.APP_FORMLOGIN);
         serverTracker.addServer(server);
-        server.startServerUsingExpandedConfiguration("server_withFeature.xml");
+        server.startServerUsingExpandedConfiguration("server_withFeature.xml", CommonWaitForAppChecks.getSSLChannelReadyMsgs());
     }
 
     /**
@@ -102,6 +117,8 @@ public class BuilderTests extends CommonSecurityFat {
 
         Cookie jwtCookie = webClient.getCookieManager().getCookie(JwtFatConstants.JWT_COOKIE_NAME);
         verifyJwtHeaderContainsKey(jwtCookie.getValue(), "kid");
+        actions.destroyWebClient(webClient);
+
     }
 
     /**
@@ -134,8 +151,11 @@ public class BuilderTests extends CommonSecurityFat {
         response = actions.doFormLogin(response, defaultUser, defaultPassword);
         validationUtils.validateResult(response, currentAction, expectations);
 
-        Cookie jwtCookie = webClient.getCookieManager().getCookie(JwtFatConstants.JWT_COOKIE_NAME);
-        verifyJwtHeaderDoesNotContainKey(jwtCookie.getValue(), "kid");
+        //Cookie jwtCookie = webClient.getCookieManager().getCookie(JwtFatConstants.JWT_COOKIE_NAME);
+        //verifyJwtHeaderDoesNotContainKey(jwtCookie.getValue(), "kid");
+
+        actions.destroyWebClient(webClient);
+
     }
 
     private void verifyJwtHeaderContainsKey(String jwt, String key) throws UnsupportedEncodingException {

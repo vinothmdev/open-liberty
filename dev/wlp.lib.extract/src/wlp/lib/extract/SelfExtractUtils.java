@@ -210,6 +210,10 @@ public class SelfExtractUtils {
             stdout.join();
             stderr.join();
             p.waitFor();
+        } catch (IOException e) {
+            if (e.getMessage().contains("Cannot run program \"chmod\"")) {
+                // "chmod" doesn't exist on this environment.
+            }
         } catch (Exception e) {
             return e;
         }
@@ -225,7 +229,7 @@ public class SelfExtractUtils {
                     for (int read; (read = in.read(buf)) != -1;) {
                         out.write(buf, 0, read);
                     }
-                } catch (IOException ex) {
+                } catch (IOException | IllegalStateException ex) {
                     ex.printStackTrace();
                 }
             }

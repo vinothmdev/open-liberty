@@ -22,6 +22,7 @@ import javax.json.JsonReader;
 import javax.servlet.http.HttpServletResponse;
 
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -42,18 +43,26 @@ import com.ibm.ws.security.fat.common.expectations.Expectations;
 import com.ibm.ws.security.fat.common.expectations.ResponseStatusExpectation;
 import com.ibm.ws.security.fat.common.expectations.ResponseUrlExpectation;
 import com.ibm.ws.security.fat.common.expectations.ServerMessageExpectation;
+import com.ibm.ws.security.fat.common.servers.ServerBootstrapUtils;
+import com.ibm.ws.security.fat.common.utils.CommonWaitForAppChecks;
+import com.ibm.ws.security.fat.common.utils.SecurityFatHttpUtils;
 import com.ibm.ws.security.fat.common.validation.TestValidationUtils;
 import com.ibm.ws.security.fat.common.web.WebResponseUtils;
+import com.ibm.ws.security.jwtsso.fat.actions.JwtFatActions;
+import com.ibm.ws.security.jwtsso.fat.actions.RunWithMpJwtVersion;
 import com.ibm.ws.security.jwtsso.fat.utils.CommonExpectations;
-import com.ibm.ws.security.jwtsso.fat.utils.JwtFatActions;
 import com.ibm.ws.security.jwtsso.fat.utils.JwtFatConstants;
+import com.ibm.ws.security.jwtsso.fat.utils.JwtFatUtils;
 import com.ibm.ws.security.jwtsso.fat.utils.MessageConstants;
 
+import componenttest.annotation.AllowedFFDC;
 import componenttest.annotation.ExpectedFFDC;
 import componenttest.annotation.Server;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
+import componenttest.custom.junit.runner.RepeatTestFilter;
+import componenttest.rules.repeater.RepeatTests;
 import componenttest.topology.impl.LibertyServer;
 
 @Mode(TestMode.FULL)
@@ -62,11 +71,22 @@ public class ReplayCookieTests extends CommonSecurityFat {
 
     protected static Class<?> thisClass = ReplayCookieTests.class;
 
+    @ClassRule
+    public static RepeatTests r = RepeatTests.with(new RunWithMpJwtVersion(JwtFatConstants.NO_MPJWT))
+                    .andWith(new RunWithMpJwtVersion(JwtFatConstants.MPJWT_VERSION_11))
+                    .andWith(new RunWithMpJwtVersion(JwtFatConstants.MPJWT_VERSION_12));
+
     @Server("com.ibm.ws.security.jwtsso.fat")
     public static LibertyServer server;
 
+    private static final ServerBootstrapUtils bootstrapUtils = new ServerBootstrapUtils();
+
+    public static final String BOOTSTRAP_PROP_FAT_SERVER_HOSTNAME = "fat.server.hostname";
+    public static final String BOOTSTRAP_PROP_FAT_SERVER_HOSTIP = "fat.server.hostip";
+
     private final JwtFatActions actions = new JwtFatActions();
     private final TestValidationUtils validationUtils = new TestValidationUtils();
+    private static JwtFatUtils fatUtils = new JwtFatUtils();
 
     static final String DEFAULT_CONFIG = "server_withBuilderApp.xml";
     static final String APP_NAME_JWT_BUILDER = "jwtbuilder";
@@ -79,10 +99,17 @@ public class ReplayCookieTests extends CommonSecurityFat {
 
     @BeforeClass
     public static void setUp() throws Exception {
+
+        fatUtils.updateFeatureFile(server, "jwtSsoFeatures", RepeatTestFilter.getMostRecentRepeatAction());
+
+        bootstrapUtils.writeBootstrapProperty(server, BOOTSTRAP_PROP_FAT_SERVER_HOSTNAME, SecurityFatHttpUtils.getServerHostName());
+        bootstrapUtils.writeBootstrapProperty(server, BOOTSTRAP_PROP_FAT_SERVER_HOSTIP, SecurityFatHttpUtils.getServerHostIp());
+
         CommonFatApplications.buildAndDeployApp(server, APP_NAME_JWT_BUILDER, "com.ibm.ws.security.fat.common.apps.jwtbuilder.*");
         server.addInstalledAppForValidation(JwtFatConstants.APP_FORMLOGIN);
         serverTracker.addServer(server);
-        server.startServerUsingExpandedConfiguration(DEFAULT_CONFIG);
+
+        server.startServerUsingExpandedConfiguration(DEFAULT_CONFIG, CommonWaitForAppChecks.getSSLChannelReadyMsgs());
 
     }
 
@@ -195,8 +222,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
      * - Upon re-access, should receive the login page because the JWT cookie is not valid
      * - FFDCs should be emitted because the JWT signature is not valid
      */
-    @ExpectedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtException", "com.ibm.websphere.security.jwt.InvalidTokenException",
-                    "com.ibm.ws.security.authentication.AuthenticationException" })
+    @AllowedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtException", "com.ibm.websphere.security.jwt.InvalidTokenException",
+                   "com.ibm.ws.security.authentication.AuthenticationException", "org.jose4j.jwt.consumer.InvalidJwtSignatureException" })
     @Test
     public void test_reaccessResource_jwtCookieWithEmptySignature() throws Exception {
 
@@ -217,8 +244,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
         expectations.addExpectations(CommonExpectations.successfullyReachedLoginPage(currentAction));
         expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS5524E_ERROR_CREATING_JWT));
         expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS5523E_ERROR_CREATING_JWT_USING_TOKEN_IN_REQ));
-        expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS6031E_JWT_ERROR_PROCESSING_JWT + ".+"
-                                                                                        + "Problem verifying signature"));
+        expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS6031E_JWT_ERROR_PROCESSING_JWT));
+        expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS6041E_JWT_INVALID_SIGNATURE));
 
         Page response = actions.invokeUrlWithCookie(_testName, protectedUrl, truncatedCookie);
         validationUtils.validateResult(response, currentAction, expectations);
@@ -233,8 +260,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
      * - Upon re-access, should receive the login page because the JWT cookie is not valid
      * - FFDCs should be emitted because the JWT is not formatted correctly
      */
-    @ExpectedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtException", "com.ibm.websphere.security.jwt.InvalidTokenException",
-                    "com.ibm.ws.security.authentication.AuthenticationException" })
+    @AllowedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtException", "com.ibm.websphere.security.jwt.InvalidTokenException",
+                   "com.ibm.ws.security.authentication.AuthenticationException" })
     @Test
     public void test_reaccessResource_signatureRemovedFromJwtCookie() throws Exception {
 
@@ -256,7 +283,7 @@ public class ReplayCookieTests extends CommonSecurityFat {
         expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS5524E_ERROR_CREATING_JWT));
         expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS5523E_ERROR_CREATING_JWT_USING_TOKEN_IN_REQ));
         expectations.addExpectation(new ServerMessageExpectation(currentAction, server, MessageConstants.CWWKS6031E_JWT_ERROR_PROCESSING_JWT + ".+"
-                                                                                        + "Invalid JOSE Compact Serialization"));
+                                                                                        + MessageConstants.CWWKS6063E_JWS_REQUIRED_BUT_TOKEN_NOT_JWS));
 
         Page response = actions.invokeUrlWithCookie(_testName, protectedUrl, cookieWithoutSignature);
         validationUtils.validateResult(response, currentAction, expectations);
@@ -361,6 +388,44 @@ public class ReplayCookieTests extends CommonSecurityFat {
 
     /**
      * Tests:
+     * - Configure mpJwt element with mapToUserRegistry=true
+     * - Invoke a protected resource and log in, obtaining a JWT cookie
+     * - Re-access the protected resource with the JWT cookie value that was just obtained, but include the JWT in the Authorization header
+     * Expects:
+     * - Should successfully obtain a JWT cookie
+     * - Should successfully reach the protected resource on the second invocation
+     */
+    @Test
+    public void test_obtainJwt_reaccessResourceWithJwtInHeader() throws Exception {
+        server.removeInstalledAppForValidation(APP_NAME_JWT_BUILDER);
+        server.reconfigureServerUsingExpandedConfiguration(_testName, "server_mpJwt_mapToUserRegistry_true.xml");
+
+        Cookie jwtCookie = actions.logInAndObtainJwtCookie(_testName, protectedUrl, defaultUser, defaultPassword);
+
+        // Access the protected again using a new conversation with the JWT SSO cookie value included in the header
+        String currentAction = TestActions.ACTION_INVOKE_PROTECTED_RESOURCE;
+
+        Expectations expectations = new Expectations();
+        expectations.addExpectations(CommonExpectations.successfullyReachedUrl(currentAction, protectedUrl));
+        expectations.addExpectations(CommonExpectations.responseTextMissingCookie(currentAction, JwtFatConstants.LTPA_COOKIE_NAME));
+        expectations.addExpectations(CommonExpectations.responseTextMissingCookie(currentAction, JwtFatConstants.JWT_COOKIE_NAME));
+        expectations.addExpectations(CommonExpectations.responseTextIncludesExpectedRemoteUser(currentAction, defaultUser));
+        expectations.addExpectations(CommonExpectations.responseTextIncludesJwtPrincipal(currentAction));
+        expectations.addExpectations(CommonExpectations.responseTextIncludesExpectedAccessId(currentAction, JwtFatConstants.BASIC_REALM, defaultUser));
+        expectations.addExpectations(CommonExpectations.getJwtPrincipalExpectations(currentAction, defaultUser, JwtFatConstants.DEFAULT_ISS_REGEX));
+
+        WebClient webClient = actions.createWebClient();
+        Page response = actions.invokeUrlWithBearerToken(_testName, webClient, protectedUrl, jwtCookie.getValue());
+        validationUtils.validateResult(response, currentAction, expectations);
+
+        server.addInstalledAppForValidation(APP_NAME_JWT_BUILDER);
+
+        actions.destroyWebClient(webClient);
+
+    }
+
+    /**
+     * Tests:
      * - Logs into the protected resource with the JWT SSO feature configured
      * - Access a different protected resource in a new web conversation without the JWT SSO cookie
      * Expects:
@@ -417,7 +482,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
      * Expects:
      * - Should receive the login page because the token does not contain all of the required claims
      */
-    @ExpectedFFDC({ "com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException", "com.ibm.ws.security.authentication.AuthenticationException" })
+    @ExpectedFFDC({ "com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException" })
+    @AllowedFFDC({ "com.ibm.ws.security.authentication.AuthenticationException" })
     @Test
     public void test_buildJwt_missingClaims_accessProtectedResource() throws Exception {
 
@@ -446,8 +512,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
      * Expects:
      * - Should receive the login page because the issuer in the token is not trusted
      */
-    @ExpectedFFDC({ "com.ibm.websphere.security.jwt.InvalidClaimException", "com.ibm.websphere.security.jwt.InvalidTokenException",
-                    "com.ibm.ws.security.authentication.AuthenticationException" })
+    @AllowedFFDC({ "com.ibm.websphere.security.jwt.InvalidClaimException", "com.ibm.websphere.security.jwt.InvalidTokenException",
+                   "com.ibm.ws.security.authentication.AuthenticationException" })
     @Test
     public void test_buildJwt_accessProtectedResource_defaultMpJwtConsumer() throws Exception {
 
@@ -503,8 +569,8 @@ public class ReplayCookieTests extends CommonSecurityFat {
      * Expects:
      * - Should receive the login page because the token signature cannot be validated
      */
-    @ExpectedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtSignatureException", "com.ibm.websphere.security.jwt.InvalidTokenException",
-                    "com.ibm.ws.security.authentication.AuthenticationException" })
+    @AllowedFFDC({ "org.jose4j.jwt.consumer.InvalidJwtSignatureException", "com.ibm.websphere.security.jwt.InvalidTokenException",
+                   "com.ibm.ws.security.authentication.AuthenticationException" })
     @Test
     public void test_buildJwt_signedWithNonDefaultKey_accessProtectedResource() throws Exception {
 

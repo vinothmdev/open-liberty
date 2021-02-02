@@ -38,7 +38,8 @@ import com.ibm.wsspi.anno.util.Util_InternMap;
  * <p>Standard aggregate class source implementation.</p>
  */
 public class ClassSourceImpl_Aggregate extends ClassSourceImpl implements ClassSource_Aggregate {
-    public static final String CLASS_NAME = ClassSourceImpl_Aggregate.class.getName();
+    @SuppressWarnings("hiding")
+	public static final String CLASS_NAME = ClassSourceImpl_Aggregate.class.getName();
     private static final TraceComponent tc = Tr.register(ClassSourceImpl_Aggregate.class);
 
     // Top O' the world
@@ -220,8 +221,7 @@ public class ClassSourceImpl_Aggregate extends ClassSourceImpl implements ClassS
 
         if ( openCount == 0 ) { // Last one which is active; need to close the children.
             for ( ClassSource nextClassSource : getSuccessfulOpens() ) {
-                @SuppressWarnings("unused")
-				String nextClassSourceName = nextClassSource.getCanonicalName();
+                String nextClassSourceName = nextClassSource.getCanonicalName();
 
                 try {
                     nextClassSource.close(); // throws ClassSource_Exception
@@ -324,7 +324,7 @@ public class ClassSourceImpl_Aggregate extends ClassSourceImpl implements ClassS
 
     protected void basicAddClassSource(ClassSource classSource, ScanPolicy scanPolicy) {
         classSources.add(classSource);
-        classSourceNames.put(classSource.getName(), classSource.getCanonicalName());
+        classSourceNames.put( classSource.getName(), classSource.getCanonicalName() );
 
         if ( scanPolicy == ScanPolicy.SEED ) {
             seedClassSources.add(classSource);
@@ -377,11 +377,10 @@ public class ClassSourceImpl_Aggregate extends ClassSourceImpl implements ClassS
         int initialSize = 0;
         int finalSize = 0;
 
-
         int numClasses = 0;
         int numClassesProcessedUsingJandex = 0;
         int numArchivesProcessedUsingJandex = 0;
-        
+
         // Only scan the children which were successfully opened.
         // Children which could not be opened are removed from view.
         for ( ClassSource childSource : getSuccessfulOpens() ) {
@@ -439,10 +438,16 @@ public class ClassSourceImpl_Aggregate extends ClassSourceImpl implements ClassS
 
             finalSize = nextSize;
         }
-        
-        if (this.options.getUseJandex()) {
-            // Read Jandex indexes for {0} out of {1} archives ({2} out of {3} classes) in {4}.
-            Tr.info(tc, "ANNO_JANDEX_USAGE",  numArchivesProcessedUsingJandex,   getSuccessfulOpens().size()  , numClassesProcessedUsingJandex, numClasses, getName());
+
+        if ( options.getUseJandex() ) {
+            // CWWKC0092I: Jandex coverage of module {4}:
+        	// Read Jandex indexes for {0} out of {1} module locations;
+        	// Jandex indexes provided {2} out of {3} module classes.
+
+            Tr.info(tc, "ANNO_JANDEX_USAGE",
+                numArchivesProcessedUsingJandex, getSuccessfulOpens().size(),
+                numClassesProcessedUsingJandex, numClasses,
+                getName());
         }
 
         if ( tc.isDebugEnabled() ) {

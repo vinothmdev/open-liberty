@@ -1,5 +1,5 @@
 #*******************************************************************************
-# Copyright (c) 2017 IBM Corporation and others.
+# Copyright (c) 2017, 2019 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -16,8 +16,10 @@
 -nouses=true
 bVersion=1.0
 
-javac.source: 1.6
-javac.target: 1.6
+javac.source: 1.7
+javac.target: 1.7
+
+Require-Capability: osgi.ee; filter:="(&(osgi.ee=JavaSE)(version=1.7))"
 
 # We're going to create a bad bundle here: don't want imports
 # or anything else for the launcher. So just swallow the errors.
@@ -58,8 +60,7 @@ Export-Package: com.ibm.ws.kernel.launch.service;provide:=true, \
   com.ibm.ws.kernel.provisioning;provide:=true, \
   com.ibm.ws.kernel.security.thread;provide:=true, \
   com.ibm.ws.kernel.provisioning.packages;provide:=true, \
-  com.ibm.ws.logging.utils,\
-  com.ibm.ws.logging.data,\
+  com.ibm.ws.kernel.boot.utils,\
   com.ibm.wsspi.kernel.security.thread;provide:=true
  
 Import-Package: !org.omg.CORBA*, *
@@ -77,8 +78,7 @@ Private-Package: \
  com.ibm.ws.kernel.boot.*, \
  com.ibm.ws.kernel.launch.*, \
  com.ibm.ws.kernel.internal.*, \
- com.ibm.wsspi.kernel.embeddable.*, \
- com.ibm.ws.staticvalue
+ com.ibm.wsspi.kernel.embeddable.*
 
 # security.policy file is pre-processed: the ${osgi-jar} variable in it will be replaced
 # with the name of the osgi jar specified above.

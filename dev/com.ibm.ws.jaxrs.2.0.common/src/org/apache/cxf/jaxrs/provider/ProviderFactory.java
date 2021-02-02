@@ -189,13 +189,16 @@ public abstract class ProviderFactory {
                              //new StringProvider<Object>(), // Liberty Change for CXF
                              //new JAXBElementSubProvider(),
                              createJsonpProvider(), // Liberty Change for CXF Begin
-                             createJsonBindingProvider(),
+                             createJsonBindingProvider(null),
                              new IBMMultipartProvider(), // Liberty Change for CXF End
                              new MultipartProvider());
-        Object prop = factory.getBus().getProperty("skip.default.json.provider.registration");
+        // Liberty change begin
+        // Liberty sets JSON providers above and does not ship the CXF JSONProvider
+        /*Object prop = factory.getBus().getProperty("skip.default.json.provider.registration");
         if (!PropertyUtils.isTrue(prop)) {
             factory.setProviders(false, false, createProvider(JSON_PROVIDER_NAME, factory.getBus()));
-        }
+        }*/
+        // Liberty change end
     }
 
     // Liberty Change for CXF Begin
@@ -283,7 +286,7 @@ public abstract class ProviderFactory {
         return c;
     }
 
-    public static Object createJsonBindingProvider() {
+    public static Object createJsonBindingProvider(Iterable<ProviderInfo<ContextResolver<?>>> contextResolvers) {
 
         JacksonJaxbJsonProvider jacksonjaxbprovider = new JacksonJaxbJsonProviderWrapper();
         jacksonjaxbprovider.addUntouchable(DataSource.class);//Let DataSourceProvider handle DataSource.class
@@ -1156,6 +1159,12 @@ public abstract class ProviderFactory {
         //Liberty code change end
     }
 
+    //Liberty change start
+    public Iterable<ProviderInfo<ContextResolver<?>>> getContextResolversActual() {
+        return contextResolvers;
+    }
+    //Liberty change end
+
     public void registerUserProvider(Object provider) {
         setUserProviders(Collections.singletonList(provider));
     }
@@ -1444,8 +1453,10 @@ public abstract class ProviderFactory {
         if (realClass1.isAssignableFrom(realClass2)) {
             // subclass should go first
             return 1;
+        } else if (realClass2.isAssignableFrom(realClass1)) { //Liberty change
+            return -1;
         }
-        return -1;
+        return 0; // Liberty change
     }
 
     //Liberty code change start

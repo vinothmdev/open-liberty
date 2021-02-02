@@ -19,6 +19,8 @@
 
 package org.apache.cxf.jaxrs.utils;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -47,6 +49,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.logging.Level;
 
+import javax.ws.rs.BadRequestException;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.HttpMethod;
 import javax.ws.rs.Produces;
@@ -87,7 +90,9 @@ import org.apache.cxf.common.util.PropertyUtils;
 import org.apache.cxf.common.util.ReflectionUtil;
 import org.apache.cxf.common.util.StringUtils;
 import org.apache.cxf.helpers.DOMUtils;
+import org.apache.cxf.helpers.IOUtils;
 import org.apache.cxf.interceptor.Fault;
+import org.apache.cxf.io.DelegatingInputStream;
 import org.apache.cxf.io.ReaderInputStream;
 import org.apache.cxf.jaxrs.JAXRSServiceImpl;
 import org.apache.cxf.jaxrs.ext.ContextProvider;
@@ -137,6 +142,7 @@ import org.apache.cxf.message.Message;
 import org.apache.cxf.message.MessageUtils;
 import org.apache.cxf.phase.PhaseInterceptorChain;
 import org.apache.cxf.service.Service;
+import org.codehaus.jackson.JsonParseException;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -633,9 +639,41 @@ public final class JAXRSUtils {
                                           String responseMessage, int status, boolean addAllow) {
         ResponseBuilder rb = toResponseBuilder(status);
         if (addAllow) {
+            Map<ClassResourceInfo, MultivaluedMap<String, String>> matchedResources = null; //Liberty change
             Set<String> allowedMethods = new HashSet<String>();
             for (ClassResourceInfo cri : cris) {
-                allowedMethods.addAll(cri.getAllowedMethods());
+                //Liberty Change start
+                if (cri.getParent() != null) {
+                   // Sub-resource
+                    allowedMethods.addAll(cri.getAllowedMethods());
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Adding All Allowed Headers " + cri.getAllowedMethods());                        
+                    }
+                    break;
+                }
+                for (OperationResourceInfo ori : cri.getMethodDispatcher().getOperationResourceInfos()) {
+                    if(ori.isSubResourceLocator()) {
+                        continue;
+                    }
+                    if (matchedResources == null) {
+                        String messagePath = HttpUtils.getPathToMatch(msg, true);
+                        matchedResources = JAXRSUtils.selectResourceClass(cris, messagePath, msg);
+                    }
+                    MultivaluedMap<String, String> values =  matchedResources.get(cri);
+                    if (values == null) {
+                        continue;
+                    }
+                    String httpMethod = ori.getHttpMethod();
+                    if (isFinalPath(ori,values)) {
+                        if (matchHttpMethod(httpMethod, "*")) {
+                            allowedMethods.add(httpMethod);
+                            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                                Tr.debug(tc, "Adding Allow Header " + httpMethod);
+                            }                                
+                        }
+                    }
+                }
+                //Liberty Change end
             }
 
             for (String m : allowedMethods) {
@@ -656,10 +694,29 @@ public final class JAXRSUtils {
     }
 
     private static boolean matchHttpMethod(String expectedMethod, String httpMethod) {
+      //Liberty Change start 
+        if ("*".equals(httpMethod)) {
+            return true;
+        }
+      //Liberty Change end 
         return expectedMethod.equalsIgnoreCase(httpMethod)
                || headMethodPossible(expectedMethod, httpMethod)
                || expectedMethod.equals(DefaultMethod.class.getSimpleName());
     }
+
+  //Liberty Change start 
+    private static boolean isFinalPath(OperationResourceInfo ori, MultivaluedMap<String, String> values) {
+        boolean finalPath = false;
+        String path = getCurrentPath(values);
+        URITemplate uriTemplate = ori.getURITemplate();
+        MultivaluedMap<String, String> map = new MetadataMap<String, String>(values);
+        if (uriTemplate != null && uriTemplate.match(path, map)) {
+            String finalGroup = map.getFirst(URITemplate.FINAL_MATCH_GROUP);
+            finalPath = StringUtils.isEmpty(finalGroup) || PATH_SEGMENT_SEP.equals(finalGroup);
+        }
+        return finalPath;
+    }
+  //Liberty Change end 
 
     public static boolean headMethodPossible(String expectedMethod, String httpMethod) {
         return HttpMethod.HEAD.equalsIgnoreCase(httpMethod) && HttpMethod.GET.equals(expectedMethod);
@@ -869,22 +926,31 @@ public final class JAXRSUtils {
                 return new AsyncResponseImpl(message);
             }
 
-            // Liberty change start
-            InputStream is = message.getContent(InputStream.class);
-            if (is == null) {
-                Reader reader = message.getContent(Reader.class);
-                if (reader != null) {
-                    is = new ReaderInputStream(reader);
-                }
-            }
-            // Liberty change end
-
             String contentType = (String) message.get(Message.CONTENT_TYPE);
 
             if (contentType == null) {
                 String defaultCt = (String) message.getContextualProperty(DEFAULT_CONTENT_TYPE);
                 contentType = defaultCt == null ? MediaType.APPLICATION_OCTET_STREAM : defaultCt;
             }
+            
+            // Liberty Change Start
+            MessageContext mc = new MessageContextImpl(message);
+            MediaType mt = mc.getHttpHeaders().getMediaType();
+            
+            InputStream is;
+            if (mt == null || mt.isCompatible(MediaType.APPLICATION_FORM_URLENCODED_TYPE)) {
+                is = copyAndGetEntityStream(message);
+            } else { 
+                is = message.getContent(InputStream.class);
+            }
+            
+            if (is == null) {
+                Reader reader = message.getContent(Reader.class);
+                if (reader != null) {
+                    is = new ReaderInputStream(reader);
+                }
+            }
+            // Liberty Change End
 
             return readFromMessageBody(parameterClass,
                                        parameterType,
@@ -1010,8 +1076,9 @@ public final class JAXRSUtils {
             m.put(FormUtils.FORM_PARAM_MAP, params);
 
             if (mt == null || mt.isCompatible(MediaType.APPLICATION_FORM_URLENCODED_TYPE)) {
+                InputStream entityStream = copyAndGetEntityStream(m); // Liberty change
                 String enc = HttpUtils.getEncoding(mt, StandardCharsets.UTF_8.name());
-                String body = FormUtils.readBody(m.getContent(InputStream.class), enc);
+                String body = FormUtils.readBody(entityStream, enc); // Liberty change
                 FormUtils.populateMapFromStringOrHttpRequest(params, m, body, enc, decode);
             } else {
                 if ("multipart".equalsIgnoreCase(mt.getType())
@@ -1303,7 +1370,6 @@ public final class JAXRSUtils {
                 String value = null;
                 if (index == -1) {
                     name = part;
-                    value = ""; //Liberty change - this probably shouldn't have been removed from CXF
                 } else {
                     name = part.substring(0, index);
                     value = index < part.length() ? part.substring(index + 1) : "";
@@ -1422,10 +1488,12 @@ public final class JAXRSUtils {
                 });
             } catch (PrivilegedActionException e) {
                 Exception e1 = e.getException();
-                if (e1 instanceof IOException)
+                if (e1 instanceof JsonParseException) {
+                    throw new BadRequestException(e1);
+                } else if (e1 instanceof IOException) {
                     throw (IOException) e1;
-                else
-                    throw (WebApplicationException) e1;
+                }
+                throw (WebApplicationException) e1;
             }
             // Liberty change end
         }
@@ -1914,5 +1982,24 @@ public final class JAXRSUtils {
     public static JaxRsRuntimeException toJaxRsRuntimeException(Throwable ex) {
         return new JaxRsRuntimeException(ex);
     }
-
+    
+    // Liberty change start
+    // copy the input stream so that it is not inadvertently closed
+    private static InputStream copyAndGetEntityStream(Message m) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        InputStream origInputStream = m.getContent(InputStream.class);
+        try {
+            IOUtils.copy(origInputStream, baos);
+        } catch (IOException e) {
+            throw ExceptionUtils.toInternalServerErrorException(e, null);
+        } finally {
+            try {
+                origInputStream.close();
+            } catch (Throwable t) { /* AutoFFDC */ }
+        }
+        final byte[] copiedBytes = baos.toByteArray();
+        m.setContent(InputStream.class, new ByteArrayInputStream(copiedBytes));
+        return new ByteArrayInputStream(copiedBytes);
+    }
+    // Liberty change end
 }

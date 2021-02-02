@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,6 +11,7 @@
 package com.ibm.ws.security.fat.common.jwt;
 
 import java.io.StringReader;
+import java.security.PrivateKey;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -21,18 +22,24 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import javax.json.Json;
+import javax.json.JsonArray;
 import javax.json.JsonObject;
+import javax.json.JsonString;
+import javax.json.JsonValue;
 
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.codec.binary.StringUtils;
+import org.jose4j.jwa.AlgorithmConstraints;
+import org.jose4j.jwa.AlgorithmConstraints.ConstraintType;
+import org.jose4j.jwe.JsonWebEncryption;
+import org.jose4j.jwx.JsonWebStructure;
 
-import com.ibm.json.java.JSONArray;
-import com.ibm.json.java.JSONObject;
 import com.ibm.websphere.simplicity.log.Log;
+import com.ibm.ws.security.fat.common.jwt.utils.JwtKeyTools;
 
 /**
  * JWT Token tools for Security testing with JWT Tokens.
- * 
+ *
  * <P>Methods in this class
  * <UL>
  * <LI>split the original string token into the different parts.
@@ -48,21 +55,26 @@ public class JwtTokenForTest {
 
     public static final String DELIMITER = ".";
 
-    String jwtString = null;
+    String jwsString = null;
+    String jweString = null;
+    private String jweHeaderString = null;
     private String jwtHeaderString = null;
     private String jwtPayloadString = null;
     private String jwtSignatureString = null;
+    private JsonObject jweHeaderJson = null;
     private JsonObject jwtHeaderJson = null;
     private JsonObject jwtPayloadJson = null;
-    private JsonObject jwtSignatureJson = null;
+    private final JsonObject jwtSignatureJson = null;
+    private Map<String, Object> jweHeaderMap = null;
     private Map<String, Object> jwtHeaderMap = null;
     private Map<String, Object> jwtPayloadMap = null;
-    private Map<String, Object> jwtSignatureMap = null;
+    private final Map<String, Object> jwtSignatureMap = null;
 
     protected static Class<?> thisClass = JwtTokenForTest.class;
 
     public void printJwtContent() throws Exception {
 
+        Log.info(thisClass, "printJwtContent", "JWE Header: " + getJsonJWEHeader());
         Log.info(thisClass, "printJwtContent", "Header: " + getJsonHeader());
         Log.info(thisClass, "printJwtContent", "Payload: " + getJsonPayload());
 //        Log.info(thisClass, "printJwtContent", "Signature: " + getJsonSignature());
@@ -73,13 +85,65 @@ public class JwtTokenForTest {
     /**
      * Format and load the JWT Token.
      * Split the string, decode, load maps, ...
-     * 
+     *
      * @param jwtTokenString - the original multi part JWT Token string
      * @throws Exception
      */
     public JwtTokenForTest(String jwtTokenString) throws Exception {
         Log.info(thisClass, "JwtTokenForTest", "Original JWT Token String: " + jwtTokenString);
-        jwtString = jwtTokenString;
+
+        JsonWebStructure joseObject = JsonWebStructure.fromCompactSerialization(jwtTokenString);
+        if (joseObject instanceof JsonWebEncryption) {
+            return;
+        }
+
+        processJWS(jwtTokenString);
+    }
+
+    /**
+     * Fortmat and load the JWE Token - assume no validation on the JWE header (meaning - use the key management key Alg and content
+     * encryption alg from the header along with the private key that was passed in
+     *
+     * @param jwtTokenString - the JWT Token string
+     * @param privateKey - the private key used to decrypt the token
+     * @throws Exception
+     */
+    public JwtTokenForTest(String jwtTokenString, String privateKey) throws Exception {
+
+        if (privateKey == null) {
+            processJWS(jwtTokenString);
+        } else {
+            processJWE(jwtTokenString, privateKey);
+        }
+    }
+
+    /**
+     * Format and load the JWT Token.
+     * Split the string, decode, load maps, ...
+     *
+     * @param jwtTokenString - the original multi part JWT Token string
+     * @throws Exception
+     */
+    public JwtTokenForTest(String jwtTokenString, String expectedKeyMgmtAlg, String privateKey, String expectedContentEncryptAlg) throws Exception {
+
+        this(jwtTokenString); // try to parse JWS - if token is JWE, it'll return here
+        // if it's a JWS, it'll be processed and the check below will cause this method to terminate.
+
+        JsonWebStructure joseObject = JsonWebStructure.fromCompactSerialization(jwtTokenString);
+
+        if (joseObject instanceof JsonWebEncryption) {
+
+            processJWE(jwtTokenString, expectedKeyMgmtAlg, privateKey, expectedContentEncryptAlg);
+
+        }
+    }
+
+    public void processJWS(String jwtTokenString) throws Exception {
+
+        Log.info(thisClass, "processJWS", "Original JWS Token String: " + jwtTokenString);
+
+        jwsString = jwtTokenString;
+        jweString = null;
         String[] jwtParts = splitTokenString(jwtTokenString);
 
         jwtHeaderString = jwtParts[0];
@@ -87,6 +151,7 @@ public class JwtTokenForTest {
         if (jwtParts.length == 3) {
             jwtSignatureString = jwtParts[2];
         }
+        Log.info(thisClass, "JwtTokenForTest", "in JwtTokenForTest - string is:" + jwtHeaderString + ":");
 
         jwtHeaderJson = deserialize(jwtHeaderString);
         jwtPayloadJson = deserialize(jwtPayloadString);
@@ -102,44 +167,93 @@ public class JwtTokenForTest {
 
     }
 
+    public void processJWE(String jwtTokenString, String privateKey) throws Exception {
+        processJWE(jwtTokenString, null, privateKey, null);
+    }
+
+    public void processJWE(String jwtTokenString, String expectedKeyMgmtAlg, String privateKey, String expectedContentEncryptAlg) throws Exception {
+
+        Log.info(thisClass, "processJWE", "Original JWE Token String: " + jwtTokenString);
+//        Log.info(thisClass, "processJWE", "Key Management Key Alg: " + expectedKeyMgmtAlg);
+//        Log.info(thisClass, "processJWE", "Private Key: " + privateKey);
+//        Log.info(thisClass, "processJWE", "Content Encryption Alg: " + expectedContentEncryptAlg);
+
+        // process the JWE Header
+        String[] jwtParts = splitTokenString(jwtTokenString);
+
+        if (jwtParts.length != 5) {
+            Log.info(thisClass, "validateEncryptedToken", "Token does not have 5 parts");
+        }
+
+        jweHeaderString = jwtParts[0];
+        jweHeaderJson = deserialize(jweHeaderString);
+        jweHeaderMap = mapClaimsFromJsonAsStrings(jweHeaderString);
+
+        // now decrypt the JWE and process the JWS
+        JsonWebEncryption jwe = new JsonWebEncryption();
+        if (expectedKeyMgmtAlg != null) {
+            AlgorithmConstraints algorithmConstraints = new AlgorithmConstraints(ConstraintType.WHITELIST, expectedKeyMgmtAlg);
+            jwe.setAlgorithmConstraints(algorithmConstraints);
+        }
+        if (expectedContentEncryptAlg != null) {
+            AlgorithmConstraints encryptionConstraints = new AlgorithmConstraints(ConstraintType.WHITELIST, expectedContentEncryptAlg);
+            jwe.setContentEncryptionAlgorithmConstraints(encryptionConstraints);
+        }
+        jwe.setCompactSerialization(jwtTokenString);
+        PrivateKey keyManagementKey = JwtKeyTools.getPrivateKeyFromPem(privateKey);
+        jwe.setKey(keyManagementKey);
+        String jws = jwe.getPlaintextString();
+        Log.info(thisClass, "JwtTokenForTest", "Decrypted JWS: " + jws);
+
+        processJWS(jws);
+    }
+
+    public JsonObject getJsonJWEHeader() {
+        return jweHeaderJson;
+    }
+
+    public Map<String, Object> getMapJWEHeader() {
+        return jweHeaderMap;
+    }
+
     public String getJwtTokenString() {
-        return this.jwtString;
+        return jwsString;
     }
 
     public JsonObject getJsonHeader() {
-        return this.jwtHeaderJson;
+        return jwtHeaderJson;
     }
 
     public String getStringHeader() {
-        return this.jwtHeaderString;
+        return jwtHeaderString;
     }
 
     public Map<String, Object> getMapHeader() {
-        return this.jwtHeaderMap;
+        return jwtHeaderMap;
     }
 
     public JsonObject getJsonPayload() {
-        return this.jwtPayloadJson;
+        return jwtPayloadJson;
     }
 
     public String getStringPayload() {
-        return this.jwtPayloadString;
+        return jwtPayloadString;
     }
 
     public Map<String, Object> getMapPayload() {
-        return this.jwtPayloadMap;
+        return jwtPayloadMap;
     }
 
     public JsonObject getJsonSignature() {
-        return this.jwtSignatureJson;
+        return jwtSignatureJson;
     }
 
     public String getStringSignature() {
-        return this.jwtSignatureString;
+        return jwtSignatureString;
     }
 
     public Map<String, Object> getMapSignature() {
-        return this.jwtSignatureMap;
+        return jwtSignatureMap;
     }
 
     /**
@@ -148,7 +262,7 @@ public class JwtTokenForTest {
      * Part 2: Payload ex:
      * {"token_type":"Bearer","aud":["client01","client02"],"sub":"testuser","upn":"testuser","groups":["group3","group2"],"realm":"BasicRealm","iss":"testIssuer","exp":1540451490,"iat":1540444290}
      * Part 3: Signature ex:
-     * 
+     *
      * @param tokenString
      *            The original encoded representation of a JWT
      * @return Three components of the JWT as an array of strings
@@ -173,7 +287,7 @@ public class JwtTokenForTest {
         return pieces;
     }
 
-    public JsonObject deserialize(String jwtPart) {
+    public static JsonObject deserialize(String jwtPart) {
 
         if (jwtPart == null) {
             return null;
@@ -182,7 +296,7 @@ public class JwtTokenForTest {
 
     }
 
-    public String fromBase64ToJsonString(String source) {
+    public static String fromBase64ToJsonString(String source) {
         return StringUtils.newStringUtf8(Base64.decodeBase64(source));
     }
 
@@ -190,7 +304,7 @@ public class JwtTokenForTest {
      * Parse the part of the jwt passed in (only handles one part of the jwt at a time (header/payload/signature(TBD))
      * Store the claims in a Map of key, claim pairs where claim will be either a string or list of strings.
      * Saved this way to validate against test application output where all values are strings.
-     * 
+     *
      * @param jsonFormattedString - the portion of the jwt token to process
      * @return - the loaded claim map
      * @throws Exception
@@ -200,36 +314,34 @@ public class JwtTokenForTest {
         if (jsonFormattedString == null) {
             return map;
         }
-
-        JSONObject object = JSONObject.parse(decodeFromBase64String(jsonFormattedString));
-        Set<Entry<String, Object>> set = object.entrySet();
-        Iterator<Entry<String, Object>> iterator = set.iterator();
+        JsonObject object = deserialize(jsonFormattedString);
+        Set<Entry<String, JsonValue>> set = object.entrySet();
+        Iterator<Entry<String, JsonValue>> iterator = set.iterator();
 
         while (iterator.hasNext()) {
-            Entry<String, Object> entry = iterator.next();
+            Entry<String, JsonValue> entry = iterator.next();
             String key = entry.getKey();
             Object value = entry.getValue();
-//            Log.info(thisClass, "claimsFromJson", "Object type: " + value.getClass());
-            if (value instanceof String) {
+//            Log.info(thisClass, "claimsFromJson", "Key: " + key + " Object type: " + value.getClass());
+            if (value instanceof JsonString) {
+//                Log.info(thisClass, "claimsFromJson", "String");
                 map.put(key, value);
-            } else if (value instanceof JSONArray) {
+            } else if (value instanceof JsonArray) {
+//                Log.info(thisClass, "claimsFromJson", "JsonArray");
                 List<String> arr = new ArrayList<String>();
-                for (int i = 0; i < ((JSONArray) value).size(); i++) {
-                    arr.add(((JSONArray) value).get(i).toString());
+                for (int i = 0; i < ((JsonArray) value).size(); i++) {
+                    arr.add(((JsonArray) value).get(i).toString());
                 }
                 map.put(key, arr);
-
             } else if (value instanceof JsonObject) {
+//                Log.info(thisClass, "claimsFromJson", "JsonObject");
                 map.put(key, mapClaimsFromJsonAsStrings(value.toString()));
             } else {
+//                Log.info(thisClass, "claimsFromJson", "Other");
                 map.put(key, value.toString());
             }
         }
         return map;
-    }
-
-    public static String decodeFromBase64String(String encoded) {
-        return new String(Base64.decodeBase64(encoded));
     }
 
     public List<String> getElementValueAsListOfStrings(String key) {
@@ -241,7 +353,7 @@ public class JwtTokenForTest {
 
     /**
      * Creates a list of just the claims names (the keys)
-     * 
+     *
      * @return - return the list of claims
      */
     public List<String> getPayloadClaims() {
@@ -267,7 +379,7 @@ public class JwtTokenForTest {
      * If the orginal value was a single instance of some datatype,
      * this method will return that value as a List<String> containing the
      * String representation of that value.
-     * 
+     *
      * @param obj - the "value" to convert return as a List<String>
      * @return
      */
@@ -277,9 +389,10 @@ public class JwtTokenForTest {
         if (obj == null) {
             return theList;
         }
-//        Log.info(thisClass, "createList", "Object: " + obj);
-//        Log.info(thisClass, "createList", "Object type: " + obj.getClass());
+//        Log.info(thisClass, "createListOfStrings", "Object type: " + obj.getClass());
+
         if (obj instanceof ArrayList) {
+//            Log.info(thisClass, "createListOfStrings", "here");
             for (String entry : (List<String>) obj) {
                 theList.add(entry);
             }

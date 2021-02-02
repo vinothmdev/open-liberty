@@ -23,11 +23,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
-import java.net.HttpURLConnection;
 import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -49,6 +47,7 @@ import javax.ws.rs.PathParam;
 import javax.ws.rs.ProcessingException;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.client.InvocationCallback;
+import javax.ws.rs.client.ResponseProcessingException;
 import javax.ws.rs.core.Cookie;
 import javax.ws.rs.core.EntityTag;
 import javax.ws.rs.core.Form;
@@ -109,7 +108,7 @@ import org.apache.cxf.transport.MessageObserver;
  *
  */
 public abstract class AbstractClient implements Client {
-    public static final String EXECUTOR_SERVICE_PROPERTY = "executorService"; //Liberty change
+    public static final String EXECUTOR_SERVICE_PROPERTY = "executorService";
 
     protected static final String REQUEST_CONTEXT = "RequestContext";
     protected static final String RESPONSE_CONTEXT = "ResponseContext";
@@ -129,7 +128,7 @@ public abstract class AbstractClient implements Client {
 
     protected ClientConfiguration cfg = new ClientConfiguration();
     private ClientState state;
-    private AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
     protected AbstractClient(ClientState initialState) {
         this.state = initialState;
     }
@@ -170,8 +169,7 @@ public abstract class AbstractClient implements Client {
      */
     @Override
     public Client headers(MultivaluedMap<String, String> map) {
-        //defect 213017, according to javadoc, need to clear all existing Headers.
-        removeAllHeaders();
+        removeAllHeaders(); // liberty change according to javadoc, need to clear all existing Headers.
         state.getRequestHeaders().putAll(map);
         return this;
     }
@@ -373,7 +371,6 @@ public abstract class AbstractClient implements Client {
             state = null;
             cfg = null;
         }
-        closed = null;
     }
 
     public void removeAllHeaders() {
@@ -451,7 +448,7 @@ public abstract class AbstractClient implements Client {
             if (null == entry.getKey()) {
                 continue;
             }
-            if (entry.getValue().size() > 0) {
+            if (!entry.getValue().isEmpty()) {
                 if (HttpUtils.isDateRelatedHeader(entry.getKey())) {
                     currentResponseBuilder.header(entry.getKey(), entry.getValue().get(0));
                     continue;
@@ -459,8 +456,8 @@ public abstract class AbstractClient implements Client {
                 entry.getValue().forEach(valObject -> {
                     if (splitHeaders && valObject instanceof String) {
                         String val = (String) valObject;
-                        String[] values;
-                        if (val.length() == 0) {
+                        final String[] values;
+                        if (val.isEmpty()) {
                             values = new String[]{""};
                         } else if (val.charAt(0) == '"' && val.charAt(val.length() - 1) == '"') {
                             // if the value starts with a quote and ends with a quote, we do a best
@@ -473,7 +470,7 @@ public abstract class AbstractClient implements Client {
                         }
                         for (String s : values) {
                             String theValue = s.trim();
-                            if (theValue.length() > 0) {
+                            if (!theValue.isEmpty()) {
                                 currentResponseBuilder.header(entry.getKey(), theValue);
                             }
                         }
@@ -539,14 +536,7 @@ public abstract class AbstractClient implements Client {
     }
 
     protected WebApplicationException convertToWebApplicationException(Response r) {
-        try {
-            Class<?> exceptionClass = ExceptionUtils.getWebApplicationExceptionClass(r,
-                                       WebApplicationException.class);
-            Constructor<?> ctr = exceptionClass.getConstructor(Response.class);
-            return (WebApplicationException)ctr.newInstance(r);
-        } catch (Throwable ex2) {
-            return new WebApplicationException(r);
-        }
+        return ExceptionUtils.toWebApplicationException(r);
     }
 
     protected <T> T readBody(Response r, Message outMessage, Class<T> cls,
@@ -557,11 +547,10 @@ public abstract class AbstractClient implements Client {
         }
 
         int status = r.getStatus();
-        if ((status < 200 || status == 204) && r.getLength() <= 0 || status >= 300) {
+        if ((status < 200 || status == 204) && r.getLength() <= 0 || (status >= 300 && status != 304)) {
             return null;
         }
-        //defect 211445
-        return ((ResponseImpl) r).doReadEntity(cls, type, anns, false);
+        return ((ResponseImpl)r).doReadEntity(cls, type, anns);
     }
 
     protected boolean responseStreamCanBeClosed(Message outMessage, Class<?> cls) {
@@ -627,7 +616,9 @@ public abstract class AbstractClient implements Client {
 
         Exchange exchange = outMessage.getExchange();
         Integer responseCode = getResponseCode(exchange);
-        if (responseCode == null
+        if (actualEx instanceof ResponseProcessingException) {
+            throw (ResponseProcessingException)actualEx;
+        } else if (responseCode == null
             || responseCode < 300 && !(actualEx instanceof IOException)
             || actualEx instanceof IOException && exchange.get("client.redirect.exception") != null) {
             if (actualEx instanceof ProcessingException) {
@@ -735,11 +726,12 @@ public abstract class AbstractClient implements Client {
             Object response = retryInvoke(newRequestURI, headers, body, exchange, context);
             exchange.put(List.class, getContentsList(response));
             return new Object[]{response};
-        } catch (Throwable t) {
-            Exception ex = t instanceof Exception ? (Exception)t : new Exception(t);
+        } catch (Exception ex) {
             exchange.put(Exception.class, ex);
-            return null;
+        } catch (Throwable t) {
+            exchange.put(Exception.class, new Exception(t));
         }
+        return null;
     }
 
     protected abstract Object retryInvoke(URI newRequestURI,
@@ -774,7 +766,7 @@ public abstract class AbstractClient implements Client {
             } else {
                 addMatrixOrQueryToBuilder(ub, paramName, pt, pValues);
             }
-        } else {
+        } else if (pValues != null && pValues.length > 0) {
             Object pValue = pValues[0];
             MultivaluedMap<String, Object> values = InjectionUtils.extractValuesFromBean(pValue, "");
             values.forEach((key, value) -> {
@@ -855,19 +847,6 @@ public abstract class AbstractClient implements Client {
         throw new ProcessingException(errorMessage, actualEx);
     }
 
-    protected static void setAllHeaders(MultivaluedMap<String, String> headers, HttpURLConnection conn) {
-        headers.forEach((key, value) -> {
-            StringBuilder b = new StringBuilder();
-            for (int i = 0; i < value.size(); i++) {
-                b.append(value.get(i));
-                if (i + 1 < value.size()) {
-                    b.append(',');
-                }
-            }
-            conn.setRequestProperty(key, b.toString());
-        });
-    }
-
     protected String[] parseQuotedHeaderValue(String originalValue) {
         // this algorithm isn't perfect; see CXF-3518 for further discussion.
         List<String> results = new ArrayList<>();
@@ -876,10 +855,10 @@ public abstract class AbstractClient implements Client {
         int lastIndex = chars.length - 1;
 
         boolean quote = false;
-        StringBuilder sb = new StringBuilder();
+        final StringBuilder sb = new StringBuilder();
 
         for (int pos = 0; pos <= lastIndex; pos++) {
-            char c = chars[pos];
+            final char c = chars[pos];
             if (pos == lastIndex) {
                 sb.append(c);
                 results.add(sb.toString());
@@ -890,16 +869,7 @@ public abstract class AbstractClient implements Client {
                     quote = !quote;
                     break;
                 case '\\':
-                    if (quote) {
-                        pos++;
-                        if (pos <= lastIndex) {
-                            c = chars[pos];
-                            sb.append(c);
-                        }
-                        if (pos == lastIndex) {
-                            results.add(sb.toString());
-                        }
-                    } else {
+                    if (!quote) {
                         sb.append(c);
                     }
                     break;
@@ -908,7 +878,7 @@ public abstract class AbstractClient implements Client {
                         sb.append(c);
                     } else {
                         results.add(sb.toString());
-                        sb = new StringBuilder();
+                        sb.setLength(0);
                     }
                     break;
                 default:
@@ -919,7 +889,7 @@ public abstract class AbstractClient implements Client {
         return results.toArray(new String[0]);
     }
 
-    protected ClientConfiguration getConfiguration() {
+    public ClientConfiguration getConfiguration() {
         return cfg;
     }
 
@@ -970,6 +940,7 @@ public abstract class AbstractClient implements Client {
         List<Interceptor<? extends Message>> i3 = cfg.getConduitSelector().getEndpoint().getInInterceptors();
         PhaseInterceptorChain chain = new PhaseChainCache().get(pm.getInPhases(), i1, i2, i3);
         chain.add(new ClientResponseFilterInterceptor());
+        chain.setFaultObserver(setupInFaultObserver(cfg));
         return chain;
     }
 
@@ -989,7 +960,7 @@ public abstract class AbstractClient implements Client {
             outMessage.put(Message.PROCESS_ONEWAY_RESPONSE, true);
         }
     }
-    private void checkClosed() {
+    protected void checkClosed() {
         if (closed.get()) {
             throw new IllegalStateException("Client is closed");
         }
@@ -1078,7 +1049,7 @@ public abstract class AbstractClient implements Client {
     protected Object checkIfBodyEmpty(Object body, String contentType) {
         //CHECKSTYLE:OFF
         if (body != null
-            && (body.getClass() == String.class && ((String)body).length() == 0
+            && (body.getClass() == String.class && ((String)body).isEmpty()
             || body.getClass() == Form.class && ((Form)body).asMap().isEmpty()
             || Map.class.isAssignableFrom(body.getClass()) && ((Map<?, ?>)body).isEmpty()
                 && !MediaType.APPLICATION_JSON.equals(contentType)
@@ -1217,7 +1188,7 @@ public abstract class AbstractClient implements Client {
         }
     }
 
-    protected abstract class AbstractBodyWriter extends AbstractOutDatabindingInterceptor {
+    protected abstract static class AbstractBodyWriter extends AbstractOutDatabindingInterceptor {
 
         public AbstractBodyWriter() {
             super(Phase.WRITE);
@@ -1321,12 +1292,11 @@ public abstract class AbstractClient implements Client {
                 if (results != null && results.length == 1) {
                     r = (Response)results[0];
                 }
+            } catch (WebApplicationException | ProcessingException ex) {
+                cb.handleException(message, ex);
+                return;
             } catch (Exception ex) {
-                Throwable t = ex instanceof WebApplicationException
-                    ? (WebApplicationException)ex
-                    : ex instanceof ProcessingException
-                    ? (ProcessingException)ex : new ProcessingException(ex);
-                cb.handleException(message, t);
+                cb.handleException(message, new ProcessingException(ex));
                 return;
             }
             doHandleAsyncResponse(message, r, cb);

@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.jpa-2.2
+WLP-DisableAllFeatures-OnConflict: false
 visibility=public
 singleton=true
 IBM-App-ForceRestart: uninstall, \
@@ -231,3 +232,4 @@ Subsystem-Name: Java Persistence API 2.2
  com.ibm.ws.jpa.container.eclipselink
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

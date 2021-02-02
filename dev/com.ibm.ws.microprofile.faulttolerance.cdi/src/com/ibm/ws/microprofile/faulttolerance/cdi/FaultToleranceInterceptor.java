@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017,2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,13 +12,13 @@ package com.ibm.ws.microprofile.faulttolerance.cdi;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
-import java.util.Collection;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
-import javax.annotation.PreDestroy;
 import javax.annotation.Priority;
-import javax.enterprise.context.Dependent;
+import javax.enterprise.inject.Instance;
+import javax.enterprise.inject.Intercepted;
+import javax.enterprise.inject.spi.Bean;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.inject.Inject;
 import javax.interceptor.AroundInvoke;
@@ -33,8 +33,7 @@ import org.eclipse.microprofile.faulttolerance.Fallback;
 import org.eclipse.microprofile.faulttolerance.Retry;
 import org.eclipse.microprofile.faulttolerance.Timeout;
 
-import com.ibm.websphere.ras.Tr;
-import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.microprofile.faulttolerance.cdi.config.AnnotationConfigFactory;
 import com.ibm.ws.microprofile.faulttolerance.cdi.config.AsynchronousConfig;
@@ -43,6 +42,7 @@ import com.ibm.ws.microprofile.faulttolerance.cdi.config.CircuitBreakerConfig;
 import com.ibm.ws.microprofile.faulttolerance.cdi.config.FallbackConfig;
 import com.ibm.ws.microprofile.faulttolerance.cdi.config.RetryConfig;
 import com.ibm.ws.microprofile.faulttolerance.cdi.config.TimeoutConfig;
+import com.ibm.ws.microprofile.faulttolerance.spi.AsyncRequestContextController;
 import com.ibm.ws.microprofile.faulttolerance.spi.BulkheadPolicy;
 import com.ibm.ws.microprofile.faulttolerance.spi.CircuitBreakerPolicy;
 import com.ibm.ws.microprofile.faulttolerance.spi.ExecutionException;
@@ -57,17 +57,20 @@ import com.ibm.ws.microprofile.faulttolerance.spi.TimeoutPolicy;
 public class FaultToleranceInterceptor {
 
     @Inject
-    BeanManager beanManager;
-
-    private final ConcurrentHashMap<Method, AggregatedFTPolicy> policyCache = new ConcurrentHashMap<>();
+    private BeanManager beanManager;
 
     @Inject
-    public FaultToleranceInterceptor(ExecutorCleanup executorCleanup) {
-        executorCleanup.setPolicies(policyCache.values());
-    }
+    private PolicyStore policyStore;
+
+    @Inject
+    @Intercepted
+    private Bean<?> bean;
+
+    @Inject
+    Instance<AsyncRequestContextController> rcInstance;
 
     @AroundInvoke
-    public Object executeFT(InvocationContext context) throws Throwable {
+    public Object executeFT(InvocationContext context) throws Exception {
 
         AggregatedFTPolicy policy = getFTPolicies(context);
 
@@ -83,14 +86,7 @@ public class FaultToleranceInterceptor {
     private AggregatedFTPolicy getFTPolicies(InvocationContext context) {
         AggregatedFTPolicy policy = null;
         Method method = context.getMethod();
-        policy = policyCache.get(method);
-        if (policy == null) {
-            policy = processPolicies(context, beanManager);
-            AggregatedFTPolicy previous = policyCache.putIfAbsent(method, policy);
-            if (previous != null) {
-                policy = previous;
-            }
-        }
+        policy = policyStore.getOrCreate(bean, method, () -> processPolicies(context, beanManager));
         return policy;
     }
 
@@ -123,7 +119,7 @@ public class FaultToleranceInterceptor {
                     retry = new RetryConfig(targetClass, (Retry) annotation);
                     retry.validate();
                 } else if (annotation.annotationType().equals(CircuitBreaker.class)) {
-                    circuitBreaker = new CircuitBreakerConfig(targetClass, (CircuitBreaker) annotation);
+                    circuitBreaker = annotationConfigFactory.createCircuitBreakerConfig(targetClass, (CircuitBreaker) annotation);
                     circuitBreaker.validate();
                 } else if (annotation.annotationType().equals(Timeout.class)) {
                     timeout = new TimeoutConfig(targetClass, (Timeout) annotation);
@@ -151,7 +147,7 @@ public class FaultToleranceInterceptor {
                     retry = new RetryConfig(method, targetClass, (Retry) annotation);
                     retry.validate();
                 } else if (annotation.annotationType().equals(CircuitBreaker.class)) {
-                    circuitBreaker = new CircuitBreakerConfig(method, targetClass, (CircuitBreaker) annotation);
+                    circuitBreaker = annotationConfigFactory.createCircuitBreakerConfig(method, targetClass, (CircuitBreaker) annotation);
                     circuitBreaker.validate();
                 } else if (annotation.annotationType().equals(Timeout.class)) {
                     timeout = new TimeoutConfig(method, targetClass, (Timeout) annotation);
@@ -160,7 +156,7 @@ public class FaultToleranceInterceptor {
                     bulkhead = new BulkheadConfig(method, targetClass, (Bulkhead) annotation);
                     bulkhead.validate();
                 } else if (annotation.annotationType().equals(Fallback.class)) {
-                    fallback = new FallbackConfig(method, targetClass, (Fallback) annotation);
+                    fallback = annotationConfigFactory.createFallbackConfig(method, targetClass, (Fallback) annotation);
                     fallback.validate();
                 }
             }
@@ -208,16 +204,17 @@ public class FaultToleranceInterceptor {
     }
 
     @FFDCIgnore({ ExecutionException.class })
-    private Object execute(InvocationContext invocationContext, AggregatedFTPolicy aggregatedFTPolicy) throws Throwable {
+    private Object execute(InvocationContext invocationContext, AggregatedFTPolicy aggregatedFTPolicy) throws Exception {
         Object result = null;
         //if there is a set of FaultTolerance policies then run it, otherwise just call proceed
         if (aggregatedFTPolicy != null) {
+
+            aggregatedFTPolicy.setRequestContextInstance(rcInstance);
             Executor<Object> executor = aggregatedFTPolicy.getExecutor();
 
             Method method = invocationContext.getMethod();
             Object[] params = invocationContext.getParameters();
-            String id = method.getName(); //TODO does this id need to be better? it's only for debug
-            ExecutionContext executionContext = executor.newExecutionContext(id, method, params);
+            ExecutionContext executionContext = executor.newExecutionContext(generateId(method), method, params);
 
             Callable<Object> callable = () -> {
                 return invocationContext.proceed();
@@ -226,7 +223,14 @@ public class FaultToleranceInterceptor {
             try {
                 result = executor.execute(callable, executionContext);
             } catch (ExecutionException e) {
-                throw e.getCause();
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception) {
+                    throw (Exception) cause;
+                } else if (cause instanceof Error) {
+                    throw (Error) cause;
+                } else {
+                    throw e;
+                }
             }
 
         } else {
@@ -235,25 +239,10 @@ public class FaultToleranceInterceptor {
         return result;
     }
 
-    @Dependent
-    public static class ExecutorCleanup {
-        private static final TraceComponent tc = Tr.register(ExecutorCleanup.class);
-
-        private Collection<AggregatedFTPolicy> policies;
-
-        public void setPolicies(Collection<AggregatedFTPolicy> policies) {
-            this.policies = policies;
-        }
-
-        @PreDestroy
-        public void cleanUpExecutors() {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "Cleaning up executors");
-            }
-
-            policies.forEach((e) -> {
-                e.close();
-            });
-        }
+    @Trivial
+    private String generateId(Method method) {
+        int rand = ThreadLocalRandom.current().nextInt();
+        return method.getName() + "-" + Integer.toHexString(rand);
     }
+
 }

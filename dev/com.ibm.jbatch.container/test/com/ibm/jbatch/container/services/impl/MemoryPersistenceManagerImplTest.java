@@ -18,20 +18,18 @@ import java.util.Date;
 import java.util.Properties;
 
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import com.ibm.jbatch.container.persistence.jpa.JobExecutionEntity;
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntity;
-import com.ibm.jbatch.container.persistence.jpa.RemotablePartitionEntity;
+import com.ibm.jbatch.container.persistence.jpa.RemotablePartitionKey;
 import com.ibm.jbatch.container.persistence.jpa.StepThreadExecutionEntity;
 import com.ibm.jbatch.container.persistence.jpa.StepThreadInstanceKey;
 import com.ibm.jbatch.container.persistence.jpa.TopLevelStepExecutionEntity;
 import com.ibm.jbatch.container.persistence.jpa.TopLevelStepInstanceKey;
 import com.ibm.jbatch.container.ws.BatchLocationService;
-import com.ibm.jbatch.container.ws.RemotablePartitionState;
 import com.ibm.jbatch.container.ws.WSPartitionStepAggregate;
 import com.ibm.jbatch.container.ws.WSStepThreadExecutionAggregate;
 
@@ -40,7 +38,7 @@ import com.ibm.jbatch.container.ws.WSStepThreadExecutionAggregate;
  */
 public class MemoryPersistenceManagerImplTest {
 
-    //222050 @Before
+    @Before
     public void mockitoSetup() {
         MockitoAnnotations.initMocks(this);
 
@@ -55,13 +53,13 @@ public class MemoryPersistenceManagerImplTest {
 
         this.jobInstanceEntity = service.createJobInstance("mockApp", "mockXML", "mockUser", new Date());
         this.jobExecutionEntity = service.createJobExecution(jobInstanceEntity.getInstanceId(), new Properties(), new Date());
-        RemotablePartitionEntity remotablePartition1 = service.createRemotablePartition(jobExecutionEntity.getExecutionId(), "mockStep", 0, RemotablePartitionState.QUEUED);
-        RemotablePartitionEntity remotablePartition2 = service.createRemotablePartition(jobExecutionEntity.getExecutionId(), "mockStep", 1, RemotablePartitionState.QUEUED);
+        RemotablePartitionKey remotablePartitionKey1 = new RemotablePartitionKey(jobExecutionEntity.getExecutionId(), "mockStep", 0);
+        RemotablePartitionKey remotablePartitionKey2 = new RemotablePartitionKey(jobExecutionEntity.getExecutionId(), "mockStep", 1);
+        service.createRemotablePartition(remotablePartitionKey1);
+        service.createRemotablePartition(remotablePartitionKey2);
 
         this.topLevelStepExecution = service.createTopLevelStepExecutionAndNewThreadInstance(jobExecutionEntity.getExecutionId(),
                                                                                              new TopLevelStepInstanceKey(jobInstanceEntity.getInstanceId(), "mockStep"), true);
-        service.updateRemotablePartitionInternalState(jobExecutionEntity.getExecutionId(), "mockStep", 0, RemotablePartitionState.CONSUMED);
-        service.updateRemotablePartitionInternalState(jobExecutionEntity.getExecutionId(), "mockStep", 1, RemotablePartitionState.CONSUMED);
 
         this.partition1 = service.createPartitionStepExecutionAndNewThreadInstance(jobExecutionEntity.getExecutionId(),
                                                                                    new StepThreadInstanceKey(jobInstanceEntity.getInstanceId(), "mockStep", 1), true);
@@ -81,36 +79,32 @@ public class MemoryPersistenceManagerImplTest {
     private BatchLocationService mockBatchLocationService;
 
     @Test
-    @Ignore //222050
     public void testGetStepExecutionAggregate() {
 
         WSStepThreadExecutionAggregate steps = service.getStepExecutionAggregate(topLevelStepExecution.getStepExecutionId());
 
-        //222050 validateStepAggregate(steps);
+        validateStepAggregate(steps);
 
     }
 
     @Test
-    @Ignore //222050
     public void testGetStepExecutionAggregateFromJobExecutionNumberAndStepName() {
 
         WSStepThreadExecutionAggregate steps = service.getStepExecutionAggregateFromJobExecutionNumberAndStepName(jobInstanceEntity.getInstanceId(), 0, "mockStep");
 
-        //222050 validateStepAggregate(steps);
+        validateStepAggregate(steps);
 
     }
 
     @Test
-    @Ignore //222050
     public void testGetStepExecutionAggregateFromJobExecutionId() {
 
         WSStepThreadExecutionAggregate steps = service.getStepExecutionAggregateFromJobExecutionId(jobExecutionEntity.getExecutionId(), "mockStep");
 
-        //222050 validateStepAggregate(steps);
+        validateStepAggregate(steps);
 
     }
 
-    /* 222050 - Backout 205106
     private void validateStepAggregate(WSStepThreadExecutionAggregate steps) {
         assertTrue(steps.getTopLevelStepExecution() == topLevelStepExecution);
         assertEquals(topLevelStepExecution.getStepExecutionId(), steps.getTopLevelStepExecution().getStepExecutionId());
@@ -128,5 +122,5 @@ public class MemoryPersistenceManagerImplTest {
             assertEquals("mockRestUrl", partition.getRemotablePartition().getRestUrl());
             assertEquals("mockServerId", partition.getRemotablePartition().getServerId());
         }
-    }*/
+    }
 }

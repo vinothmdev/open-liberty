@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2006, 2013 IBM Corporation and others.
+ * Copyright (c) 2006, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,9 +14,9 @@ import static com.ibm.ws.jpa.management.JPAConstants.EAR_SCOPE_MODULE_NAME;
 import static com.ibm.ws.jpa.management.JPAConstants.JPA_RESOURCE_BUNDLE_NAME;
 import static com.ibm.ws.jpa.management.JPAConstants.JPA_TRACE_GROUP;
 
-import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -287,6 +287,22 @@ public abstract class JPAApplInfo {
         }
     }
 
+    public boolean hasPersistenceUnitsDefined() {
+        final Map<String, JPAScopeInfo> puScopesClone = new HashMap<String, JPAScopeInfo>();
+        synchronized (puScopes) {
+            puScopesClone.putAll(puScopes);
+        }
+
+        for (Map.Entry<String, JPAScopeInfo> entry : puScopesClone.entrySet()) {
+            final JPAScopeInfo scopeInfo = entry.getValue();
+            if (scopeInfo.getAllPuCount() > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     @Override
     public String toString() {
         synchronized (puScopes) {
@@ -299,18 +315,20 @@ public abstract class JPAApplInfo {
         }
     }
 
-    protected void doIntrospect(PrintWriter out) {
+    protected void doIntrospect(Set<String> archivesSet) {
         final Map<String, JPAScopeInfo> puScopesClone = new HashMap<String, JPAScopeInfo>();
         synchronized (puScopes) {
             puScopesClone.putAll(puScopes);
         }
+
+        JPAIntrospection.registerArchiveSet(archivesSet);
 
         for (Map.Entry<String, JPAScopeInfo> entry : puScopesClone.entrySet()) {
             final JPAScopeInfo scopeInfo = entry.getValue();
 
             JPAIntrospection.beginPUScopeVisit(scopeInfo);
             try {
-                scopeInfo.doIntrospect(out);
+                scopeInfo.doIntrospect();
             } finally {
                 JPAIntrospection.endPUScopeVisit();
             }

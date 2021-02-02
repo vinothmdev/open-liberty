@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appclient.appClient-1.0
+WLP-DisableAllFeatures-OnConflict: false
 visibility=private
 -features=com.ibm.websphere.appserver.injection-1.0, \
  com.ibm.websphere.appclient.client-1.0, \
@@ -11,3 +12,4 @@ visibility=private
  com.ibm.ws.app.manager.client
 kind=ga
 edition=base
+WLP-Activation-Type: parallel

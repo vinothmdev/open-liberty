@@ -13,6 +13,7 @@ package com.ibm.ws.app.manager.internal.monitor;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Dictionary;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,7 +55,9 @@ import com.ibm.wsspi.kernel.service.utils.FrameworkState;
            configurationPolicy = ConfigurationPolicy.IGNORE,
            property = "service.vendor=IBM")
 public class DropinMonitor {
-    private static final TraceComponent _tc = Tr.register(DropinMonitor.class);
+    private static final TraceComponent _tc = Tr.register(DropinMonitor.class, new String[] { "applications", com.ibm.ws.app.manager.internal.AppManagerConstants.TRACE_GROUP },
+                                                          com.ibm.ws.app.manager.internal.AppManagerConstants.TRACE_MESSAGES,
+                                                          "com.ibm.ws.app.manager.internal.monitor.DropinMonitor");
 
     private BundleContext _ctx;
     private WsLocationAdmin locationService;
@@ -93,14 +96,16 @@ public class DropinMonitor {
         this.locationService = locationService;
     }
 
-    protected void unsetLocationService(WsLocationAdmin locationService) {}
+    protected void unsetLocationService(WsLocationAdmin locationService) {
+    }
 
     @Reference(name = "configAdmin")
     protected void setConfigAdmin(ConfigurationAdmin configAdmin) {
         this.configAdmin = configAdmin;
     }
 
-    protected void unsetConfigAdmin(ConfigurationAdmin configAdmin) {}
+    protected void unsetConfigAdmin(ConfigurationAdmin configAdmin) {
+    }
 
     private class FileMonitorImpl implements FileMonitor {
         private final String _type;
@@ -347,7 +352,7 @@ public class DropinMonitor {
     /**
      * Returns the message helper for the specified application handler type.
      *
-     * @param type application handler type
+     * @param type     application handler type
      * @param fileName file name from which type can be inferred if not specified
      * @return the message helper for the specified application handler type.
      */
@@ -384,15 +389,35 @@ public class DropinMonitor {
      * Takes a file and an optional file type, and updates the file. If no type is given it will use the
      * extension of the file given.
      *
-     * @param ca the configuration admin service.
      * @param currentFile the file of the application to install. Can be a directory
-     * @param type the type of the application.
+     * @param type        the type of the application.
      *
      */
     private void startApplication(File currentFile, String type) {
         if (_tc.isEventEnabled()) {
             Tr.event(_tc, "Starting dropin application '" + currentFile.getName() + "'");
         }
+
+        // Check to make sure that the app isn't configured in server.xml.
+        try {
+            Configuration[] configuredApps = configAdmin.listConfigurations(AppManagerConstants.APPLICATION_FACTORY_FILTER);
+            if (configuredApps != null) {
+                for (Configuration c : configuredApps) {
+                    Dictionary<String, Object> properties = c.getProperties();
+                    String location = (String) properties.get(AppManagerConstants.LOCATION);
+                    if (location != null && monitoredDirectory.get() != null) {
+                        File configuredFile = new File(locationService.resolveString(location));
+                        if (configuredFile != null && currentFile.compareTo(configuredFile) == 0) {
+                            Tr.warning(_tc, "dropins.app.also.configured", location);
+                            return;
+                        }
+                    }
+                }
+            }
+        } catch (IOException | InvalidSyntaxException e1) {
+            // Just FFDC
+        }
+
         String filePath = getAppLocation(currentFile);
 
         try {

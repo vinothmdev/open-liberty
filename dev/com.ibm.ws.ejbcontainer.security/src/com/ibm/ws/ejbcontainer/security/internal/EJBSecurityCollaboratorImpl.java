@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2015 IBM Corporation and others.
+ * Copyright (c) 2011, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,7 +13,6 @@ package com.ibm.ws.ejbcontainer.security.internal;
 import java.security.Identity;
 import java.security.Principal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -81,10 +80,7 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
     protected SubjectManager subjectManager;
     protected CollaboratorUtils collabUtils;
 
-    public HashMap<String, Object> ejbAuditHashMap = new HashMap<String, Object>();
-
     protected AuditManager auditManager;
-    public HashMap<String, Object> extraAuditData = new HashMap<String, Object>();
 
     protected volatile EJBSecurityConfig ejbSecConfig = null;
     private EJBAuthorizationHelper eah = this;
@@ -390,7 +386,7 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
         return false;
     }
 
-    public void populateAuditEJBHashMap(EJBRequestData request) {
+    public void populateAuditEJBHashMap(EJBRequestData request, Map<String, Object> ejbAuditHashMap) {
         EJBMethodMetaData methodMetaData = request.getEJBMethodMetaData();
         Object[] methodArguments = request.getMethodArguments();
         String applicationName = methodMetaData.getEJBComponentMetaData().getJ2EEName().getApplication();
@@ -399,20 +395,14 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
         String methodInterface = methodMetaData.getEJBMethodInterface().specName();
         String methodSignature = methodMetaData.getMethodSignature();
         String beanName = methodMetaData.getEJBComponentMetaData().getJ2EEName().getComponent();
-        List<Object> methodParameters = null;
-        if (methodArguments != null && methodArguments.length > 0) {
-            methodParameters = Arrays.asList(methodArguments);
-        }
 
-        ejbAuditHashMap.put("methodArguments", methodArguments);
         ejbAuditHashMap.put("applicationName", applicationName);
         ejbAuditHashMap.put("moduleName", moduleName);
         ejbAuditHashMap.put("methodName", methodName);
         ejbAuditHashMap.put("methodInterface", methodInterface);
         ejbAuditHashMap.put("methodSignature", methodSignature);
         ejbAuditHashMap.put("beanName", beanName);
-        ejbAuditHashMap.put("methodParameters", methodParameters);
-
+        ejbAuditHashMap.put("methodParameters", methodArguments);
     }
 
     /**
@@ -423,7 +413,7 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
      * <li>is EVERYONE granted to any of the required roles</li>
      * <li>is the subject authorized to any of the required roles</li>
      *
-     * @param EBJRequestData the info on the EJB method to call
+     * @param EJBRequestData the info on the EJB method to call
      * @param subject the subject authorize
      * @throws EJBAccessDeniedException when the subject is not authorized to the EJB
      */
@@ -438,7 +428,9 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
         Object webRequest = (auditManager != null) ? auditManager.getWebRequest() : null;
         String realm = (auditManager != null) ? auditManager.getRealm() : null;
 
-        populateAuditEJBHashMap(request);
+        HashMap<String, Object> ejbAuditHashMap = new HashMap<String, Object>();
+
+        populateAuditEJBHashMap(request, ejbAuditHashMap);
 
         Collection<String> roles = getRequiredRoles(methodMetaData);
 
@@ -562,6 +554,7 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
         String invalidUser = "";
         Set<WSCredential> publicCredentials = (delegationSubject == null ? null : delegationSubject.getPublicCredentials(WSCredential.class));
         Iterator<WSCredential> it = null;
+        HashMap<String, Object> extraAuditData = new HashMap<String, Object>();
         if (publicCredentials != null && (it = publicCredentials.iterator()) != null && it.hasNext()) {
             WSCredential credential = it.next();
             try {
@@ -744,5 +737,4 @@ public class EJBSecurityCollaboratorImpl implements EJBSecurityCollaborator<Secu
     public void componentMetaDataDestroyed(MetaDataEvent<ComponentMetaData> event) {
 
     }
-
 }

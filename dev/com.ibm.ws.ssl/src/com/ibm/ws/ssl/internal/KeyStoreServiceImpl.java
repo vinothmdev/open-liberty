@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2017 IBM Corporation and others.
+ * Copyright (c) 2013, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -50,7 +50,7 @@ import com.ibm.ws.ssl.config.WSKeyStore;
 public class KeyStoreServiceImpl implements KeyStoreService {
     // Intentionally left package protected for unit test
     KeyStoreManager ksMgr;
-    private static final TraceComponent tc = Tr.register(KeyStoreServiceImpl.class);
+    private static final TraceComponent tc = Tr.register(KeyStoreServiceImpl.class, TraceConstants.TRACE_GROUP, TraceConstants.MESSAGE_BUNDLE);
 
     public KeyStoreServiceImpl() {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
@@ -102,6 +102,11 @@ public class KeyStoreServiceImpl implements KeyStoreService {
             }
         }
         return alist.toArray(new String[] {});
+    }
+
+    @Override
+    public int getKeyStoreCount() {
+        return ksMgr.getKeyStoreCount();
     }
 
     /** {@inheritDoc} */
@@ -162,6 +167,29 @@ public class KeyStoreServiceImpl implements KeyStoreService {
             throw e;
         } catch (Exception e) {
             throw new KeyStoreException("Unexpected error while loading the request Certificate for alias [" + alias + "] from keystore: " + keyStoreName, e);
+        }
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public Certificate[] getCertificateChainFromKeyStore(String keyStoreName, String alias) throws KeyStoreException, CertificateException {
+        try {
+            KeyStore ks = ksMgr.getJavaKeyStore(keyStoreName);
+            if (ks == null) {
+                throw new KeyStoreException("The keystore [" + keyStoreName + "] is not present in the configuration");
+            } else {
+                if (!ks.isCertificateEntry(alias) && !ks.isKeyEntry(alias)) {
+                    throw new CertificateException("The alias [" + alias + "] is not present in the KeyStore as a certificate entry");
+                } else {
+                    return ks.getCertificateChain(alias);
+                }
+            }
+        } catch (CertificateException e) {
+            throw e;
+        } catch (KeyStoreException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new KeyStoreException("Unexpected error while loading the request Certificate chain for alias [" + alias + "] from keystore: " + keyStoreName, e);
         }
     }
 
@@ -317,14 +345,28 @@ public class KeyStoreServiceImpl implements KeyStoreService {
                 throw new KeyStoreException("The keystore [" + keyStoreName + "] is not present in the configuration");
             } else {
                 wks.setCertificateEntry(alias, certificate);
-                wks.store();
             }
-        } catch (CertificateException e) {
-            throw e;
         } catch (KeyStoreException e) {
             throw e;
         } catch (Exception e) {
             throw new KeyStoreException("Unexpected error while adding the Certificate for alias [" + alias + "] to keystore: " + keyStoreName, e);
+        }
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void setKeyEntryToKeyStore(String keyStoreName, String alias, Key key, Certificate[] chain) throws KeyStoreException, CertificateException {
+        try {
+            WSKeyStore wks = ksMgr.getKeyStore(keyStoreName);
+            if (wks == null) {
+                throw new KeyStoreException("The keystore [" + keyStoreName + "] is not present in the configuration");
+            } else {
+                wks.setKeyEntry(alias, key, chain);
+            }
+        } catch (KeyStoreException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new KeyStoreException("Unexpected error while setting the key entry for alias [" + alias + "] to keystore: " + keyStoreName, e);
         }
     }
 
@@ -377,5 +419,17 @@ public class KeyStoreServiceImpl implements KeyStoreService {
             }
         }
         return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public KeyStore getKeyStore(String keyStoreName) throws KeyStoreException {
+        KeyStore ks = null;
+        try {
+            ks = ksMgr.getJavaKeyStore(keyStoreName);
+        } catch (Exception e) {
+            throw new KeyStoreException("Unexpected error while loading the keystore [" + keyStoreName + "]", e);
+        }
+        return ks;
     }
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,8 +13,10 @@ package com.ibm.ws.webcontainer.security;
 import java.util.Map;
 
 import com.ibm.ws.security.SecurityService;
+import com.ibm.ws.security.authentication.UnauthenticatedSubjectService;
 import com.ibm.ws.security.authentication.tai.TAIService;
 import com.ibm.ws.security.collaborator.CollaboratorUtils;
+import com.ibm.ws.webcontainer.security.util.SSOAuthFilter;
 import com.ibm.wsspi.kernel.service.location.WsLocationAdmin;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.ConcurrentServiceReferenceMap;
@@ -38,13 +40,16 @@ public interface WebAuthenticatorFactory {
      * @param collabUtils
      * @param webAuthenticatorRef
      * @param unprotectedResourceServiceRef
+     * @param unauthenticatedSubjectService
      * @return
      */
     AuthenticateApi createAuthenticateApi(SSOCookieHelper ssoCookieHelper,
                                           AtomicServiceReference<SecurityService> securityServiceRef,
                                           CollaboratorUtils collabUtils,
                                           ConcurrentServiceReferenceMap<String, WebAuthenticator> webAuthenticatorRef,
-                                          ConcurrentServiceReferenceMap<String, UnprotectedResourceService> unprotectedResourceServiceRef);
+                                          ConcurrentServiceReferenceMap<String, UnprotectedResourceService> unprotectedResourceServiceRef,
+                                          UnauthenticatedSubjectService unauthenticatedSubjectService,
+                                          AtomicServiceReference<SSOAuthFilter> ssoAuthFilterRe);
 
     /**
      * @param securityServiceRef
@@ -58,7 +63,8 @@ public interface WebAuthenticatorFactory {
                                                                       AtomicServiceReference<TAIService> taiServiceRef,
                                                                       ConcurrentServiceReferenceMap<String, TrustAssociationInterceptor> interceptorServiceRef,
                                                                       WebAppSecurityConfig webAppSecConfig,
-                                                                      ConcurrentServiceReferenceMap<String, WebAuthenticator> webAuthenticatorRef);
+                                                                      ConcurrentServiceReferenceMap<String, WebAuthenticator> webAuthenticatorRef,
+                                                                      AtomicServiceReference<SSOAuthFilter> ssoAuthFilterRef);
 
     /**
      * @param webAppSecConfig
@@ -77,4 +83,8 @@ public interface WebAuthenticatorFactory {
      * @return
      */
     Boolean needToAuthenticateSubject(WebRequest webRequest);
+
+    public WebProviderAuthenticatorProxy getWebProviderAuthenticatorProxy();
+
+    public WebAuthenticatorProxy getWebAuthenticatorProxy();
 }

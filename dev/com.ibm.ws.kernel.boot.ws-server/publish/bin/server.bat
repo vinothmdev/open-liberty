@@ -1,7 +1,7 @@
 @echo off
 @REM WebSphere Application Server liberty launch script
 @REM
-@REM Copyright IBM Corp. 2011, 2017
+@REM Copyright IBM Corp. 2011, 2020
 @REM The source code for this program is not published or other-
 @REM wise divested of its trade secrets, irrespective of what has
 @REM been deposited with the U.S. Copyright Office.
@@ -47,6 +47,10 @@
 @REM              set to y to suspend the jvm on startup until a debugger attaches,
 @REM              or set to n to startup without waiting for a debugger to attach.
 @REM              The default value is y.
+@REM
+@REM WLP_DEBUG_REMOTE - Whether to allow remote debugging or not. This can be set
+@REM              to y to allow remote debugging. By default, this value is not
+@REM              defined, which does not allow remote debugging on newer JDK/JREs.
 @REM
 @REM ----------------------------------------------------------------------------
 
@@ -97,7 +101,7 @@ if not defined SERVER_ARG (
   set SERVER_NAME=defaultServer
 ) else if "%SERVER_NAME%" == "" (
   set SERVER_NAME=defaultServer
-) else if "%SERVER_NAME:~0,1%" == "-" (
+) else if "%SERVER_NAME:~0,2%" == "--" (
   set SERVER_NAME=defaultServer
 )
 
@@ -121,10 +125,7 @@ if "help" == "%ACTION%" (
 ) else if "run" == "%ACTION%" (
   call:runServer
 ) else if "debug" == "%ACTION%" (
-  if not defined WLP_DEBUG_ADDRESS set WLP_DEBUG_ADDRESS=7777
-  if not defined WLP_DEBUG_SUSPEND set WLP_DEBUG_SUSPEND=y
-  set JAVA_PARAMS_QUOTED=-Dwas.debug.mode=true -Dcom.ibm.websphere.ras.inject.at.transform=true -Dsun.reflect.noInflation=true -agentlib:jdwp=transport=dt_socket,server=y,suspend="!WLP_DEBUG_SUSPEND!",address="!WLP_DEBUG_ADDRESS!" !JAVA_PARAMS_QUOTED!
-  call:runServer
+  call:debugServer
 ) else if "status" == "%ACTION%" (
   call:serverStatus
 ) else if "status:fast" == "%ACTION%" (
@@ -233,6 +234,31 @@ goto:eof
   call:javaCmdResult
 goto:eof
 
+:debugServer
+  call:serverEnvAndJVMOptions
+  if not %RC% == 0 goto:eof
+
+  if not defined WLP_DEBUG_ADDRESS set WLP_DEBUG_ADDRESS=7777
+  if not defined WLP_DEBUG_SUSPEND set WLP_DEBUG_SUSPEND=y
+  if /I "%WLP_DEBUG_REMOTE%" == "Y" set WLP_DEBUG_REMOTE_HOST="0.0.0.0:"
+  if not defined WLP_DEBUG_REMOTE_HOST set WLP_DEBUG_REMOTE_HOST=
+  set JAVA_PARAMS_QUOTED=-Dwas.debug.mode=true -Dsun.reflect.noInflation=true -agentlib:jdwp=transport=dt_socket,server=y,suspend="!WLP_DEBUG_SUSPEND!",address="!WLP_DEBUG_REMOTE_HOST!!WLP_DEBUG_ADDRESS!" !JAVA_PARAMS_QUOTED!
+
+  call:serverExists true
+  if %RC% == 2 goto:eof
+
+  call:serverWorkingDirectory
+  set SAVE_IBM_JAVA_OPTIONS=!IBM_JAVA_OPTIONS!
+  set SAVE_OPENJ9_JAVA_OPTIONS=!OPENJ9_JAVA_OPTIONS!
+  set IBM_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
+  set OPENJ9_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
+  !JAVA_CMD_QUOTED! !JAVA_AGENT_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file !PARAMS_QUOTED!
+  set RC=%errorlevel%
+  set IBM_JAVA_OPTIONS=!SAVE_IBM_JAVA_OPTIONS!
+  set OPENJ9_JAVA_OPTIONS=!SAVE_OPENJ9_JAVA_OPTIONS!
+  call:javaCmdResult
+goto:eof
+
 :runServer
   call:serverEnvAndJVMOptions
   if not %RC% == 0 goto:eof
@@ -242,9 +268,12 @@ goto:eof
   call:serverWorkingDirectory
   set SAVE_IBM_JAVA_OPTIONS=!IBM_JAVA_OPTIONS!
   set IBM_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
+  set SAVE_OPENJ9_JAVA_OPTIONS=!OPENJ9_JAVA_OPTIONS!
+  set OPENJ9_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
   !JAVA_CMD_QUOTED! !JAVA_AGENT_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file !PARAMS_QUOTED!
   set RC=%errorlevel%
   set IBM_JAVA_OPTIONS=!SAVE_IBM_JAVA_OPTIONS!
+  set OPENJ9_JAVA_OPTIONS=!SAVE_OPENJ9_JAVA_OPTIONS!
   call:javaCmdResult
 goto:eof
 
@@ -286,11 +315,14 @@ goto:eof
     set X_CMD=!JAVA_CMD_QUOTED! !JAVA_AGENT_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file !PARAMS_QUOTED!
     set SAVE_IBM_JAVA_OPTIONS=!IBM_JAVA_OPTIONS!
     set IBM_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
+    set SAVE_OPENJ9_JAVA_OPTIONS=!OPENJ9_JAVA_OPTIONS!
+    set OPENJ9_JAVA_OPTIONS=!SERVER_IBM_JAVA_OPTIONS!
 
     @REM Use javaw so command windows can be closed.
-    start /b "" !JAVA_CMD_QUOTED!w !JAVA_AGENT_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file !PARAMS_QUOTED! >> "%X_LOG_DIR%\%X_LOG_FILE%" 2>&1
+    start /min /b "" !JAVA_CMD_QUOTED!w !JAVA_AGENT_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file !PARAMS_QUOTED! >> "%X_LOG_DIR%\%X_LOG_FILE%" 2>&1
 
     set IBM_JAVA_OPTIONS=!SAVE_IBM_JAVA_OPTIONS!
+    set OPENJ9_JAVA_OPTIONS=!SAVE_OPENJ9_JAVA_OPTIONS!
 
     !JAVA_CMD_QUOTED! !JAVA_PARAMS_QUOTED! "!SERVER_NAME!" --status:start
     set RC=!errorlevel!
@@ -309,14 +341,16 @@ goto:eof
 goto:eof
 
 :package
-  call:serverEnv
+  call:serverEnvAndJVMOptions
+  if not %RC% == 0 goto:eof
   call:serverExists true
   if %RC% == 2 goto:eof
 
-  !JAVA_CMD_QUOTED! !JAVA_PARAMS_QUOTED! --batch-file=--package !PARAMS_QUOTED!
+  !JAVA_CMD_QUOTED! !JVM_OPTIONS! !JAVA_PARAMS_QUOTED! --batch-file=--package !PARAMS_QUOTED!
   set RC=%errorlevel%
   call:javaCmdResult
 goto:eof
+
 
 :dump
   call:serverEnv
@@ -344,7 +378,8 @@ goto:eof
   call:serverEnv
   call:serverExists true
   if %RC% == 2 goto:eof
-  "!WLP_INSTALL_DIR!\bin\tools\win\prunsrv.exe"  //IS//%SERVER_NAME% --Startup=manual --DisplayName="%SERVER_NAME%" --Description="IBM WebSphere Liberty Profile" ++DependsOn=Tcpip --LogPath="%WLP_INSTALL_DIR%\usr\servers\%SERVER_NAME%\logs" --StdOutput=auto --StdError=auto --StartMode=exe --StartPath="%WLP_INSTALL_DIR%" --StartImage="%WLP_INSTALL_DIR%\bin\server.bat" ++StartParams=start#%SERVER_NAME% --StopMode=exe --StopPath="%WLP_INSTALL_DIR%" --StopImage="%WLP_INSTALL_DIR%\bin\server.bat" ++StopParams=stop#%SERVER_NAME%                                                                                                                             
+  "!WLP_INSTALL_DIR!\bin\tools\win\prunsrv.exe"  //IS//%SERVER_NAME% --Startup=manual --DisplayName="%SERVER_NAME%" --Description="Open Liberty" ++DependsOn=Tcpip --LogPath="!WLP_OUTPUT_DIR!\%SERVER_NAME%\logs" --StdOutput=auto --StdError=auto --StartMode=exe --StartPath="%WLP_INSTALL_DIR%" --StartImage="%WLP_INSTALL_DIR%\bin\server.bat" ++StartParams=start#%SERVER_NAME% --StopMode=exe --StopPath="%WLP_INSTALL_DIR%" --StopImage="%WLP_INSTALL_DIR%\bin\server.bat" ++StopParams=stop#%SERVER_NAME% --ServiceUser=LocalSystem                                                                                                                          
+  set RC=!errorlevel!
 goto:eof
 
 :startWinService
@@ -364,8 +399,9 @@ goto:eof
     )
   ) else (
      "!WLP_INSTALL_DIR!\bin\tools\win\prunsrv.exe" //ES//%SERVER_NAME%
-      call:serverRunning
-      call:javaCmdResult
+     set RC=!errorlevel!
+     call:serverRunning
+     call:javaCmdResult
   )   
 goto:eof
 
@@ -375,11 +411,13 @@ goto:eof
   call:serverExists true
   if %RC% == 2 goto:eof
   "!WLP_INSTALL_DIR!\bin\tools\win\prunsrv.exe" //SS//%SERVER_NAME%
+  set RC=!errorlevel!
 goto:eof
 
 :unregisterWinService
   if NOT "%OS%" == "Windows_NT" goto:eof
   "!WLP_INSTALL_DIR!\bin\tools\win\prunsrv.exe" //DS//%SERVER_NAME%
+  set RC=!errorlevel!
 goto:eof
 
 :pauseServer
@@ -464,7 +502,6 @@ goto:eof
           set WLP_DEFAULT_JAVA_HOME=!WLP_INSTALL_DIR!!WLP_DEFAULT_JAVA_HOME:~17!
         )
         set JAVA_CMD_QUOTED="!WLP_DEFAULT_JAVA_HOME!\bin\java"
-        set WLP_SKIP_MAXPERMSIZE=!WLP_DEFAULT_SKIP_MAXPERMSIZE!
       )
     ) else (
       set JAVA_CMD_QUOTED="%JRE_HOME%\bin\java"
@@ -474,17 +511,29 @@ goto:eof
     set JAVA_CMD_QUOTED="!JAVA_HOME!\bin\java"
   )
 
-  @REM Command-line parsing of -Xshareclasses does not allow "," in cacheDir.
-  if "!WLP_OUTPUT_DIR:,=!" == "!WLP_OUTPUT_DIR!" (
-    set SERVER_IBM_JAVA_OPTIONS=-Xshareclasses:name=liberty-%%u,nonfatal,cacheDir="%WLP_OUTPUT_DIR%\.classCache" -XX:ShareClassesEnableBCI -Xscmx80m !IBM_JAVA_OPTIONS!
+@REM Use OPENJ9_JAVA_OPTIONS if defined, otherwise use IBM_JAVA_OPTIONS
+  if NOT defined OPENJ9_JAVA_OPTIONS (
+    set SPECIFIED_JAVA_OPTIONS=!IBM_JAVA_OPTIONS!
   ) else (
-    set SERVER_IBM_JAVA_OPTIONS=!IBM_JAVA_OPTIONS!
+    set SPECIFIED_JAVA_OPTIONS=!OPENJ9_JAVA_OPTIONS!
   )
 
-  @REM Add -Xquickstart -Xnoaot for client JVMs only.  AOT is ineffective if
-  @REM JVMs have conflicting options, and it's more important that server JVMs
-  @REM be able to use AOT.
-  set IBM_JAVA_OPTIONS=-Xquickstart -Xnoaot !SERVER_IBM_JAVA_OPTIONS!
+  @REM Command-line parsing of -Xshareclasses does not allow "," in cacheDir.
+  if "!WLP_OUTPUT_DIR:,=!" == "!WLP_OUTPUT_DIR!" (
+    @REM Skip if Xshareclasses is defined in IBM_JAVA_OPTIONS/OPENJ9_JAVA_OPTIONS
+    if "!SPECIFIED_JAVA_OPTIONS:Xshareclasses=!" == "!SPECIFIED_JAVA_OPTIONS!" (
+      set SERVER_IBM_JAVA_OPTIONS=-Xshareclasses:name=liberty-%%u,nonfatal,cacheDir="%WLP_OUTPUT_DIR%\.classCache" -XX:ShareClassesEnableBCI -Xscmx80m !SPECIFIED_JAVA_OPTIONS!
+    ) else (
+      set SERVER_IBM_JAVA_OPTIONS=!SPECIFIED_JAVA_OPTIONS!
+    )
+  ) else (
+    set SERVER_IBM_JAVA_OPTIONS=!SPECIFIED_JAVA_OPTIONS!
+  )
+
+  @REM Add -Xquickstart -Xshareclasses:none for client JVMs only.  We don't want 
+  @REM shared classes cache created for client operations.
+  set IBM_JAVA_OPTIONS=-Xquickstart !IBM_JAVA_OPTIONS! -Xshareclasses:none
+  set OPENJ9_JAVA_OPTIONS=-Xquickstart !OPENJ9_JAVA_OPTIONS! -Xshareclasses:none
 goto:eof
 
 @REM
@@ -505,16 +554,14 @@ goto:eof
 :serverEnvAndJVMOptions
   call:serverEnv
 
-  @REM By default, set -XX:MaxPermSize.  This option should be ignored by JVMs
-  @REM that don't support the option.
-  if not defined WLP_SKIP_MAXPERMSIZE (
-    set JVM_OPTIONS=-XX:MaxPermSize=256m
-  ) else (
-    set JVM_OPTIONS=
-  )
+  set JVM_OPTIONS=
   @REM Avoid HeadlessException.
   set JVM_OPTIONS=-Djava.awt.headless=true !JVM_OPTIONS!
-
+  @REM allow late self attach for when the localConnector-1.0 feature is enabled
+  set JVM_OPTIONS=-Djdk.attach.allowAttachSelf=true !JVM_OPTIONS!
+  
+  @REM Clean out jvm_temp_options from a prior script execution
+  set JVM_TEMP_OPTIONS=
 
   @REM The order of merging the jvm.option files sets the precedence. 
   @REM Once a given jvm option is set, it will be overridden if a duplicate
@@ -546,7 +593,25 @@ goto:eof
   if exist "%JAVA_HOME%\lib\modules" (
     call:mergeJVMOptions "%WLP_INSTALL_DIR%\lib\platform\java\java9.options"
   )
-  
+
+  @REM Filter off all of the -D and -X arguments off of !PARAMS_QUOTED! and
+  @REM add them onto !JVM_OPTIONS!
+  set INCLUDE_NEXT_ARG=F
+  for %%a in (%PARAMS_QUOTED%) do (
+    set CUR_ARG=%%a
+    if "!INCLUDE_NEXT_ARG!"=="T" (
+      set JVM_TEMP_OPTIONS=!JVM_TEMP_OPTIONS!=!CUR_ARG!
+      set INCLUDE_NEXT_ARG=F
+    ) else if "!CUR_ARG:~0,2!"=="-D" (
+      @REM key=value arguments get parsed as two separate tokens, so when we see
+      @REM a -Dkey=value option we need to set a flag to include the next arg
+	  set JVM_TEMP_OPTIONS=!JVM_TEMP_OPTIONS! !CUR_ARG!
+	  set INCLUDE_NEXT_ARG=T
+    ) else if "!CUR_ARG:~0,2!"=="-X" (
+      set JVM_TEMP_OPTIONS=!JVM_TEMP_OPTIONS! !CUR_ARG!
+    ) 
+  )
+
   set JVM_OPTIONS=!JVM_OPTIONS!%JVM_TEMP_OPTIONS%
 goto:eof
 

@@ -22,7 +22,11 @@
 		baseDN="dc=rtp,dc=raleigh,dc=ibm,dc=com"
 		ldapType="Sun Java System Directory Server"
 		searchTimeout="8m">
-		
+	<iplanetFilters userFilter="(&amp;(uid=%v)(objectclass=inetOrgPerson))" 
+ 	                  groupFilter="(&amp;(cn=%v)(objectclass=ldapsubentry))" 
+ 	                  userIdMap="inetOrgPerson:uid" 
+ 	                  groupIdMap="*:cn" 
+ 	                  groupMemberIdMap="badvalue:overriddenbymembershipattribute"/>
       <ldapEntityType name="Group" searchFilter="(ObjectClass=ldapsubentry)">
         <objectClass>ldapsubentry</objectClass>
       </ldapEntityType>
@@ -48,7 +52,6 @@
         <propertiesNotSupported name="homeAddress"/>
         <propertiesNotSupported name="businessAddress"/>
       </attributeConfiguration>
-      <loginProperty>uid</loginProperty>
       <contextPool enabled="true" initialSize="1" maxSize="0" timeout="0ms"
           waitTime="3000ms" preferredSize="3"/>
       <ldapCache>

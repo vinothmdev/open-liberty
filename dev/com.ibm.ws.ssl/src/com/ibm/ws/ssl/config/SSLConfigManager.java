@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2007, 2012 IBM Corporation and others.
+ * Copyright (c) 2007, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -21,7 +21,6 @@ import java.util.Collection;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -225,27 +224,51 @@ public class SSLConfigManager {
 
     }
 
+    public void resetDefaultSSLContextIfNeeded(Collection<File> modifiedFiles) throws Exception {
+
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+            Tr.entry(tc, "resetDefaultSSLContextIfNeeded", modifiedFiles);
+
+        String filePath = null;
+        for (File modifiedKeystoreFile : modifiedFiles) {
+            try {
+                filePath = modifiedKeystoreFile.getCanonicalPath();
+            } catch (IOException e) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                    Tr.debug(tc, "Exception comparing file path.");
+                continue;
+            }
+
+            resetDefaultSSLContextIfNeeded(filePath);
+        }
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+            Tr.exit(tc, "resetDefaultSSLContextIfNeeded");
+
+    }
+
     /**
      * Called after all the SSL configuration is processed, set the default SSLContext for the runtime.
      *
      * @throws SSLException
      */
-    public synchronized void resetDefaultSSLContextIfNeeded(Collection<File> modifiedFiles) throws Exception {
+    public synchronized void resetDefaultSSLContextIfNeeded(String modifiedFile) throws Exception {
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-            Tr.entry(tc, "resetDefaultSSLContext");
+            Tr.entry(tc, "resetDefaultSSLContextIfNeeded", modifiedFile);
 
         SSLConfig defaultSSLConfig = getDefaultSSLConfig();
 
-        if (defaultSSLConfig != null && keyStoreModified(defaultSSLConfig, modifiedFiles))
+        if (defaultSSLConfig != null && keyStoreModified(defaultSSLConfig, modifiedFile)) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                Tr.debug(tc, "Setting new default SSLContext with: " + defaultSSLConfig);
             JSSEProviderFactory.getInstance(null).setServerDefaultSSLContext(defaultSSLConfig);
-        else {
+        } else {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
                 Tr.debug(tc, "Modified keystore file are not part of the default SSL configuration.");
         }
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-            Tr.exit(tc, "resetDefaultSSLContext");
+            Tr.exit(tc, "resetDefaultSSLContextIfNeeded");
 
     }
 
@@ -254,30 +277,18 @@ public class SSLConfigManager {
      * @param modifiedFiles
      * @return
      */
-    private boolean keyStoreModified(SSLConfig defaultSSLConfig, Collection<File> modifiedFiles) {
+    private boolean keyStoreModified(SSLConfig defaultSSLConfig, String modifiedFile) {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
             Tr.entry(tc, "keyStoreModified");
 
-        try {
-            String ksPropValue = defaultSSLConfig.getProperty(Constants.SSLPROP_KEY_STORE, null);
-            String tsPropValue = defaultSSLConfig.getProperty(Constants.SSLPROP_TRUST_STORE, null);
+        String ksPropValue = defaultSSLConfig.getProperty(Constants.SSLPROP_KEY_STORE, null);
+        String tsPropValue = defaultSSLConfig.getProperty(Constants.SSLPROP_TRUST_STORE, null);
 
-            Iterator itr = modifiedFiles.iterator();
-            while (itr.hasNext()) {
-                File file = (File) itr.next();
-                String path = file.getCanonicalPath();
-                String comparePath = path.replace('\\', '/');
-
-                if ((ksPropValue != null && ksPropValue.equals(comparePath)) ||
-                    (tsPropValue != null && tsPropValue.equals(comparePath))) {
-                    if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-                        Tr.exit(tc, "keyStoreModified true");
-                    return true;
-                }
-            }
-        } catch (IOException e) {
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
-                Tr.debug(tc, "Exception comparing file path.");
+        if ((ksPropValue != null && ksPropValue.equals(modifiedFile)) ||
+            (tsPropValue != null && tsPropValue.equals(modifiedFile))) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+                Tr.exit(tc, "keyStoreModified true");
+            return true;
         }
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
@@ -506,6 +517,21 @@ public class SSLConfigManager {
             sslprops.setProperty(Constants.SSLPROP_ALIAS, prop);
         }
 
+        Boolean hostnameVerification = (Boolean) map.get("verifyHostname");
+        if (null != hostnameVerification) {
+            sslprops.setProperty(Constants.SSLPROP_HOSTNAME_VERIFICATION, hostnameVerification.toString());
+        }
+
+        Boolean useDefaultCerts = (Boolean) map.get("trustDefaultCerts");
+        if (null != useDefaultCerts) {
+            sslprops.setProperty(Constants.SSLPROP_USE_DEFAULTCERTS, useDefaultCerts.toString());
+        }
+
+        Boolean enforceCipherOrder = (Boolean) map.get("enforceCipherOrder");
+        if (null != enforceCipherOrder) {
+            sslprops.setProperty(Constants.SSLPROP_ENFORCE_CIPHER_ORDER, enforceCipherOrder.toString());
+        }
+
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
             Tr.debug(tc, "Saving SSLConfig: " + sslprops);
 
@@ -615,242 +641,14 @@ public class SSLConfigManager {
             globalConfigProperties.setProperty(prop.getKey(), (String) prop.getValue());
         }
 
+        // Check for dynamic outbound and default config conflicts
+        String outboundDefaultAlias = getGlobalProperty(LibertyConstants.SSLPROP_OUTBOUND_DEFAULT_ALIAS);
+        if (outboundDefaultAlias != null && isTransportSecurityEnabled())
+            outboundSSL.checkDefaultConflict();
+
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
             Tr.exit(tc, "loadGlobalProperties");
     }
-
-    // TODO CSI config
-    // /**
-    // * Loads the SSL properties for CSIv2 so that they can override some
-    // * of the properties including client auth and the SSL alias, for
-    // * migration if directly referenced.
-    // *
-    // * @param properties
-    // */
-    // public void loadCSIv2SSLProperties(Map<String,Map<String,String>>
-    // properties)
-    // {
-    // if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-    // Tr.entry(tc,"loadCSIv2SSLProperties");
-    // // now load the CSIv2 SSLConfig and CSIv2 ClientAuth settings
-    // // get the IIOPSecurityProtocol
-    // SecurityConfigObject csiv2 = security.getObject("CSI");
-    //
-    // if (csiv2 != null)
-    // {
-    // // get the CommonSecureInterop/SecureAssociationService - Claim/Perform
-    // SecurityConfigObject claimCSI = csiv2.getObject("claims");
-    //
-    // // *** CSI Claim Transport Layer ***
-    // SecurityConfigObjectList layers = claimCSI.getObjectList("layers");
-    // SecurityConfigObject csiv2ClaimIIOPTransportLayer = null;
-    // for (int i = 0; i < layers.size(); i++)
-    // {
-    // SecurityConfigObject layer = layers.get(i);
-    // if (layer.instanceOf(CT_TransportLayer.URI, CT_TransportLayer.NAME))
-    // {
-    // csiv2ClaimIIOPTransportLayer = layer;
-    // break;
-    // }
-    // }
-    //
-    // if (csiv2ClaimIIOPTransportLayer != null)
-    // {
-    // SecurityConfigObject csiv2ClaimTransportQOPSupported =
-    // csiv2ClaimIIOPTransportLayer.getObject("supportedQOP");
-    // if
-    // (csiv2ClaimTransportQOPSupported.getBoolean("enableProtection").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTransportAssocSSLTLSSupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTransportAssocSSLTLSSupported",
-    // "false");
-    //
-    // if
-    // (csiv2ClaimTransportQOPSupported.getBoolean("establishTrustInClient").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTLClientAuthenticationSupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTLClientAuthenticationSupported",
-    // "false");
-    //
-    // if (csiv2ClaimTransportQOPSupported.getBoolean("integrity").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageIntegritySupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageIntegritySupported",
-    // "false");
-    //
-    // if
-    // (csiv2ClaimTransportQOPSupported.getBoolean("confidentiality").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageConfidentialitySupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageConfidentialitySupported",
-    // "false");
-    //
-    // SecurityConfigObject csiv2ClaimTransportQOPRequired =
-    // csiv2ClaimIIOPTransportLayer.getObject("requiredQOP");
-    //
-    // if
-    // (csiv2ClaimTransportQOPRequired.getBoolean("enableProtection").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTransportAssocSSLTLSRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTransportAssocSSLTLSRequired",
-    // "false");
-    //
-    // if
-    // (csiv2ClaimTransportQOPRequired.getBoolean("establishTrustInClient").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTLClientAuthenticationRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimTLClientAuthenticationRequired",
-    // "false");
-    //
-    // if (csiv2ClaimTransportQOPRequired.getBoolean("integrity").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageIntegrityRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageIntegrityRequired",
-    // "false");
-    //
-    // if
-    // (csiv2ClaimTransportQOPRequired.getBoolean("confidentiality").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageConfidentialityRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.claimMessageConfidentialityRequired",
-    // "false");
-    //
-    // SecurityConfigObject csiv2ClaimIIOPTransportSSLServerAuth =
-    // csiv2ClaimIIOPTransportLayer.getObject("serverAuthentication");
-    //
-    // String sslAlias = null;
-    //
-    // if (PlatformHelperFactory.getPlatformHelper().isZOS())
-    // sslAlias =
-    // globalConfigProperties.getProperty("was.com.ibm.websphere.security.zos.csiv2.inbound.transport.sslconfig");
-    //
-    // if (sslAlias == null)
-    // sslAlias = (String)
-    // csiv2ClaimIIOPTransportSSLServerAuth.getString("sslConfig");
-    //
-    // if (sslAlias != null)
-    // globalConfigProperties.setProperty("com.ibm.ssl.csi.inbound.alias",
-    // sslAlias);
-    // }
-    //
-    // // get the CommonSecureInterop/SecureAssociationService - Claim/Perform
-    // SecurityConfigObject performCSI = csiv2.getObject("performs");
-    //
-    // // *** CSI Claim Transport Layer ***
-    // layers = performCSI.getObjectList("layers");
-    // SecurityConfigObject csiv2PerformIIOPTransportLayer = null;
-    // for (int i = 0; i < layers.size(); i++)
-    // {
-    // SecurityConfigObject layer = layers.get(i);
-    // if (layer.instanceOf(CT_TransportLayer.URI, CT_TransportLayer.NAME))
-    // {
-    // csiv2PerformIIOPTransportLayer = layer;
-    // break;
-    // }
-    // }
-    //
-    // if (csiv2PerformIIOPTransportLayer != null)
-    // {
-    // SecurityConfigObject csiv2PerformTransportQOPSupported =
-    // csiv2PerformIIOPTransportLayer.getObject("supportedQOP");
-    // if
-    // (csiv2PerformTransportQOPSupported.getBoolean("enableProtection").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTransportAssocSSLTLSSupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTransportAssocSSLTLSSupported",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPSupported.getBoolean("integrity").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageIntegritySupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageIntegritySupported",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPSupported.getBoolean("confidentiality").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageConfidentialitySupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageConfidentialitySupported",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPSupported.getBoolean("establishTrustInClient").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTLClientAuthenticationSupported",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTLClientAuthenticationSupported",
-    // "false");
-    //
-    //
-    // SecurityConfigObject csiv2PerformTransportQOPRequired =
-    // csiv2PerformIIOPTransportLayer.getObject("requiredQOP");
-    //
-    // if
-    // (csiv2PerformTransportQOPRequired.getBoolean("enableProtection").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTransportAssocSSLTLSRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTransportAssocSSLTLSRequired",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPRequired.getBoolean("integrity").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageIntegrityRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageIntegrityRequired",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPRequired.getBoolean("confidentiality").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageConfidentialityRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performMessageConfidentialityRequired",
-    // "false");
-    //
-    // if
-    // (csiv2PerformTransportQOPRequired.getBoolean("establishTrustInClient").booleanValue())
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTLClientAuthenticationRequired",
-    // "true");
-    // else
-    // globalConfigProperties.setProperty("com.ibm.CSI.performTLClientAuthenticationRequired",
-    // "false");
-    //
-    // SecurityConfigObject csiv2PerformIIOPTransportSSLServerAuth =
-    // csiv2PerformIIOPTransportLayer.getObject("serverAuthentication");
-    //
-    // String sslAlias = null;
-    //
-    // if (PlatformHelperFactory.getPlatformHelper().isZOS())
-    // sslAlias =
-    // globalConfigProperties.getProperty("was.com.ibm.websphere.security.zos.csiv2.outbound.transport.sslconfig");
-    //
-    // if (sslAlias == null)
-    // sslAlias = (String)
-    // csiv2PerformIIOPTransportSSLServerAuth.getString("sslConfig");
-    //
-    // if (sslAlias != null)
-    // globalConfigProperties.setProperty("com.ibm.ssl.csi.outbound.alias",
-    // sslAlias);
-    // }
-    // }
-    //
-    // if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-    // Tr.exit(tc,"loadCSIv2SSLProperties");
-    // }
 
     /**
      * Update SSL configuration with CSIv2 specific SSL settings if endpoint is
@@ -1568,49 +1366,35 @@ public class SSLConfigManager {
      * @param socket
      * @return
      */
-    public SSLSocket setCipherListOnSocket(java.util.Properties props, javax.net.ssl.SSLSocket socket) {
+    public String[] getCipherList(java.util.Properties props, SSLSocket socket) {
         if (tc.isEntryEnabled())
-            Tr.entry(tc, "setCipherListOnSocket");
-
-        if (props == null) {
-            if (tc.isEntryEnabled())
-                Tr.exit(tc, "setCipherListOnSocket props == null");
-            return socket;
-        }
+            Tr.entry(tc, "getCipherList");
 
         String ciphers[] = null;
         String cipherString = props.getProperty(Constants.SSLPROP_ENABLED_CIPHERS);
 
-        if (socket != null) {
+        try {
 
-            try {
+            if (cipherString != null) {
 
-                if (cipherString != null) {
-
-                    ciphers = cipherString.split("\\s");
-                } else {
-                    String securityLevel = props.getProperty(Constants.SSLPROP_SECURITY_LEVEL);
-                    if (tc.isDebugEnabled())
-                        Tr.debug(tc, "securityLevel from properties is " + securityLevel);
-                    if (securityLevel == null)
-                        securityLevel = "HIGH";
-
-                    String[] supportedCiphers = socket.getEnabledCipherSuites();
-                    ciphers = com.ibm.ws.ssl.config.SSLConfigManager.getInstance().adjustSupportedCiphersToSecurityLevel(supportedCiphers, securityLevel);
-
-                }
-                if (ciphers != null) {
-                    socket.setEnabledCipherSuites(ciphers);
-                }
-
-            } catch (Exception e) {
+                ciphers = cipherString.split("\\s");
+            } else {
+                String securityLevel = props.getProperty(Constants.SSLPROP_SECURITY_LEVEL);
                 if (tc.isDebugEnabled())
-                    Tr.debug(tc, "Exception setting ciphers in SSL Socket Factory.", new Object[] { e });
+                    Tr.debug(tc, "securityLevel from properties is " + securityLevel);
+                if (securityLevel == null)
+                    securityLevel = "HIGH";
+
+                ciphers = adjustSupportedCiphersToSecurityLevel(socket.getEnabledCipherSuites(), securityLevel);
+
             }
+        } catch (Exception e) {
+            if (tc.isDebugEnabled())
+                Tr.debug(tc, "Exception setting ciphers in SSL Socket Factory.", new Object[] { e });
         }
         if (tc.isEntryEnabled())
-            Tr.exit(tc, "setCipherListOnSocket");
-        return socket;
+            Tr.exit(tc, "getCipherList");
+        return ciphers;
     }
 
     public boolean isTransportSecurityEnabled() {

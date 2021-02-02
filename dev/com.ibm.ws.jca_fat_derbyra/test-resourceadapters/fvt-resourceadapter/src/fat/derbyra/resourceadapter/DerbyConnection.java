@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017,2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -35,6 +35,7 @@ import javax.resource.ResourceException;
 import javax.resource.spi.ConnectionEvent;
 import javax.resource.spi.ConnectionManager;
 import javax.resource.spi.LazyAssociatableConnectionManager;
+import javax.resource.spi.LazyEnlistableConnectionManager;
 
 public class DerbyConnection implements Connection {
     ConnectionManager cm;
@@ -62,6 +63,9 @@ public class DerbyConnection implements Connection {
             if (mc == null && mcf.isDissociatable()) {
                 ((LazyAssociatableConnectionManager) cm).associateConnection(this, mcf, cri);
                 mc.con = mc.xacon.getConnection();
+            }
+            if (cm instanceof LazyEnlistableConnectionManager) {
+                ((LazyEnlistableConnectionManager) cm).lazyEnlist(mc);
             }
         } catch (ResourceException x) {
             throw new SQLException(x);
@@ -199,7 +203,17 @@ public class DerbyConnection implements Connection {
 
     @Override
     public boolean isClosed() throws SQLException {
-        lazyInit();
+        if (isClosed)
+            return true;
+        // Apply only the lazy associate portion of lazyInit. Avoid lazy enlistment when only isClosed is invoked.
+        try {
+            if (mc == null && mcf.isDissociatable()) {
+                ((LazyAssociatableConnectionManager) cm).associateConnection(this, mcf, cri);
+                mc.con = mc.xacon.getConnection();
+            }
+        } catch (ResourceException x) {
+            throw new SQLException(x);
+        }
         return mc == null || mc.con.isClosed();
     }
 

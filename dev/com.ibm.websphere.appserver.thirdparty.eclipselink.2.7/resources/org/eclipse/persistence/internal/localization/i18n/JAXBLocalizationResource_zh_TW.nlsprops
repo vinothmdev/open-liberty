@@ -1,9 +1,13 @@
-# IBM Confidential OCO Source Material
-# (C) COPYRIGHT International Business Machines Corp. 2014
-# The source code for this program is not published or otherwise divested
-# of its trade secrets, irrespective of what has been deposited with the
-# U.S. Copyright Office.
-# -------------------------------------------------------------------------------------------------
+###############################################################################
+# Copyright (c) 2014 IBM Corporation and others.
+# All rights reserved. This program and the accompanying materials
+# are made available under the terms of the Eclipse Public License v1.0
+# which accompanies this distribution, and is available at
+# http://www.eclipse.org/legal/epl-v10.html
+#
+# Contributors:
+#     IBM Corporation - initial API and implementation
+###############################################################################
 # # {0} description of each insert field
 # MSG_DESCRIPTIVE_NAME_CWSJX0000=CWSJX0000I: This is a message with inserts {0}
 # MSG_DESCRIPTIVE_NAME_CWSJX0000.explanation=Explanation text for the message
@@ -27,7 +31,7 @@ add_namespace_resolvers=\u6b63\u5728\u65b0\u589e\u540d\u7a31\u7a7a\u9593\u89e3\u
 
 create_descriptors=\u6b63\u5728\u5efa\u7acb\u63cf\u8ff0\u5b50
 
-create_mappings=\u6b63\u5728\u65b0\u589e\u5c0d\u6620\u81f3\u63cf\u8ff0\u5b50
+create_mappings=\u6b63\u5728\u65b0\u589e\u5c0d\u6620\u81f3\u63cf\u8ff0\u5b50 {0}
 
 error=\u932f\u8aa4\uff1a
 

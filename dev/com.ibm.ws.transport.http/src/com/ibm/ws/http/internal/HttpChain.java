@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2017 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -263,9 +263,12 @@ public class HttpChain implements ChainEventListener {
         Map<String, Object> sslOptions = (isHttps) ? owner.getSslOptions() : null;
         Map<String, Object> httpOptions = owner.getHttpOptions();
         Map<String, Object> endpointOptions = owner.getEndpointOptions();
+        Map<String, Object> remoteIpOptions = owner.getRemoteIpConfig();
+        Map<String, Object> compressionOptions = owner.getCompressionConfig();
+        Map<String, Object> samesiteOptions = owner.getSamesiteConfig();
 
-        final ActiveConfiguration newConfig = new ActiveConfiguration(isHttps, tcpOptions, sslOptions, httpOptions, endpointOptions, resolvedHostName);
-
+        final ActiveConfiguration newConfig = new ActiveConfiguration(isHttps, tcpOptions, sslOptions, httpOptions, remoteIpOptions, compressionOptions, samesiteOptions, endpointOptions, resolvedHostName);
+        
         if (newConfig.configPort < 0 || !newConfig.complete()) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                 Tr.debug(this, tc, "Stopping chain due to configuration " + newConfig);
@@ -344,6 +347,7 @@ public class HttpChain implements ChainEventListener {
                     if (newConfig.httpChanged(oldConfig))
                         removeChannel(httpName);
 
+
                     if (newConfig.endpointChanged(oldConfig))
                         removeChannel(dispatcherName);
                 }
@@ -392,6 +396,69 @@ public class HttpChain implements ChainEventListener {
                     if (owner.getProtocolVersion() != null) {
                         chanProps.put(HttpConfigConstants.PROPNAME_PROTOCOL_VERSION, owner.getProtocolVersion());
                     }
+                    if(remoteIpOptions.get("id").equals("defaultRemoteIp")){
+                        //Put the internal remoteIp set to false since the element was not configured to be used
+                        chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_IP, "false");
+                        chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_PROXIES, null);
+                        chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_IP_ACCESS_LOG, null);
+                    }
+                    else{
+                        chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_IP, "true");
+                        //Check if the remoteIp is configured to use the remoteIp in the access log or if
+                        //a custom proxy regex was provided
+                        if(remoteIpOptions.containsKey("proxies")){
+                            chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_PROXIES, remoteIpOptions.get("proxies"));
+                        }
+                        if(remoteIpOptions.containsKey("useRemoteIpInAccessLog")){
+                            chanProps.put(HttpConfigConstants.PROPNAME_REMOTE_IP_ACCESS_LOG, remoteIpOptions.get("useRemoteIpInAccessLog"));
+                        }
+                    }
+                    
+                    if(compressionOptions.get("id").equals("defaultCompression")){
+                        //Put the internal compression set to false since the element was not configured to be used
+                        chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION, "false");
+                        chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION_CONTENT_TYPES, null);
+                        chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION_PREFERRED_ALGORITHM, null);
+                    }
+
+                    else{
+                        chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION, "true");
+                        //Check if the compression is configured to use content-type filter
+                        if(compressionOptions.containsKey("types")){
+                            chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION_CONTENT_TYPES, compressionOptions.get("types"));
+                            
+                        }
+                        if(compressionOptions.containsKey("serverPreferredAlgorithm")){
+                            chanProps.put(HttpConfigConstants.PROPNAME_COMPRESSION_PREFERRED_ALGORITHM, compressionOptions.get("serverPreferredAlgorithm"));
+                        }
+                    }
+
+                    if(samesiteOptions.get("id").equals("defaultSameSite")){
+                        chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE, "false");
+                        chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_LAX, null);
+                        chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_NONE, null);
+                        chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_STRICT, null);
+                    }
+                    
+                    else{
+                        
+                        boolean enableSameSite = false;
+                        if(samesiteOptions.containsKey("lax")){
+                            enableSameSite=true;
+                            chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_LAX, samesiteOptions.get("lax"));
+                        }
+                        if(samesiteOptions.containsKey("none")){
+                            enableSameSite=true;
+                            chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_NONE, samesiteOptions.get("none"));
+                        }
+                        if(samesiteOptions.containsKey("strict")){
+                            enableSameSite=true;
+                            chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE_STRICT, samesiteOptions.get("strict"));
+                        }
+                        chanProps.put(HttpConfigConstants.PROPNAME_SAMESITE, enableSameSite);
+                    }
+
+
                     httpChannel = cfw.addChannel(httpName, cfw.lookupFactory("HTTPInboundChannel"), chanProps);
                 }
 
@@ -652,6 +719,9 @@ public class HttpChain implements ChainEventListener {
         final Map<String, Object> tcpOptions;
         final Map<String, Object> sslOptions;
         final Map<String, Object> httpOptions;
+        final Map<String, Object> remoteIp;
+        final Map<String, Object> compression;
+        final Map<String, Object> samesite;
         final Map<String, Object> endpointOptions;
 
         volatile int activePort = -1;
@@ -661,12 +731,18 @@ public class HttpChain implements ChainEventListener {
                             Map<String, Object> tcp,
                             Map<String, Object> ssl,
                             Map<String, Object> http,
+                            Map<String, Object> remoteIp,
+                            Map<String, Object> compression,
+                            Map<String, Object> samesite,
                             Map<String, Object> endpoint,
                             String resolvedHostName) {
             this.isHttps = isHttps;
             tcpOptions = tcp;
             sslOptions = ssl;
             httpOptions = http;
+            this.remoteIp = remoteIp;
+            this.compression = compression;
+            this.samesite = samesite;
             endpointOptions = endpoint;
 
             String attribute = isHttps ? "httpsPort" : "httpPort";
@@ -747,12 +823,18 @@ public class HttpChain implements ChainEventListener {
                        tcpOptions == other.tcpOptions &&
                        sslOptions == other.sslOptions &&
                        httpOptions == other.httpOptions &&
+                       remoteIp == other.remoteIp &&
+                       compression == other.compression &&
+                       samesite == other.samesite &&
                        !endpointChanged(other);
             } else {
                 return configHost.equals(other.configHost) &&
                        configPort == other.configPort &&
                        tcpOptions == other.tcpOptions &&
                        httpOptions == other.httpOptions &&
+                       remoteIp == other.remoteIp &&
+                       compression == other.compression &&
+                       samesite == other.samesite &&
                        !endpointChanged(other);
             }
         }
@@ -777,7 +859,8 @@ public class HttpChain implements ChainEventListener {
             if (other == null)
                 return true;
 
-            return httpOptions != other.httpOptions;
+            return (httpOptions != other.httpOptions) || (remoteIp != other.remoteIp) || (compression != other.compression) || (samesite != other.samesite);
+            
         }
 
         protected boolean endpointChanged(ActiveConfiguration other) {
@@ -800,6 +883,9 @@ public class HttpChain implements ChainEventListener {
                    + ",complete=" + complete()
                    + ",tcpOptions=" + System.identityHashCode(tcpOptions)
                    + ",httpOptions=" + System.identityHashCode(httpOptions)
+                   + ",remoteIp=" + System.identityHashCode(remoteIp)
+                   + ",compression=" + System.identityHashCode(compression)
+                   + ",samesite=" + System.identityHashCode(samesite)
                    + ",sslOptions=" + (isHttps ? System.identityHashCode(sslOptions) : "0")
                    + ",endpointOptions=" + endpointOptions.get(Constants.SERVICE_PID)
                    + "]";

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015, 2017 IBM Corporation and others.
+ * Copyright (c) 2015, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -25,6 +25,8 @@ import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -118,7 +120,7 @@ public class SelfExtractRun extends SelfExtract {
      * @return unique dir name
      */
     private static String createTempDirectory(String baseDir, String fileStem) {
-        Long nano = new Long(System.nanoTime());
+        Long nano = Long.valueOf(System.nanoTime());
         return baseDir + File.separator + fileStem + nano;
     }
 
@@ -145,6 +147,7 @@ public class SelfExtractRun extends SelfExtract {
         // if so, return it and done
         if (extractDirVar != null && extractDirVar.length() > 0) {
             String retVal = createIfNeeded(extractDirVar.trim());
+            extractDirPredefined = true;
             return retVal;
         } else {
 
@@ -268,8 +271,7 @@ public class SelfExtractRun extends SelfExtract {
         outputReader.start();
 
         // now setup the shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(new ShutdownHook(platformType, extractDirectory, serverName, outputReader, errorReader)));
-
+        Runtime.getRuntime().addShutdownHook(new Thread(new ShutdownHook(platformType, extractDirectory, serverName, extractDirPredefined)));
         // wait on server start process to complete, capture and pass on return code
         rc = proc.waitFor();
 
@@ -296,14 +298,17 @@ public class SelfExtractRun extends SelfExtract {
                 try {
                     String serverName = getServerName();
                     if (shouldRunInJVM(extractDirectory, serverName)) {
+                        // single jvm non-debug path
                         rc = runServerInline(extractDirectory, serverName, args);
                     } else {
+                        // double jvm debug path
                         rc = runServer(extractDirectory, serverName, args);
                     }
                 } catch (Exception e) {
                     throw new RuntimeException("Failed to run jar due to error " + e.getMessage(), e);
                 }
             }
+
             System.exit(rc);
         }
 
@@ -324,19 +329,27 @@ public class SelfExtractRun extends SelfExtract {
     private static int runServerInline(String extractDirectory,
                                        String serverName,
                                        String[] args) throws IOException, ClassNotFoundException, NoSuchMethodException, SecurityException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
+
         File serverLaunchJar = new File(extractDirectory, "wlp/bin/tools/ws-server.jar");
         JarFile jar = new JarFile(serverLaunchJar);
         String className = jar.getManifest().getMainAttributes().getValue("Main-Class");
         jar.close();
         URLClassLoader cl = new URLClassLoader(new URL[] { new URL("file:" + serverLaunchJar.getAbsolutePath()) });
 
+        // Must use the constructed URLClassLoader as the context classloader to ensure
+        // that we load Liberty's WsLogManager and other classes, when running the server in-line. This approach
+        // would be the equivalent to what happens when the server is run using "java -jar ws-server.jar"
+        setContextClassLoader(cl);
+
         Properties props = System.getProperties();
 
+        // Setting this tells us the boostrap to ignore any WLP_USER_DIR that happens to be set from the env
+        props.setProperty("wlp.ignore.user.dir.from.env", "true");
         props.setProperty("user.dir", new File(extractDirectory, "wlp" + File.separator + "usr" + File.separator + "servers" + File.separator + serverName).getAbsolutePath());
         props.setProperty("LOG_DIR",
                           extractDirectory + File.separator + "wlp" + File.separator + "usr" + File.separator + "servers" + File.separator + serverName + File.separator + "logs");
 
-        Class clazz = cl.loadClass(className);
+        Class<?> clazz = cl.loadClass(className);
         List<String> argList = new ArrayList<String>(args.length + 2);
         argList.add(serverName);
         if (args.length > 0) {
@@ -344,6 +357,9 @@ public class SelfExtractRun extends SelfExtract {
             argList.addAll(Arrays.asList(args));
         }
         Method m = clazz.getDeclaredMethod("main", new Class[] { String[].class });
+
+        // Add the shutdown hook to clean up
+        Runtime.getRuntime().addShutdownHook(new Thread(new ShutdownHook(platformType, extractDirectory, serverName, extractDirPredefined)));
 
         attachJavaAgent(extractDirectory);
 
@@ -353,6 +369,12 @@ public class SelfExtractRun extends SelfExtract {
     }
 
     private static void attachJavaAgent(String extractDir) {
+
+        if (!System.getProperty("java.specification.version").startsWith("1.")) {
+            // On Java 9+ we use a newer, more proper, mechanism for self-attach which does not require
+            // the following reflection hacks
+            return;
+        }
 
         File javaAgent = new File(extractDir, "wlp/bin/tools/ws-javaagent.jar");
         if (javaAgent.exists()) {
@@ -366,10 +388,11 @@ public class SelfExtractRun extends SelfExtract {
                 URL thisJar = SelfExtractRun.class.getProtectionDomain().getCodeSource().getLocation();
                 try {
                     URL toolsJar = new URL("file:" + f.getCanonicalPath());
+                    @SuppressWarnings("resource")
                     URLClassLoader cl = new URLClassLoader(new URL[] { thisJar, toolsJar }, null);
-                    Class clazz = cl.loadClass("wlp.lib.extract.AgentAttach");
+                    Class<?> clazz = cl.loadClass("wlp.lib.extract.AgentAttach");
                     Method m = clazz.getDeclaredMethod("attach", new Class[] { String.class });
-                    Object result = m.invoke(null, new String[] { javaAgent.getAbsolutePath() });
+                    Object result = m.invoke(null, javaAgent.getAbsolutePath());
                     if (result != null) {
                         err("UNABLE_TO_ATTACH_AGENT", result);
                     }
@@ -437,15 +460,7 @@ public class SelfExtractRun extends SelfExtract {
 
         // Only run in 1 JVM if running on a Java SDK
         if (result) {
-            String javaHome = System.getProperty("java.home");
-            File f = new File(javaHome, "lib/tools.jar");
-            boolean foundToolsJar = f.exists();
-            if (!foundToolsJar) {
-                f = new File(javaHome, "../lib/tools.jar");
-                foundToolsJar = f.exists();
-            }
-
-            result &= foundToolsJar;
+            result &= isAttachAvailable();
         } else if (outputMessage) {
             out("RUN_IN_CHILD_JVM_IBM_AGENT_ISSUE");
             outputMessage = false;
@@ -456,5 +471,36 @@ public class SelfExtractRun extends SelfExtract {
         }
 
         return result;
+    }
+
+    private static boolean isAttachAvailable() {
+        // For JDK 8 look for $JAVA_HOME/tools.jar
+        if (System.getProperty("java.specification.version").startsWith("1.")) {
+            String javaHome = System.getProperty("java.home");
+            if (new File(javaHome, "lib/tools.jar").exists())
+                return true;
+            if (new File(javaHome, "../lib/tools.jar").exists())
+                return true;
+            return false;
+        }
+        // For JDK 9+ we just check if we can load one of the attach classes
+        else {
+            try {
+                Class.forName("com.sun.tools.attach.VirtualMachine");
+                return true;
+            } catch (ClassNotFoundException e) {
+                return false;
+            }
+        }
+    }
+
+    private static void setContextClassLoader(final ClassLoader newLoader) {
+        AccessController.doPrivileged(new PrivilegedAction<Void>() {
+            @Override
+            public Void run() {
+                Thread.currentThread().setContextClassLoader(newLoader);
+                return null;
+            }
+        });
     }
 }

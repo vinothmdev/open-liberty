@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2013 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,6 +12,7 @@
 package com.ibm.ws.anno.util.internal;
 
 import java.text.MessageFormat;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -21,6 +22,7 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.anno.service.internal.AnnotationServiceImpl_Logging;
 import com.ibm.wsspi.anno.util.Util_BidirectionalMap;
+import com.ibm.wsspi.anno.util.Util_Factory;
 import com.ibm.wsspi.anno.util.Util_InternMap;
 
 public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
@@ -30,24 +32,24 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     protected final String hashText;
 
     @Override
+    @Trivial
     public String getHashText() {
         return hashText;
     }
 
     //
 
-    protected UtilImpl_BidirectionalMap(UtilImpl_Factory factory,
+    protected UtilImpl_BidirectionalMap(Util_Factory factory,
                                         String holderTag, String heldTag,
-                                        UtilImpl_InternMap holderInternMap,
-                                        UtilImpl_InternMap heldInternMap) {
-
+                                        Util_InternMap holderInternMap,
+                                        Util_InternMap heldInternMap) {
         this(factory, holderTag, heldTag, holderInternMap, heldInternMap, Util_BidirectionalMap.IS_ENABLED);
     }
 
-    protected UtilImpl_BidirectionalMap(UtilImpl_Factory factory,
+    protected UtilImpl_BidirectionalMap(Util_Factory factory,
                                         String holderTag, String heldTag,
-                                        UtilImpl_InternMap holderInternMap,
-                                        UtilImpl_InternMap heldInternMap,
+                                        Util_InternMap holderInternMap,
+                                        Util_InternMap heldInternMap,
                                         boolean isEnabled) {
         super();
 
@@ -83,10 +85,11 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
 
     //
 
-    protected final UtilImpl_Factory factory;
+    protected final Util_Factory factory;
 
     @Override
-    public UtilImpl_Factory getFactory() {
+    @Trivial
+    public Util_Factory getFactory() {
         return factory;
     }
 
@@ -95,6 +98,7 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     protected final String holderTag;
 
     @Override
+    @Trivial
     public String getHolderTag() {
         return holderTag;
     }
@@ -102,16 +106,17 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     protected String heldTag;
 
     @Override
+    @Trivial
     public String getHeldTag() {
         return heldTag;
     }
 
     //
 
-    protected final UtilImpl_InternMap holderInternMap;
+    protected final Util_InternMap holderInternMap;
 
     @Override
-    public UtilImpl_InternMap getHolderInternMap() {
+    public Util_InternMap getHolderInternMap() {
         return holderInternMap;
     }
 
@@ -124,10 +129,10 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
         return holderInternMap.intern(name, doForce);
     }
 
-    protected UtilImpl_InternMap heldInternMap;
+    protected Util_InternMap heldInternMap;
 
     @Override
-    public UtilImpl_InternMap getHeldInternMap() {
+    public Util_InternMap getHeldInternMap() {
         return heldInternMap;
     }
 
@@ -159,8 +164,9 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     protected Map<String, Set<String>> i_holderToHeldMap;
 
     @Override
+    @Trivial
     public Set<String> getHolderSet() {
-        return (getIsEnabled() ? i_holderToHeldMap.keySet() : UtilImpl_EmptyStringSet.INSTANCE);
+        return (getIsEnabled() ? i_holderToHeldMap.keySet() : Collections.<String>emptySet());
     }
 
     //
@@ -168,8 +174,9 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     protected Map<String, Set<String>> i_heldToHoldersMap;
 
     @Override
+    @Trivial
     public Set<String> getHeldSet() {
-        return (getIsEnabled() ? i_heldToHoldersMap.keySet() : UtilImpl_EmptyStringSet.INSTANCE);
+        return (getIsEnabled() ? i_heldToHoldersMap.keySet() : Collections.<String>emptySet());
     }
 
     //
@@ -212,17 +219,17 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     @Override
     public Set<String> selectHeldOf(String holderName) {
         if (!getIsEnabled()) {
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         String i_holderName = internHolder(holderName, Util_InternMap.DO_NOT_FORCE);
         if (i_holderName == null) {
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         Set<String> i_held = i_holderToHeldMap.get(i_holderName);
         if (i_held == null) { // See the note (*), above.
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         return i_held;
@@ -231,19 +238,19 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     @Override
     public Set<String> selectHoldersOf(String heldName) {
         if (!getIsEnabled()) {
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         String i_heldName = internHeld(heldName, Util_InternMap.DO_NOT_FORCE);
 
         if (i_heldName == null) {
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         Set<String> i_holders = i_heldToHoldersMap.get(i_heldName);
 
         if (i_holders == null) { // See the note (*), above.
-            return UtilImpl_EmptyStringSet.INSTANCE;
+            return Collections.emptySet();
         }
 
         return i_holders;
@@ -313,7 +320,6 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     }
 
     protected Set<String> i_recordHeld(String i_heldName) {
-
         Set<String> i_holders = i_heldToHoldersMap.get(i_heldName);
         if (i_holders == null) {
             i_holders = factory.createIdentityStringSet();
@@ -337,6 +343,7 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     //
 
     @Override
+    @Trivial
     public void logState() {
         TraceComponent stateLogger = AnnotationServiceImpl_Logging.stateLogger;
 
@@ -347,20 +354,20 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
 
     @Override
     @Trivial
-    public void log(TraceComponent tc) {
+    public void log(TraceComponent useTc) {
 
-        Tr.debug(tc, MessageFormat.format("BEGIN STATE [ {0} ]", getHashText()));
+        Tr.debug(useTc, MessageFormat.format("BEGIN STATE [ {0} ]", getHashText()));
 
-        Tr.debug(tc, MessageFormat.format("  Is Enabled [ {0} ]", Boolean.valueOf(getIsEnabled())));
-        Tr.debug(tc, MessageFormat.format("  Holder Tag [ {0} ]", getHolderTag()));
-        Tr.debug(tc, MessageFormat.format("  Held Tag   [ {0} ]", getHeldTag()));
+        Tr.debug(useTc, MessageFormat.format("  Is Enabled [ {0} ]", Boolean.valueOf(getIsEnabled())));
+        Tr.debug(useTc, MessageFormat.format("  Holder Tag [ {0} ]", getHolderTag()));
+        Tr.debug(useTc, MessageFormat.format("  Held Tag   [ {0} ]", getHeldTag()));
 
-        logHolderMap(tc);
-        logHeldMap(tc);
+        logHolderMap(useTc);
+        logHeldMap(useTc);
 
-        logInternMaps(tc);
+        logInternMaps(useTc);
 
-        Tr.debug(tc, MessageFormat.format("END STATE [ {0} ]", getHashText()));
+        Tr.debug(useTc, MessageFormat.format("END STATE [ {0} ]", getHashText()));
     }
 
     @Trivial
@@ -384,23 +391,23 @@ public class UtilImpl_BidirectionalMap implements Util_BidirectionalMap {
     }
 
     @Trivial
-    public void logHeldMap(TraceComponent tc) {
+    public void logHeldMap(TraceComponent useTc) {
 
         if (!getIsEnabled()) {
-            Tr.debug(tc, "Held-to-holder Map: NULL (disabled)");
+            Tr.debug(useTc, "Held-to-holder Map: NULL (disabled)");
             return;
         }
 
-        Tr.debug(tc, "Held-to-holder Map: BEGIN");
+        Tr.debug(useTc, "Held-to-holder Map: BEGIN");
 
         for (Map.Entry<String, Set<String>> i_heldEntry : i_heldToHoldersMap.entrySet()) {
             String i_heldName = i_heldEntry.getKey();
             Set<String> i_holders = i_heldEntry.getValue();
 
-            Tr.debug(tc, MessageFormat.format("  Held [ {0} ] Holders [ {1} ]", i_heldName, i_holders));
+            Tr.debug(useTc, MessageFormat.format("  Held [ {0} ] Holders [ {1} ]", i_heldName, i_holders));
         }
 
-        Tr.debug(tc, "Held-to-holder Map: END");
+        Tr.debug(useTc, "Held-to-holder Map: END");
     }
 
     @Trivial

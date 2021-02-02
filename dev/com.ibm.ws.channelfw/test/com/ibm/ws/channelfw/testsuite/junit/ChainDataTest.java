@@ -18,12 +18,9 @@ import static org.junit.Assert.fail;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-
-import test.common.SharedOutputManager;
+import org.junit.rules.TestRule;
 
 import com.ibm.websphere.channelfw.ChainData;
 import com.ibm.websphere.channelfw.ChainGroupData;
@@ -53,44 +50,15 @@ import com.ibm.wsspi.channelfw.exception.InvalidChainNameException;
 import com.ibm.wsspi.channelfw.exception.InvalidChannelFactoryException;
 import com.ibm.wsspi.channelfw.exception.InvalidChannelNameException;
 
+import test.common.SharedOutputManager;
+
 /**
  * Chain runtime configuration tests.
  */
 public class ChainDataTest {
-    private static SharedOutputManager outputMgr;
-
-    /**
-     * Capture stdout/stderr output to the manager.
-     * 
-     * @throws Exception
-     */
-    @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-        outputMgr = SharedOutputManager.getInstance();
-        outputMgr.captureStreams();
-    }
-
-    /**
-     * Final teardown work when class is exiting.
-     * 
-     * @throws Exception
-     */
-    @AfterClass
-    public static void tearDownAfterClass() throws Exception {
-        // Make stdout and stderr "normal"
-        outputMgr.restoreStreams();
-    }
-
-    /**
-     * Individual teardown after each test.
-     * 
-     * @throws Exception
-     */
-    @After
-    public void tearDown() throws Exception {
-        // Clear the output generated after each method invocation
-        outputMgr.resetStreams();
-    }
+    private static SharedOutputManager outputMgr = SharedOutputManager.getInstance();
+    @Rule
+    public TestRule managerRule = outputMgr;
 
     // Helper method to create valid tcp props to start a chain with TCP in it.
     protected Map<Object, Object> getTcpProps(String portProp, String defaultPort) {
@@ -151,8 +119,7 @@ public class ChainDataTest {
                 }
 
                 try {
-                    chainData =
-                                    framework.addChain("invalid3", FlowType.INBOUND, new String[] { "tcp", "unknown" });
+                    chainData = framework.addChain("invalid3", FlowType.INBOUND, new String[] { "tcp", "unknown" });
                     fail("Incorrectly allowed unknown channel");
                 } catch (InvalidChannelNameException e) {
                     // expected failure
@@ -349,8 +316,7 @@ public class ChainDataTest {
         }
     }
 
-    private void setupUpdateTest(ChannelFrameworkImpl framework)
-                    throws ChannelException, ChainException, ChainGroupException {
+    private void setupUpdateTest(ChannelFrameworkImpl framework) throws ChannelException, ChainException, ChainGroupException {
         framework.clear();
         framework.addChannel("tcp", TCPChannelFactory.class, getTcpProps("setupUpdateTest.tcpPort", "15002"), 45);
         framework.addChannel("proto", ProtocolDummyFactory.class, null, 33);

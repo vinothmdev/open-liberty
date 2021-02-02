@@ -24,6 +24,11 @@ Export-Package: \
 	com.ibm.ws.security.credentials.wscred;provide:=true,\
 	com.ibm.ws.security.jwtsso.token.proxy
 
+Import-Package: \
+    !com.ibm.ws.security.credentials.wscred, \
+    !com.ibm.ws.security.jwtsso.token.proxy, \
+    ${defaultPackageImport}
+
 Private-Package: \
   com.ibm.ws.security.credentials.internal.*
 
@@ -37,7 +42,7 @@ Service-Component: \
     optional:='credentialProvider,basicAuthCredentialProvider'; \
     multiple:='credentialProvider'; \
     dynamic:='credentialProvider,basicAuthCredentialProvider'; \
-    properties:="service.vendor=IBM", \
+    properties:="service.vendor=IBM"
 
 -dsannotations=com.ibm.ws.security.credentials.wscred.BasicAuthCredentialProvider, \
   com.ibm.ws.security.jwtsso.token.proxy.JwtSSOTokenHelper

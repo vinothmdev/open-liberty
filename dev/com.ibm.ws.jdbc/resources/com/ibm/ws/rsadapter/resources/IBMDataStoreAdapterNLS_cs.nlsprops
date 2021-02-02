@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2001, 2016 IBM Corporation and others.
+# Copyright (c) 2001, 2019 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -271,6 +271,22 @@ DSRA4011.tran.none.iso.switch.unsupported=DSRA4011E: Ovlada\u010d JDBC nepodporu
 DSRA4011.tran.none.iso.switch.unsupported.explanation=Specifikace JDBC nepodporuje p\u0159ep\u00edn\u00e1n\u00ed na \u00farove\u0148 izolace TRANSACTION_NONE.
 DSRA4011.tran.none.iso.switch.unsupported.useraction=Zabra\u0148te p\u0159ep\u00edn\u00e1n\u00ed na \u00farove\u0148 izolace TRANSACTION_NONE.
 
+DSRA4012.ignored.datasource.config.used=DSRA4012I: P\u0159i pou\u017eit\u00ed Oracle UCP jsou ignorov\u00e1ny n\u00e1sleduj\u00edc\u00ed vlastnosti zdroje dat: {0}.
+DSRA4012.ignored.datasource.config.used.explanation=Uveden\u00e9 vlastnosti zdroje dat nejsou platn\u00e9 p\u0159i pou\u017eit\u00ed Oracle UPC.
+DSRA4012.ignored.datasource.config.used.useraction=Odeberte vlastnosti zdroje dat, kter\u00e9 nejsou platn\u00e9, a m\u00edsto toho pou\u017eijte ekvivalentn\u00ed funk\u010dnost Oracle UCP, pokud je k dispozici.
+
+DSRA4013.ignored.connection.manager.config.used=DSRA4013I: Vlastnosti spr\u00e1vce p\u0159ipojen\u00ed Connection Manager nejsou platn\u00e9. P\u0159i pou\u017eit\u00ed Oracle UCP jsou platn\u00e9 n\u00e1sleduj\u00edc\u00ed vlastnosti spr\u00e1vce p\u0159ipojen\u00ed Connection Manager: {0}.
+DSRA4013.ignored.connection.manager.config.used.explanation=P\u0159i pou\u017eit\u00ed Oracle UCP jsou platn\u00e9 pouze uveden\u00e9 vlastnosti spr\u00e1vce p\u0159ipojen\u00ed Connection Manager.
+DSRA4013.ignored.connection.manager.config.used.useraction=Odeberte vlastnosti spr\u00e1vce p\u0159ipojen\u00ed Connection Manager, kter\u00e9 nejsou platn\u00e9, a m\u00edsto toho pou\u017eijte ekvivalentn\u00ed funk\u010dnost Oracle UCP, pokud je k dispozici.
+
+DSRA4014.URL.for.Driver.missing=DSRA4014E: Typ java.sql.Driver byl ur\u010den pro zdroj dat {0}, ale nebyl ur\u010den \u017e\u00e1dn\u00fd atribut URL.
+DSRA4014.URL.for.Driver.missing.explanation=Adresa URL p\u0159ipojen\u00ed mus\u00ed b\u00fdt ur\u010dena pro zdroj dat, kter\u00fd je typu java.sql.Driver.
+DSRA4014.URL.for.Driver.missing.useraction=P\u0159idejte platnou adresu URL do zdroje dat.
+
+DSRA4015.no.ucp.connection.pool.datasource=DSRA4015E: Zdroj dat {0} byl nakonfigurov\u00e1n s typem {1}, kter\u00fd nen\u00ed podporov\u00e1n serverem Oracle UCP. M\u00edsto toho pou\u017eijte typ XADataSource nebo typ DataSource.
+DSRA4015.no.ucp.connection.pool.datasource.explanation=Zdroj dat byl nakonfigurov\u00e1n s typem ConnectionPoolDataSource nebo typem ovlada\u010de, kter\u00fd nen\u00ed implementov\u00e1n ovlada\u010dem Oracle UCP.
+DSRA4015.no.ucp.connection.pool.datasource.useraction=Aktualizujte zdroj dat tak, aby pou\u017e\u00edval bu\u010f typ XADataSource, nebo typ DataSource.
+
 # ----------------------------------------------------------------------------
 # 
 # Using 7000-7599 for DataStore Helper exception messages and warnings
@@ -349,6 +365,20 @@ PROP_SET_ERROR.useraction=Ov\u011b\u0159te, \u017ee je zadan\u00e1 hodnota pro p
 # 8050-8055 deleted
 # 8060 deleted
 # 8065 deleted
+     
+# 8066E
+# {0}         The invalid attribute value
+# {1}         The allowed attribute values
+# Do not translate: identifyException, as
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET=DSRA8066E: Byla zad\u00e1na neplatn\u00e1 hodnota ''{0}'' pro atribut ''as'' u prvku identifyException. Povolen\u00e9 hodnoty jsou:{1}
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.explanation=Pro prvek konfigurace identificException byla zad\u00e1na neplatn\u00e1 hodnota.
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.useraction=Aktualizujte konfiguraci tak, aby ur\u010dovala jednu z povolen\u00fdch hodnot.
+
+# 8067E
+# Do not translate: errorCode, sqlState, identifyException
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE=DSRA8067E: V prvku identifyException mus\u00ed b\u00fdt uveden alespo\u0148 jeden z atribut\u016f 'errorCode' nebo 'sqlState'.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.explanation=Mus\u00ed b\u00fdt zad\u00e1n jeden z atribut\u016f errorCode nebo sqlState.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.useraction=Aktualizujte konfiguraci tak, aby ur\u010dovala alespo\u0148 jeden z atribut\u016f errorCode nebo sqlState v prvku identifyException.
 
 # 8100E      JAVAX_CONN_ERR
 # 
@@ -534,6 +564,13 @@ NO_WRAPPED_OBJECT.useraction=Ov\u011b\u0159te spr\u00e1vn\u00e9 ur\u010den\u00ed
 
 # 9123 deleted
 
+# 9124       NOT_AN_INTERFACE
+#
+# {0}        The Class that was specified to unwrap to
+NOT_AN_INTERFACE=DSRA9124E: Nelze rozbalit objekt do {0}, proto\u017ee {0} nen\u00ed t\u0159\u00edda rozhran\u00ed.
+NOT_AN_INTERFACE.explanation=Metoda rozbalen\u00ed povoluje pouze rozbalen\u00ed do t\u0159\u00eddy rozhran\u00ed.
+NOT_AN_INTERFACE.useraction=Prove\u010fte rozbalen\u00ed do t\u0159\u00eddy, kter\u00e1 je rozhran\u00edm nam\u00edsto konkr\u00e9tn\u00ed t\u0159\u00eddy.
+
 # 9130E      OPERATION_NOT_PERMITTED
 # 
 # {0}        The operation.
@@ -624,6 +661,10 @@ KERBEROS_NOT_SUPPORTED_WARNING.explanation= Aplika\u010dn\u00ed server nepodporu
 KERBEROS_NOT_SUPPORTED_WARNING.useraction= Zaka\u017ete ov\u011b\u0159ov\u00e1n\u00ed Kerberos nebo pou\u017eijte datab\u00e1zi DB2 typu back-end s ovlada\u010dem DB2 Universal JDBC Driver.
 
 # 9544-9548 deleted
+
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED=DSRA9549E: Pou\u017eit\u00ed sady IBM Java 8 SDK s datab\u00e1z\u00ed Oracle nen\u00ed podporov\u00e1no. Ovlada\u010d Oracle JDBC podporuje ov\u011b\u0159en\u00ed Kerberos pomoc\u00ed v\u00fdchoz\u00edch rozhran\u00ed API zabezpe\u010den\u00ed, kter\u00e1 jsou k dispozici v sad\u011b OpenJDK, OpenJ9 nebo v jin\u00fdch podobn\u00fdch sad\u00e1ch SDK.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.explanation=Pou\u017eit\u00ed sady IBM Java 8 SDK s datab\u00e1z\u00ed Oracle nen\u00ed podporov\u00e1no. Ovlada\u010d Oracle JDBC podporuje ov\u011b\u0159en\u00ed Kerberos pomoc\u00ed v\u00fdchoz\u00edch rozhran\u00ed API zabezpe\u010den\u00ed, kter\u00e1 jsou k dispozici v sad\u011b OpenJDK, OpenJ9 nebo v jin\u00fdch podobn\u00fdch sad\u00e1ch SDK.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.useraction=Zaka\u017ete ov\u011b\u0159en\u00ed Kerberos pro zdroj dat Oracle nebo se p\u0159epn\u011bte na jinou sadu Java SDK krom\u011b sady IBM Java 8 SDK.
 
 # 9600-9603 deleted 
 # 9900 deleted

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -18,6 +18,7 @@ import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.EnterpriseArchive;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
+import org.junit.Assert;
 
 import com.ibm.websphere.simplicity.ShrinkHelper;
 
@@ -29,6 +30,8 @@ import componenttest.topology.impl.LibertyServer;
 public class WCApplicationHelper {
 
     private static final Logger LOG = Logger.getLogger(WCApplicationHelper.class.getName());
+
+    public static final int APP_STARTUP_TIMEOUT = 120 * 1000; // 120 seconds
 
     /*
      * Helper method to create a war and add it to the dropins directory
@@ -109,6 +112,8 @@ public class WCApplicationHelper {
             for (String packageName : packageNames) {
                 if (packageName.contains(".war.")) {
                     war.addPackage(packageName);
+                } else {
+                    LOG.info("addEarToServer : package not added as .war. is not in packageName = " + packageName);
                 }
             }
         }
@@ -135,6 +140,37 @@ public class WCApplicationHelper {
         } else {
             ShrinkHelper.exportToServer(server, dir, war);
         }
+    }
 
+    /**
+     * Wait for APP_STARTUP_TIMEOUT (120s) for an application's start message (CWWKZ0001I)
+     *
+     * @param String        appName
+     * @param String        testName
+     * @param LibertyServer server
+     */
+    public static void waitForAppStart(String appName, String className, LibertyServer server) {
+        LOG.info("Setup : wait for the app startup complete (CWWKZ0001I) message for " + appName);
+
+        String appStarted = server.waitForStringInLog("CWWKZ0001I.* " + appName, APP_STARTUP_TIMEOUT);
+        if (appStarted == null) {
+            Assert.fail(className + ": application " + appName + " failed to start within " + APP_STARTUP_TIMEOUT + "ms");
+        }
+    }
+
+    /**
+     * Wait for APP_STARTUP_TIMEOUT (120s) for an application's failed to start message (CWWKZ0012I)
+     *
+     * @param String        appName
+     * @param String        className
+     * @param LibertyServer server
+     */
+    public static void waitForAppFailStart(String appName, String className, LibertyServer server) {
+        LOG.info("Setup : wait for the app startup fail (CWWKZ0012I) message for " + appName);
+
+        String appStarted = server.waitForStringInLog("CWWKZ0012I.* " + appName, APP_STARTUP_TIMEOUT);
+        if (appStarted == null) {
+            Assert.fail(className + ": application " + appName + " failed to fail within " + APP_STARTUP_TIMEOUT + "ms");
+        }
     }
 }

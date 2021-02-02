@@ -68,8 +68,7 @@ final class SharedClassCacheHook implements ClassLoaderHook {
     public byte[] loadClass(URL path, String name) {
         if (findSharedClassMethod != null) {
             try {
-                byte[] classBytes = (byte[]) findSharedClassMethod.invoke(sharedClassURLHelper, path, name);
-                return classBytes;
+                return (byte[]) findSharedClassMethod.invoke(sharedClassURLHelper, path, name);
             } catch (Exception e) {
                 // reflection failed.
             }

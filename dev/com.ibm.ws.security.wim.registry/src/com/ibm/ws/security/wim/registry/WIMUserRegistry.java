@@ -59,14 +59,10 @@ interface WIMUserRegistryConfig {}
  * I'd think the registry adapter should go in core and be one component.
  */
 //TODO policy REQUIRE when we count this....
-@Component(configurationPolicy = ConfigurationPolicy.IGNORE, property = { "service.vendor=IBM", "com.ibm.ws.security.registry.type=WIM" })
+@Component(configurationPolicy = ConfigurationPolicy.IGNORE, immediate = true, property = { "service.vendor=IBM", "com.ibm.ws.security.registry.type=WIM" })
 public class WIMUserRegistry implements FederationRegistry, UserRegistry {
 
     private static final TraceComponent tc = Tr.register(WIMUserRegistry.class);
-
-    public static final String CFG_KEY_REALM = "realm";
-    protected static final String DEFAULT_REALM_NAME = "WIMRegistry";
-    private String realm = DEFAULT_REALM_NAME;
 
     @Reference
     ConfigManager configManager;
@@ -105,23 +101,7 @@ public class WIMUserRegistry implements FederationRegistry, UserRegistry {
     protected void activate() {
 
         Map<String, Object> props = configManager.getConfigurationProperties();
-        processConfig(props);
         initializeUtils(props);
-    }
-
-    private void processConfig(Map<String, Object> urProps) {
-        if (urProps == null) {
-            throw new NullPointerException("initialize does not support null Properties");
-        }
-
-        if (urProps.containsKey(CFG_KEY_REALM))
-            realm = ((String[]) urProps.get(CFG_KEY_REALM))[0];
-/*
- * realm = (String) urProps.get(CFG_KEY_REALM);
- * if (getRealm() != null) {
- * realm = getRealm();
- * }
- */
     }
 
     /*
@@ -212,24 +192,8 @@ public class WIMUserRegistry implements FederationRegistry, UserRegistry {
 
     /** {@inheritDoc} */
     @Override
-    @FFDCIgnore(Exception.class)
     public String getRealm() {
-        String returnValue = getCoreConfiguration().getDefaultRealmName();
-
-        // New:: Get the primary realm or realm defined directly in the repository.
-        if (returnValue == null && loginBridge != null)
-            try {
-                returnValue = loginBridge.getRealmName();
-            } catch (Exception e) {
-            }
-        if (returnValue == null)
-            returnValue = realm;
-
-        return returnValue;
-    }
-
-    private ConfigManager getCoreConfiguration() {
-        return configManager;
+        return vmmService.getRealmName();
     }
 
     /** {@inheritDoc} */

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -15,9 +15,9 @@ import javax.xml.bind.annotation.XmlTransient;
 
 /**
  * Defines configuration attributes of the HTTP Session Manager
- * 
+ *
  * @author Tim Burns
- * 
+ *
  */
 public class HttpSession extends ConfigElement {
 
@@ -32,9 +32,10 @@ public class HttpSession extends ConfigElement {
     private String cookiePath;
     private Boolean cookieSecure;
     private Boolean cookieHttpOnly;
+    private String cookieSameSite;
     private Integer maxInMemorySessionCount;
     private Boolean allowOverflow;
-    private Integer invalidationTimeout;
+    private String invalidationTimeout;
     private Boolean securityIntegrationEnabled;
     private Integer idLength;
     private Boolean useContextRootAsCookiePath;
@@ -70,7 +71,7 @@ public class HttpSession extends ConfigElement {
     /**
      * @return the number of minutes before sessions become eligible for invalidation
      */
-    public Integer getInvalidationTimeout() {
+    public String getInvalidationTimeout() {
         return this.invalidationTimeout;
     }
 
@@ -78,7 +79,7 @@ public class HttpSession extends ConfigElement {
      * @param invalidationTimeout the number of minutes before sessions become eligible for invalidation
      */
     @XmlAttribute
-    public void setInvalidationTimeout(Integer invalidationTimeout) {
+    public void setInvalidationTimeout(String invalidationTimeout) {
         this.invalidationTimeout = invalidationTimeout;
     }
 
@@ -325,6 +326,15 @@ public class HttpSession extends ConfigElement {
     @XmlAttribute
     public void setCookieHttpOnly(Boolean cookieHttpOnly) {
         this.cookieHttpOnly = cookieHttpOnly;
+    }
+
+    public String getCookieSameSite() {
+        return this.cookieSameSite;
+    }
+
+    @XmlAttribute
+    public void setCookieSameSite(String cookieSameSite) {
+        this.cookieSameSite = cookieSameSite;
     }
 
     public Boolean getAllowOverflow() {

@@ -13,6 +13,7 @@ package web.jaxrstest;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -31,6 +32,7 @@ import java.util.function.BiFunction;
 import java.util.logging.Logger;
 
 import javax.annotation.Resource;
+import javax.enterprise.concurrent.ManagedScheduledExecutorService;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import javax.servlet.annotation.WebServlet;
@@ -57,7 +59,7 @@ public class JAXRSExecutorTestServlet extends FATServlet {
     private static final long TIMEOUT_NS = TimeUnit.MINUTES.toNanos(1);
 
     @Resource(name = "java:comp/env/concurrent/scheduledExecutorRef", lookup = "concurrent/scheduledExecutor")
-    private ScheduledExecutorService scheduledExecutor;
+    private ManagedScheduledExecutorService scheduledExecutor;
 
     // Use JAX-RS client submit with an invocation callback, where the client builder is supplied with
     // a ManagedExecutorService. Verify that the callback runs with access to the java:comp namespace
@@ -148,8 +150,13 @@ public class JAXRSExecutorTestServlet extends FATServlet {
         assertEquals("test456", results[0]);
 
         String executionThreadName = (String) results[1];
-        // assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-")); // TODO still fails, runs on ForkJoinPool thread
-
+        // On JDK 8, it will not use the Liberty executor now.  Depending on ForkJoin pool
+        // parallelism settings it could be the ForkJoin pool or it could spawn a Thread.
+        if (System.getProperty("java.specification.version").startsWith("1.")) {
+            assertFalse(resultString, executionThreadName.startsWith("Default Executor-thread-"));
+        } else {
+            assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-"));
+        }
         assertTrue(resultString, results[2] instanceof NamingException);
     }
 
@@ -159,6 +166,7 @@ public class JAXRSExecutorTestServlet extends FATServlet {
     // have access to the java:comp namespace of the servlet.
     @Test
     public void testCompletionStageRxInvokerSynchronousFunctionSwitchManagedExecutors(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        final String m = "testCompletionStageRxInvokerSynchronousFunctionSwitchManagedExecutors";
         String uri = "http://" + request.getServerName() + ":" + request.getServerPort() + "/jaxrsapp/testapp/test/info";
 
         // Confirm the lookup works from current thread
@@ -170,7 +178,10 @@ public class JAXRSExecutorTestServlet extends FATServlet {
                 results.add(result);
             if (error != null)
                 results.add(error);
-            results.add(Thread.currentThread().getName());
+            String threadName = Thread.currentThread().getName();
+            results.add(threadName);
+            _log.info(m + " currentThread=" + threadName);
+            new Exception("handleAsync is running on " + threadName).printStackTrace(System.out);
             try {
                 results.add(InitialContext.doLookup("java:comp/env/concurrent/scheduledExecutorRef"));
             } catch (NamingException x) {
@@ -198,10 +209,9 @@ public class JAXRSExecutorTestServlet extends FATServlet {
         assertEquals("test123", results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS));
         assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result.toString().startsWith("Default Executor-thread-"));
         assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result instanceof ScheduledExecutorService);
-        assertEquals("test123", results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS));
-        // TODO enable the following lines once JAX-RS honors the default executorService and runs tasks on it instead of using ForkJoinPool
-        // assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result.toString().startsWith("Default Executor-thread-"));
-        // assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result instanceof ScheduledExecutorService);
+        assertEquals("test123", results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS));        
+        assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result.toString().startsWith("Default Executor-thread-"));
+        assertTrue((result = results.poll(TIMEOUT_NS, TimeUnit.NANOSECONDS)).toString(), result instanceof ScheduledExecutorService);
     }
 
     // Use JAX-RS client rx invoker, where the client builder is supplied with a ManagedExecutorService.
@@ -209,6 +219,7 @@ public class JAXRSExecutorTestServlet extends FATServlet {
     // the java:comp namespace of the servlet because it is running on a ManagedExecutorService thread.
     @Test
     public void testCompletionStageRxInvokerAsynchronousFunctionViaManagedExecutor(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        final String m = "testCompletionStageRxInvokerAsynchronousFunctionViaManagedExecutor";
         String uri = "http://" + request.getServerName() + ":" + request.getServerPort() + "/jaxrsapp/testapp/test/post";
 
         assertNotNull(new InitialContext().lookup("java:comp/env/concurrent/scheduledExecutorRef"));
@@ -228,13 +239,13 @@ public class JAXRSExecutorTestServlet extends FATServlet {
 
         Object[] results = (Object[]) stage.toCompletableFuture().get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
         String resultString = Arrays.toString(results);
+        _log.info(m + " resultString=" + resultString);
 
         assertEquals("test456", results[0]);
 
         String executionThreadName = (String) results[1];
-        //assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-")); // TODO still fails, runs on ForkJoinPool thread
-
-        //assertTrue(resultString, results[2] instanceof ScheduledExecutorService); // TODO
+        assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-")); 
+        assertTrue(resultString, results[2] instanceof ScheduledExecutorService); 
     }
 
     // Use JAX-RS client rx invoker, where the client builder is not supplied with any ExecutorService.
@@ -270,7 +281,7 @@ public class JAXRSExecutorTestServlet extends FATServlet {
         assertEquals("test123", results[0]);
 
         String executionThreadName = (String) results[1];
-        // TODO still fails (runs on ForkJoinPool thread) : assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-"));
+        assertTrue(resultString, executionThreadName.startsWith("Default Executor-thread-"));
 
         if (submitterThreadName.equals(executionThreadName)) {
             System.out.println("*** Unable to properly complete test because CompletionStage ran on submitter thread.");
@@ -419,3 +430,4 @@ public class JAXRSExecutorTestServlet extends FATServlet {
         client.close();
     }
 }
+

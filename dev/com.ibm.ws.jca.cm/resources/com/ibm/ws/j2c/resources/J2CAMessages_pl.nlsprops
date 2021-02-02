@@ -112,7 +112,7 @@ NO_VALID_TRANSACTION_CONTEXT_J2CA0040.explanation=Wyst\u0105pi\u0142 b\u0142\u01
 NO_VALID_TRANSACTION_CONTEXT_J2CA0040.useraction=CMSG0002
 
 # --------------------------------
-POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: Po\u0142\u0105czenie nie by\u0142o dost\u0119pne podczas wywo\u0142ywania metody {0} dla zasobu {1}.
+POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: Po\u0142\u0105czenie nie by\u0142o dost\u0119pne podczas wywo\u0142ywania metody {0} dla zasobu {1}. Przekroczono limit czasu oczekiwania ({2} ms), liczba pozosta\u0142ych \u017c\u0105da\u0144 oczekiwania: {3}, bie\u017c\u0105ca \u0142\u0105czna liczba u\u017cywanych po\u0142\u0105cze\u0144: {4}.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.explanation=Przekroczono limit czasu oczekiwania na po\u0142\u0105czenie. Zosta\u0142 utworzony wyj\u0105tek ConnectionWaitTimeoutException.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.useraction=Skonfiguruj ponownie pul\u0119 po\u0142\u0105cze\u0144. Aby unikn\u0105\u0107 tego b\u0142\u0119du, zwi\u0119ksz maksymaln\u0105 liczb\u0119 po\u0142\u0105cze\u0144 lub wyd\u0142u\u017c czas oczekiwania na po\u0142\u0105czenie.
 
@@ -320,6 +320,11 @@ DUPLICATE_CONNECTOR_PROPERTY_J2CA0308.useraction=Podano niestandardow\u0105 w\u0
 POOL_MANAGER_NOT_FOUND_J2CA0695=J2CA0695E: Nie mo\u017cna znale\u017a\u0107 g\u0142\u00f3wnego mened\u017cera puli podczas prze\u0142\u0105czania awaryjnego dla zasobu o nazwie JNDI {0}.
 POOL_MANAGER_NOT_FOUND_J2CA0695.explanation=Wyst\u0105pi\u0142 wewn\u0119trzny b\u0142\u0105d podczas prze\u0142\u0105czania awaryjnego.
 POOL_MANAGER_NOT_FOUND_J2CA0695.useraction=CMSG0002
+
+# ---------------------------------
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W=J2CA0695W: W \u017c\u0105daniu po\u0142\u0105czenia dla zasobu XA {0} u\u017cyto uwierzytelniania SPNEGO, ale nie skonfigurowano aliasu danych uwierzytelniania odtwarzania. Zas\u00f3b XA nie mo\u017ce uczestniczy\u0107 w zautomatyzowanym odtwarzaniu XE bez skonfigurowanego aliasu danych uwierzytelniania odtwarzania.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.explanation=Odtwarzanie XA jest zautomatyzowanym procesem wykonywanym w tle, ale uwierzytelnienie SPNEGO wymaga r\u0119cznego wprowadzenia danych przez u\u017cytkownika. Dlatego uwierzytelniania SPNEGO nie mo\u017cna u\u017cywa\u0107 do zautomatyzowanego odtwarzania XA.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.useraction=Skonfiguruj alias danych uwierzytelniania odtwarzania w zasobie XA.
 
 # ---------------------------------
 FREEPOOL_GETFREECONNECTION_ERROR_J2CA1002=J2CA1002E: Z wolnej puli pobrano niepoprawny obiekt MCWrapper {0} dla zasobu {1}.

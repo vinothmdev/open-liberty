@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2017 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -30,7 +30,9 @@ import com.ibm.ws.kernel.boot.internal.BootstrapConstants;
 import com.ibm.ws.kernel.boot.internal.FileShareLockProcessStatusImpl;
 import com.ibm.ws.kernel.boot.internal.PSProcessStatusImpl;
 import com.ibm.ws.kernel.boot.internal.ProcessStatus;
+import com.ibm.ws.kernel.boot.internal.ProcessStatus.State;
 import com.ibm.ws.kernel.boot.internal.ServerLock;
+import com.ibm.ws.kernel.productinfo.ProductInfo;
 
 /**
  * The ProcessControlHelper is the central location for implementing commands
@@ -139,7 +141,8 @@ public class ProcessControlHelper {
 
         for (int i = 0; i < BootstrapConstants.MAX_POLL_ATTEMPTS; i++) {
             try {
-                if (!ps.isPossiblyRunning()) {
+                State processRunning = ps.isPossiblyRunning();
+                if ((processRunning == State.NO) || (processRunning == State.UNDETERMINED)) {
                     return ReturnCode.OK;
                 }
 
@@ -247,6 +250,8 @@ public class ProcessControlHelper {
             rc = ReturnCode.ERROR_SERVER_START;
         }
 
+        displayWarningIfBeta();
+
         if (rc == ReturnCode.OK) {
             if (pid == null) {
                 System.out.println(MessageFormat.format(BootstrapConstants.messages.getString("info.serverStarted"), serverName));
@@ -261,10 +266,30 @@ public class ProcessControlHelper {
             }
             rc = ReturnCode.SERVER_UNKNOWN_STATUS;
         } else {
+            rc = ReturnCode.ERROR_SERVER_START;
             System.out.println(MessageFormat.format(BootstrapConstants.messages.getString("info.serverStartException"), serverName));
         }
 
         return rc;
+    }
+
+    /**
+     * Display a warning for each product that is early access ( determined by properties files
+     * in the lib/versions directory, with property com.ibm.websphere.productEdition=EARLY_ACCESS ).
+     */
+    private void displayWarningIfBeta() {
+
+        try {
+            final Map<String, ProductInfo> productInfos = ProductInfo.getAllProductInfo();
+            for (ProductInfo info : productInfos.values()) {
+                if (info.isBeta()) {
+                    System.out.println(MessageFormat.format(BootstrapConstants.messages.getString("warning.earlyRelease"),
+                                                            info.getName()));
+                }
+            }
+        } catch (Exception e) {
+            //FFDC and move on ... assume not early access
+        }
     }
 
     private void parseJavaDumpInclude(Set<JavaDumpAction> javaDumpActions) {

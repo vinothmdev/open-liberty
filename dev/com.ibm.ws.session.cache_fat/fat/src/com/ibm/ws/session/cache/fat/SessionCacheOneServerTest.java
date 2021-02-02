@@ -27,8 +27,6 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import com.ibm.websphere.simplicity.log.Log;
-
 import componenttest.annotation.Server;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.topology.impl.LibertyServer;
@@ -42,18 +40,21 @@ public class SessionCacheOneServerTest extends FATServletClient {
 
     public static SessionCacheApp app = null;
 
-    public static final ExecutorService executor = Executors.newFixedThreadPool(12);
+    public static ExecutorService executor;
 
     @BeforeClass
     public static void setUp() throws Exception {
+        executor = Executors.newFixedThreadPool(12);
         app = new SessionCacheApp(server, true, "session.cache.web", "session.cache.web.listener1", "session.cache.web.listener2");
 
-        String hazelcastConfigFile = "hazelcast-localhost-only.xml";
+        //String hazelcastConfigFile = "hazelcast-localhost-only.xml";
 
-        if (FATSuite.isMulticastDisabled()) {
-            Log.info(SessionCacheOneServerTest.class, "setUp", "Disabling multicast in Hazelcast config.");
-            hazelcastConfigFile = "hazelcast-localhost-only-multicastDisabled.xml";
-        }
+//        if (FATSuite.isMulticastDisabled()) {
+//            Log.info(SessionCacheOneServerTest.class, "setUp", "Disabling multicast in Hazelcast config.");
+//            hazelcastConfigFile = "hazelcast-localhost-only-multicastDisabled.xml";
+//        }
+
+        String hazelcastConfigFile = "hazelcast-localhost-only-multicastDisabled.xml";
 
         String configLocation = new File(server.getUserDir() + "/shared/resources/hazelcast/" + hazelcastConfigFile).getAbsolutePath();
         server.setJvmOptions(Arrays.asList("-Dhazelcast.group.name=" + UUID.randomUUID(),

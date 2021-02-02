@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2018 IBM Corporation and others.
+ * Copyright (c) 2004, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
+import java.net.InetAddress;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -33,6 +34,7 @@ import com.ibm.ws.http.channel.h2internal.H2HttpInboundLinkWrap;
 import com.ibm.ws.http.channel.h2internal.H2StreamProcessor;
 import com.ibm.ws.http.channel.h2internal.exceptions.CompressionException;
 import com.ibm.ws.http.channel.h2internal.exceptions.Http2Exception;
+import com.ibm.ws.http.channel.h2internal.exceptions.ProtocolException;
 import com.ibm.ws.http.channel.h2internal.frames.FramePPHeaders;
 import com.ibm.ws.http.channel.h2internal.frames.FramePushPromise;
 import com.ibm.ws.http.channel.h2internal.hpack.H2HeaderField;
@@ -43,10 +45,12 @@ import com.ibm.ws.http.channel.h2internal.hpack.HpackConstants.LiteralIndexType;
 import com.ibm.ws.http.channel.internal.inbound.HttpInboundLink;
 import com.ibm.ws.http.channel.internal.inbound.HttpInboundServiceContextImpl;
 import com.ibm.ws.http.channel.internal.outbound.HttpOutboundServiceContextImpl;
+import com.ibm.ws.http.dispatcher.internal.HttpDispatcher;
 import com.ibm.ws.http.internal.GenericEnumWrap;
 import com.ibm.wsspi.bytebuffer.WsByteBuffer;
 import com.ibm.wsspi.genericbnf.BNFHeaders;
 import com.ibm.wsspi.genericbnf.HeaderField;
+import com.ibm.wsspi.genericbnf.HeaderKeys;
 import com.ibm.wsspi.genericbnf.HeaderStorage;
 import com.ibm.wsspi.genericbnf.exception.MalformedMessageException;
 import com.ibm.wsspi.genericbnf.exception.MessageSentException;
@@ -110,6 +114,8 @@ public class HttpRequestMessageImpl extends HttpBaseMessageImpl implements HttpR
     private transient int iHdrPort = NOT_TESTED;
     /** Map of the query name/value pieces */
     private transient Map<String, String[]> queryParams = null;
+    /** Marked true if this object was populated from a serialized stream */
+    private transient boolean deserialized = false;
 
     /**
      * Default constructor with no service context.
@@ -275,6 +281,7 @@ public class HttpRequestMessageImpl extends HttpBaseMessageImpl implements HttpR
         this.sHdrHost = null;
         this.iUrlPort = HeaderStorage.NOTSET;
         this.iHdrPort = NOT_TESTED;
+        this.deserialized = false;
     }
 
     /*
@@ -312,13 +319,15 @@ public class HttpRequestMessageImpl extends HttpBaseMessageImpl implements HttpR
         for (Entry<String, String> entry : pseudoHeaders.entrySet()) {
             H2HeaderField header = new H2HeaderField(entry.getKey(), entry.getValue());
             if (!isValidPseudoHeader(header)) {
-                throw new CompressionException("Invalid pseudo-header for decompression context: " + header.toString());
+                ProtocolException pe = new ProtocolException("Invalid pseudo-header for decompression context: " + header.toString());
+                pe.setConnectionError(false); // mark this as a stream error so we'll generate an RST_STREAM
+                throw pe;
             }
         }
 
         //Authority is not required to be present, check if it is.
         if (pseudoHeaders.containsKey(HpackConstants.METHOD)) {
-            this.setMethod(pseudoHeaders.get(HpackConstants.METHOD));
+            this.setMethod(MethodValues.find(pseudoHeaders.get(HpackConstants.METHOD)));
         }
         if (pseudoHeaders.containsKey(HpackConstants.PATH)) {
             this.setRequestURI(pseudoHeaders.get(HpackConstants.PATH));
@@ -1752,6 +1761,7 @@ public class HttpRequestMessageImpl extends HttpBaseMessageImpl implements HttpR
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "De-serializing into: " + this);
         }
+        this.deserialized = true;
         super.readExternal(input);
         deserializeMethod(input);
         deserializeScheme(input);
@@ -2143,4 +2153,47 @@ public class HttpRequestMessageImpl extends HttpBaseMessageImpl implements HttpR
 
     }
 
+    /*
+     * @see com.ibm.ws.genericbnf.internal.BNFHeadersImpl#filterAdd(com.ibm.wsspi.
+     * genericbnf.HeaderKeys, byte[])
+     */
+    @Override
+    protected boolean filterAdd(HeaderKeys key, byte[] value) {
+        boolean rc = super.filterAdd(key, value);
+
+        if (HttpHeaderKeys.isWasPrivateHeader(key.getName()) && !this.deserialized) {
+            rc = isPrivateHeaderTrusted(key);
+        }
+        return rc;
+    }
+
+    /**
+     * Check the to see if the current remote host is allowed to send a private header
+     *
+     * @see HttpDispatcher.usePrivateHeaders()
+     *
+     * @param key WAS private header
+     * @return true if the remote host is allowed to send key
+     */
+    private boolean isPrivateHeaderTrusted(HeaderKeys key) {
+        HttpServiceContextImpl hisc = getServiceContext();
+        InetAddress remoteAddr = null;
+        if (hisc != null) {
+            remoteAddr = hisc.getRemoteAddr();
+        }
+
+        boolean trusted = HttpDispatcher.usePrivateHeaders(remoteAddr, key.getName());
+
+        if (!trusted) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                if (remoteAddr != null) {
+                    Tr.debug(tc, "isPrivateHeaderTrusted: " + key.getName() + " is not trusted for host " + remoteAddr.getHostAddress());
+                } else {
+                    Tr.debug(tc, "isPrivateHeaderTrusted: " + key.getName() + " is not trusted for this host");
+                }
+            }
+            return false;
+        }
+        return true;
+    }
 }

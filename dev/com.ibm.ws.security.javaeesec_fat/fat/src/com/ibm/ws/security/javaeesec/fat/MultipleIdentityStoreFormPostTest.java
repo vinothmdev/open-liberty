@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -36,14 +36,12 @@ import com.ibm.ws.security.javaeesec.fat_helper.LocalLdapServer;
 import com.ibm.ws.security.javaeesec.fat_helper.WCApplicationHelper;
 
 import componenttest.annotation.AllowedFFDC;
-import componenttest.annotation.MinimumJavaLevel;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.impl.LibertyServerFactory;
 
-@MinimumJavaLevel(javaLevel = 8, runSyntheticTest = false)
 @RunWith(FATRunner.class)
 @Mode(TestMode.FULL)
 public class MultipleIdentityStoreFormPostTest extends JavaEESecTestBase {
@@ -98,9 +96,11 @@ public class MultipleIdentityStoreFormPostTest extends JavaEESecTestBase {
         ldapServer.start();
 
         WCApplicationHelper.addWarToServerApps(myServer, WAR_REDIRECT_NAME, true, WAR_RESOURCE_LOCATION, JAR_NAME, false, "web.jar.base", "web.war.servlets.form.post.redirect",
-                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.custom.grouponly");
+                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.custom.grouponly",
+                                               "web.war.identitystores.ldap");
         WCApplicationHelper.addWarToServerApps(myServer, WAR_FORWARD_NAME, true, WAR_RESOURCE_LOCATION, JAR_NAME, false, "web.jar.base", "web.war.servlets.form.post.forward",
-                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.custom.grouponly");
+                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.custom.grouponly",
+                                               "web.war.identitystores.ldap");
 
         myServer.setServerConfigurationFile(XML_NAME);
         myServer.startServer(true);
@@ -111,9 +111,12 @@ public class MultipleIdentityStoreFormPostTest extends JavaEESecTestBase {
 
     @AfterClass
     public static void tearDown() throws Exception {
-        myServer.stopServer();
-        if (ldapServer != null) {
-            ldapServer.stop();
+        try {
+            myServer.stopServer();
+        } finally {
+            if (ldapServer != null) {
+                ldapServer.stop();
+            }
         }
     }
 

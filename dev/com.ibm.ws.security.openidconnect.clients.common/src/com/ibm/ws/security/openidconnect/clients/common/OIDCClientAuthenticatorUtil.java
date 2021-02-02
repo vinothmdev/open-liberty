@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -18,10 +18,12 @@ import java.net.URLEncoder;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Hashtable;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
+import javax.net.ssl.SSLSocketFactory;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -33,6 +35,7 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.common.internal.encoder.Base64Coder;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.security.common.web.JavaScriptUtils;
 import com.ibm.ws.security.openidconnect.client.jose4j.util.Jose4jUtil;
 import com.ibm.ws.security.openidconnect.common.Constants;
 import com.ibm.ws.webcontainer.security.AuthResult;
@@ -48,6 +51,7 @@ public class OIDCClientAuthenticatorUtil {
     public static final TraceComponent tc = Tr.register(OIDCClientAuthenticatorUtil.class, TraceConstants.TRACE_GROUP, TraceConstants.MESSAGE_BUNDLE);
     SSLSupport sslSupport = null;
     private Jose4jUtil jose4jUtil = null;
+    private static int badStateCount = 0;
     public static final String[] OIDC_COOKIES = { ClientConstants.WAS_OIDC_STATE_KEY, ClientConstants.WAS_REQ_URL_OIDC,
             ClientConstants.WAS_OIDC_CODE, ClientConstants.WAS_OIDC_NONCE };
 
@@ -68,6 +72,7 @@ public class OIDCClientAuthenticatorUtil {
      */
     public ProviderAuthenticationResult handleRedirectToServer(HttpServletRequest req, HttpServletResponse res, ConvergedClientConfig clientConfig) {
         String authorizationEndpoint = clientConfig.getAuthorizationEndpointUrl();
+
         if (!checkHttpsRequirement(clientConfig, authorizationEndpoint)) {
             Tr.error(tc, "OIDC_CLIENT_URL_PROTOCOL_NOT_HTTPS", authorizationEndpoint);
             return new ProviderAuthenticationResult(AuthResult.SEND_401, HttpServletResponse.SC_UNAUTHORIZED);
@@ -115,7 +120,7 @@ public class OIDCClientAuthenticatorUtil {
                 return new ProviderAuthenticationResult(AuthResult.SEND_401, HttpServletResponse.SC_UNAUTHORIZED);
             }
 
-            authzEndPointUrlWithQuery = buildAuthorizationUrlWithQuery((OidcClientRequest) req.getAttribute(ClientConstants.ATTRIB_OIDC_CLIENT_REQUEST), state, clientConfig, redirect_url, acr_values);
+            authzEndPointUrlWithQuery = buildAuthorizationUrlWithQuery(req, (OidcClientRequest) req.getAttribute(ClientConstants.ATTRIB_OIDC_CLIENT_REQUEST), state, clientConfig, redirect_url, acr_values);
 
             // preserve post param.
             WebAppSecurityConfig webAppSecConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
@@ -162,6 +167,9 @@ public class OIDCClientAuthenticatorUtil {
             ConvergedClientConfig clientConfig) {
         ProviderAuthenticationResult oidcResult = null;
 
+        if (!isEndpointValid(clientConfig)) {
+            return new ProviderAuthenticationResult(AuthResult.SEND_401, HttpServletResponse.SC_UNAUTHORIZED);
+        }
         boolean isImplicit = false;
         if (Constants.IMPLICIT.equals(clientConfig.getGrantType())) {
             isImplicit = true;
@@ -206,18 +214,55 @@ public class OIDCClientAuthenticatorUtil {
             }
         }
 
-        if (responseState == null) {
+        // auth code flow responseState might be invalid if they sat at OP login panel for > authenticationTimeLimit,
+        // or otherwise messed up the state.  Rather than 401'ing them when we try to process the auth code,
+        // detect it here and just send them back to server to try again.
+        boolean stateValid = true;
+        if (responseState != null) {
+            stateValid = verifyState(req, res, responseState, clientConfig);
+            if (tc.isDebugEnabled()) {
+                Tr.debug(tc, "Early check of state returns " + stateValid);
+            }
+            // if we get a bunch of quasi-consecutive bad states, we might be stuck in an endless redirection loop.  Bail out.
+            badStateCount = stateValid ? 0 : badStateCount++;
+            if (badStateCount > 5) {
+                stateValid = true;
+                badStateCount = 0;
+                if (tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Got too many bad states, set to true and let the flow fail");
+                }
+            }
+        }
+
+        if (responseState == null || !stateValid) {
+            if (tc.isDebugEnabled()) {
+                if (!stateValid) {
+                    Tr.debug(tc, "*** redirect to server because state is not valid");
+                }
+                if (responseState == null) {
+                    Tr.debug(tc, "*** redirect to server because responseState is null");
+                }
+            }
             oidcResult = handleRedirectToServer(req, res, clientConfig); // first time through, we go here.
         } else if (isImplicit) {
             oidcResult = handleImplicitFlowTokens(req, res, responseState, clientConfig, reqParameters);
 
         } else {
-
-            // confirm the code and go get the tokens if it's good.
-
             AuthorizationCodeHandler authzCodeHandler = new AuthorizationCodeHandler(sslSupport);
 
-            oidcResult = authzCodeHandler.handleAuthorizationCode(req, res, authzCode, responseState, clientConfig);
+            if (authzCodeHandler.isAuthCodeReused(authzCode)) {
+                // somehow a previously used code has been re-submitted, along
+                // with valid state query param and state cookie. Rather than having the OP
+                // reject the request due to code re-use and fail the entire flow,
+                // just go get a new code.
+                if (tc.isDebugEnabled()) {
+                    Tr.debug(tc, "*** redirect to server because authcode is reused");
+                }
+                oidcResult = handleRedirectToServer(req, res, clientConfig);
+            } else {
+                // confirm the code and go get the tokens if it's good.
+                oidcResult = authzCodeHandler.handleAuthorizationCode(req, res, authzCode, responseState, clientConfig);
+            }
         }
         if (oidcResult.getStatus() != AuthResult.REDIRECT_TO_PROVIDER) {
             // restore post param.
@@ -242,12 +287,24 @@ public class OIDCClientAuthenticatorUtil {
         ProviderAuthenticationResult oidcResult = null;
         oidcResult = verifyResponseState(req, res, responseState, clientConfig);
         if (oidcResult != null) {
-            return oidcResult;
+            return oidcResult; //401
         }
 
         oidcClientRequest.setTokenType(OidcClientRequest.TYPE_ID_TOKEN);
 
         oidcResult = jose4jUtil.createResultWithJose4J(responseState, reqParameters, clientConfig, oidcClientRequest);
+
+        // get userinfo if configured and available.
+        if (clientConfig.getUserInfoEndpointUrl() != null) {
+            boolean needHttps = clientConfig.getUserInfoEndpointUrl().toLowerCase().startsWith("https");
+            SSLSocketFactory sslSocketFactory = null;
+            try {
+                sslSocketFactory = new OidcClientHttpUtil().getSSLSocketFactory(clientConfig, sslSupport, false, needHttps);
+            } catch (com.ibm.websphere.ssl.SSLException e) {
+                //ffdc
+            }
+            new UserInfoHelper(clientConfig).getUserInfoIfPossible(oidcResult, reqParameters, sslSocketFactory);
+        }
 
         return oidcResult;
     }
@@ -263,6 +320,17 @@ public class OIDCClientAuthenticatorUtil {
             }
         }
         return metHttpsRequirement;
+    }
+
+    public static boolean isEndpointValid(ConvergedClientConfig clientConfig) {
+        String url = null;
+        if (clientConfig.getGrantType() == Constants.IMPLICIT) {
+            url = clientConfig.getTokenEndpointUrl();
+        } else {
+            url = clientConfig.getAuthorizationEndpointUrl();
+        }
+        return url != null;
+
     }
 
     //todo: avoid call on each request.
@@ -312,7 +380,7 @@ public class OIDCClientAuthenticatorUtil {
             } catch (Exception e) {
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                     Tr.debug(tc, "the value of redirectToRPHostAndPort might not valid. Please verify that the format is <protocol>://<host>:<port> " + redirectToRPHostAndPort
-                            + "\n" + e.getMessage());
+                            + "\n" + e);
                 }
             }
         }
@@ -328,7 +396,7 @@ public class OIDCClientAuthenticatorUtil {
         return false;
     }
 
-    String buildAuthorizationUrlWithQuery(OidcClientRequest oidcClientRequest, String state, ConvergedClientConfig clientConfig, String redirect_url, String acr_values) throws UnsupportedEncodingException {
+    String buildAuthorizationUrlWithQuery(HttpServletRequest req, OidcClientRequest oidcClientRequest, String state, ConvergedClientConfig clientConfig, String redirect_url, String acr_values) throws UnsupportedEncodingException {
         String strResponse_type = Constants.RESPONSE_TYPE_CODE; // default is asking for "authorization code
         boolean isImplicit = false;
         if (Constants.IMPLICIT.equals(clientConfig.getGrantType())) {
@@ -376,8 +444,11 @@ public class OIDCClientAuthenticatorUtil {
                 query += resources;
             }
         }
-        // look for custom params to send to the authorization ep
+        // look for custom params in the configuration to send to the authorization ep
         query = handleCustomParams(clientConfig, query);
+
+        // check and see if we have any additional params to forward from the request
+        query = addForwardLoginParamsToQuery(clientConfig, req, query);
 
         // in case the AuthorizationEndpoint already has set up its own parameters
         String s = clientConfig.getAuthorizationEndpointUrl();
@@ -386,6 +457,27 @@ public class OIDCClientAuthenticatorUtil {
             queryMark = "&";
         }
         return s + queryMark + query;
+    }
+
+    String addForwardLoginParamsToQuery(ConvergedClientConfig clientConfig, HttpServletRequest req, String query) {
+        List<String> forwardAuthzParams = clientConfig.getForwardLoginParameter();
+        if (forwardAuthzParams == null || forwardAuthzParams.isEmpty()) {
+            return query;
+        }
+        for (String entry : forwardAuthzParams) {
+            if (entry != null) {
+                String value = req.getParameter(entry);
+                if (value != null) {
+                    try {
+                        query = String.format("%s&%s=%s", query, URLEncoder.encode(entry, ClientConstants.CHARSET), URLEncoder.encode(value, ClientConstants.CHARSET));
+                    } catch (UnsupportedEncodingException e) {
+                        // Do nothing - UTF-8 encoding will be supported
+                    }
+                }
+
+            }
+        }
+        return query;
     }
 
     /**
@@ -502,12 +594,9 @@ public class OIDCClientAuthenticatorUtil {
                 .append("var loc=window.location.href;")
                 .append("document.cookie=\"").append(cookieName).append("=\"").append("+loc+").append("\";" + strDomain + " path=/;");
 
-        WebAppSecurityConfig webAppSecurityConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
-        if (webAppSecurityConfig != null) {
-            if (webAppSecurityConfig.getSSORequiresSSL()) {
-                sb.append(" secure;");
-            }
-        }
+        JavaScriptUtils jsUtils = new JavaScriptUtils();
+        String cookieProps = jsUtils.createHtmlCookiePropertiesString(jsUtils.getWebAppSecurityConfigCookieProperties());
+        sb.append(cookieProps);
         sb.append("\"</script>");
 
         sb.append("<script type=\"text/javascript\" language=\"javascript\">")
@@ -640,7 +729,7 @@ public class OIDCClientAuthenticatorUtil {
      * @param clientId
      *            TODO
      * @param oidcResult
-     * @return
+     * @return null if ok, otherwise log error and set 401.
      */
     public ProviderAuthenticationResult verifyResponseState(HttpServletRequest req, HttpServletResponse res,
             String responseState, ConvergedClientConfig clientConfig) {
@@ -668,6 +757,9 @@ public class OIDCClientAuthenticatorUtil {
     public Boolean verifyState(HttpServletRequest req, HttpServletResponse res,
             String responseState, ConvergedClientConfig clientConfig) {
         if (responseState.length() < OidcUtil.STATEVALUE_LENGTH) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "*** verifyState returns false because length is wrong");
+            }
             return false; // the state does not even match the length, the verification failed
         }
         long clockSkewMillSeconds = clientConfig.getClockSkewInSeconds() * 1000;
@@ -695,15 +787,19 @@ public class OIDCClientAuthenticatorUtil {
                 if (difference >= clockSkewMillSeconds) {
                     if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                         Tr.debug(tc, "error current: " + lDate + "  ran at:" + lNumber);
+                        Tr.debug(tc, "verifyState returns check against clockSkew: " + (difference < clockSkewMillSeconds));
                     }
                 }
+
                 return difference < clockSkewMillSeconds;
             } else {
                 if (difference >= allowHandleTimeMillSeconds) {
                     if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                         Tr.debug(tc, "error current: " + lDate + "  ran at:" + lNumber);
+                        Tr.debug(tc, "verifyState returns check against allowHandleTimeMilliseconds: " + (difference < allowHandleTimeMillSeconds));
                     }
                 }
+
                 return difference < allowHandleTimeMillSeconds;
             }
         }

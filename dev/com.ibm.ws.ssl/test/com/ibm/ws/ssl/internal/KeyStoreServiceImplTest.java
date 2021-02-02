@@ -771,4 +771,34 @@ public class KeyStoreServiceImplTest {
 
         keyStoreService.addCertificateToKeyStore(keyStoreName, alias, cert);
     }
+
+    @Test
+    public void testKeyStoreCount() {
+        mock.checking(new Expectations() {
+            {
+                allowing(ksMgr).getKeyStoreCount();
+                will(returnValue(45));
+            }
+        });
+
+        assertTrue("count was:" + keyStoreService.getKeyStoreCount(), keyStoreService.getKeyStoreCount() == 45);
+    }
+
+    /**
+     * Test method for {@link com.ibm.ws.ssl.internal.KeyStoreServiceImpl#getKeyStore(java.lang.String)}.
+     */
+    @Test
+    public void getKeyStore_success() throws Exception {
+        final String keyStoreName = "validKS";
+
+        mock.checking(new Expectations() {
+            {
+                one(ksMgr).getJavaKeyStore(keyStoreName);
+                will(returnValue(ks));
+            }
+        });
+
+        assertEquals("FAIL: did not get expected keyStore",
+                     ks, keyStoreService.getKeyStore(keyStoreName));
+    }
 }

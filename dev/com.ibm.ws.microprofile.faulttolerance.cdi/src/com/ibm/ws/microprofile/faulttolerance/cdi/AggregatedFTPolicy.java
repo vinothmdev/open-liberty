@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,8 +12,9 @@ package com.ibm.ws.microprofile.faulttolerance.cdi;
 
 import java.lang.reflect.Method;
 
-import org.eclipse.microprofile.faulttolerance.ExecutionContext;
+import javax.enterprise.inject.Instance;
 
+import com.ibm.ws.microprofile.faulttolerance.spi.AsyncRequestContextController;
 import com.ibm.ws.microprofile.faulttolerance.spi.BulkheadPolicy;
 import com.ibm.ws.microprofile.faulttolerance.spi.CircuitBreakerPolicy;
 import com.ibm.ws.microprofile.faulttolerance.spi.Executor;
@@ -25,7 +26,13 @@ import com.ibm.ws.microprofile.faulttolerance.spi.RetryPolicy;
 import com.ibm.ws.microprofile.faulttolerance.spi.TimeoutPolicy;
 
 /**
- *
+ * Holds all of the policies for a single method and creates an executor from them.
+ * <p>
+ * This class stores all of the fault tolerance policies ( {@link RetryPolicy}, {@link CircuitBreakerPolicy} etc.) for a method and is responsible for creating an executor for
+ * them.
+ * <p>
+ * An {@link AggregatedFTPolicy} instance will only create a single executor. Subsequent calls to {@link #getExecutor()} will return the same executor, resulting in a 1-1 mapping
+ * between objects of this class an {@link Executor} objects.
  */
 public class AggregatedFTPolicy {
 
@@ -37,6 +44,7 @@ public class AggregatedFTPolicy {
     private TimeoutPolicy timeout;
     private FallbackPolicy fallbackPolicy;
     private Executor<?> executor;
+    private Instance<AsyncRequestContextController> rcInstance;
 
     /**
      * @return the method this policy will be applied to
@@ -45,9 +53,6 @@ public class AggregatedFTPolicy {
         this.method = method;
     }
 
-    /**
-     * @param asynchronous
-     */
     public void setAsynchronousResultWrapper(Class<?> asyncResultWrapper) {
         this.asyncResultWrapper = asyncResultWrapper;
     }
@@ -59,23 +64,14 @@ public class AggregatedFTPolicy {
         this.timeout = timeout;
     }
 
-    /**
-     * @param retryPolicy
-     */
     public void setRetryPolicy(RetryPolicy retryPolicy) {
         this.retryPolicy = retryPolicy;
     }
 
-    /**
-     * @param circuitBreakerPolicy
-     */
     public void setCircuitBreakerPolicy(CircuitBreakerPolicy circuitBreakerPolicy) {
         this.circuitBreakerPolicy = circuitBreakerPolicy;
     }
 
-    /**
-     * @param bulkheadPolicy
-     */
     public void setBulkheadPolicy(BulkheadPolicy bulkheadPolicy) {
         this.bulkheadPolicy = bulkheadPolicy;
     }
@@ -87,37 +83,25 @@ public class AggregatedFTPolicy {
         return method;
     }
 
-    /**
-     * @return
-     */
     public boolean isAsynchronous() {
         return asyncResultWrapper != null;
     }
 
-    /**
-     * @return
-     */
     public BulkheadPolicy getBulkheadPolicy() {
         return bulkheadPolicy;
     }
 
-    /**
-     * @return
-     */
     public RetryPolicy getRetryPolicy() {
         return retryPolicy;
     }
 
     /**
-     * @return the timeoutMillis
+     * @return timeoutMillis
      */
     public TimeoutPolicy getTimeoutPolicy() {
         return timeout;
     }
 
-    /**
-     * @return the circuitBreakerPolicy
-     */
     public CircuitBreakerPolicy getCircuitBreakerPolicy() {
         return circuitBreakerPolicy;
     }
@@ -130,14 +114,27 @@ public class AggregatedFTPolicy {
         return this.fallbackPolicy;
     }
 
+    public void setRequestContextInstance(Instance<AsyncRequestContextController> rcInstance) {
+        this.rcInstance = rcInstance;
+    }
+
     /**
-     * @return
+     * Get an executor for this set of policies, creating one if needed.
+     * <p>
+     * On the first call, this method will build an {@link Executor} for the policies set. Subsequent calls will return the same executor.
+     *
+     * @param rcInstance an instance of the request context controller
+     * @return the {@code Executor} created previously if there is one, or a newly created {@code Executor}
      */
     @SuppressWarnings("unchecked")
     public Executor<Object> getExecutor() {
         synchronized (this) {
             if (this.executor == null) {
-                ExecutorBuilder<ExecutionContext, ?> builder = newBuilder();
+                ExecutorBuilder<?> builder = newBuilder();
+
+                if (!rcInstance.isUnsatisfied() && !rcInstance.isAmbiguous()) {
+                    builder.setRequestContextController(rcInstance.get());
+                }
 
                 if (isAsynchronous()) {
                     this.executor = builder.buildAsync(asyncResultWrapper);
@@ -149,13 +146,13 @@ public class AggregatedFTPolicy {
         }
     }
 
-    private ExecutorBuilder<ExecutionContext, ?> newBuilder() {
-        ExecutorBuilder<ExecutionContext, ?> builder = FaultToleranceProvider.newExecutionBuilder();
+    private ExecutorBuilder<?> newBuilder() {
+        ExecutorBuilder<?> builder = FaultToleranceProvider.newExecutionBuilder();
         builder = updateBuilder(builder);
         return builder;
     }
 
-    private <R> ExecutorBuilder<ExecutionContext, R> updateBuilder(ExecutorBuilder<ExecutionContext, R> builder) {
+    private <R> ExecutorBuilder<R> updateBuilder(ExecutorBuilder<R> builder) {
         TimeoutPolicy timeoutPolicy = getTimeoutPolicy();
         CircuitBreakerPolicy circuitBreakerPolicy = getCircuitBreakerPolicy();
         RetryPolicy retryPolicy = getRetryPolicy();
@@ -179,12 +176,12 @@ public class AggregatedFTPolicy {
         }
 
         builder.setMetricRecorder(FaultToleranceCDIComponent.getMetricProvider().getMetricRecorder(method,
-                                                                                        retryPolicy,
-                                                                                        circuitBreakerPolicy,
-                                                                                        timeoutPolicy,
-                                                                                        bulkheadPolicy,
-                                                                                        fallbackPolicy,
-                                                                                        isAsynchronous() ? AsyncType.ASYNC : AsyncType.SYNC));
+                                                                                                   retryPolicy,
+                                                                                                   circuitBreakerPolicy,
+                                                                                                   timeoutPolicy,
+                                                                                                   bulkheadPolicy,
+                                                                                                   fallbackPolicy,
+                                                                                                   isAsynchronous() ? AsyncType.ASYNC : AsyncType.SYNC));
 
         return builder;
     }

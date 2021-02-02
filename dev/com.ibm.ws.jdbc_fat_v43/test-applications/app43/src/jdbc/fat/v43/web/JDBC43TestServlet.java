@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,12 +12,15 @@ package jdbc.fat.v43.web;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.security.AccessController;
+import java.security.PrivilegedExceptionAction;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.ConnectionBuilder;
@@ -27,11 +30,18 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
 import java.sql.ShardingKey;
 import java.sql.ShardingKeyBuilder;
 import java.sql.Statement;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -70,6 +80,8 @@ public class JDBC43TestServlet extends FATServlet {
      */
     private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(90);
 
+    private final static Map<String, CompletableFuture<?>> completionStages = new HashMap<>();
+
     @Resource
     DataSource defaultDataSource;
 
@@ -102,6 +114,9 @@ public class JDBC43TestServlet extends FATServlet {
 
     @Resource(lookup = "jdbc/poolOf1", shareable = false)
     DataSource unsharablePool1DataSource;
+
+    @Resource(lookup = "jdbc/poolOf2", shareable = false) // HandleList is enabled on the connection manager for this data source
+    DataSource unsharablePool2DataSource;
 
     @Resource(lookup = "jdbc/xa", shareable = false)
     DataSource unsharableXADataSource;
@@ -146,6 +161,14 @@ public class JDBC43TestServlet extends FATServlet {
     }
 
     /**
+     * Provides data sources to the HandleListTestServlet, which lacks access to resource injection due to SingleThreadModel.
+     */
+    public void populateDataSources() {
+        HandleListTestServlet.unsharablePool1DataSource = unsharablePool1DataSource;
+        HandleListTestServlet.unsharablePool2DataSource = unsharablePool2DataSource;
+    }
+
+    /**
      * Test that attempting to use the connection builder methods on an unwrapped connection are blocked.
      */
     @Test
@@ -166,6 +189,161 @@ public class JDBC43TestServlet extends FATServlet {
         } catch (SQLFeatureNotSupportedException ex) {
             if (!ex.getMessage().contains("DSRA9130E"))
                 throw ex;
+        }
+    }
+
+    /**
+     * Invoked by JDBC43Test as the first of a two part test that caches an unshared connection across servlet requests.
+     */
+    public void testCompletionStageCachesUnsharedAutocommitConnectionAcrossServletBoundaryPart1() throws Exception {
+        final Connection con = unsharablePool1DataSource.getConnection();
+        CompletableFuture<Statement> creationStage = AccessController
+                        .doPrivileged((PrivilegedExceptionAction<CompletableFuture<Statement>>) () -> CompletableFuture.completedFuture(con.createStatement()));
+        CompletableFuture<Statement> stage = creationStage
+                        .thenApply(s -> {
+                            try {
+                                s.executeUpdate("INSERT INTO STREETS VALUES ('Meadow Crossing Road SW', 'Rochester', 'MN')");
+                            } catch (SQLException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        })
+                        .thenApplyAsync(s -> {
+                            try {
+                                Thread.sleep(1000); // this encourages the current servlet request to go out of scope, if it hasn't already
+                            } catch (InterruptedException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        })
+                        .thenApply(s -> {
+                            try {
+                                s.executeUpdate("INSERT INTO STREETS VALUES ('Meadow Run Drive SW', 'Rochester', 'MN')");
+                            } catch (SQLException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        })
+                        .whenComplete((s, failure) -> {
+                            if (s != null)
+                                try {
+                                    s.getConnection().close();
+                                } catch (SQLException x) {
+                                    if (failure == null)
+                                        throw new CompletionException(x);
+                                }
+                        });
+
+        Object previous = completionStages.put("testCompletionStageCachesUnsharedAutocommitConnectionAcrossServletBoundary", stage);
+        assertNull("Test method was invoked more the once, invalidating the test logic", previous);
+    }
+
+    /**
+     * Invoked by JDBC43Test as the second of a two part test that caches an unshared connection across servlet requests.
+     */
+    public void testCompletionStageCachesUnsharedAutocommitConnectionAcrossServletBoundaryPart2() throws Exception {
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Statement> stage = (CompletableFuture<Statement>) completionStages.get("testCompletionStageCachesUnsharedAutocommitConnectionAcrossServletBoundary");
+        Statement s = stage.join();
+        assertTrue(s.isClosed());
+
+        // confirm that the SQL command ran and committed
+        try (Connection con = unsharablePool1DataSource.getConnection();
+                        Statement st = con.createStatement();
+                        ResultSet result = st.executeQuery("SELECT NAME FROM STREETS WHERE NAME LIKE 'Meadow%'")) {
+            assertTrue(result.next());
+            String name1 = result.getString(1);
+            assertTrue("only found " + name1, result.next());
+            String name2 = result.getString(1);
+            if (result.next())
+                fail("found too many: " + name1 + ", " + name2 + ", " + result.getString(1));
+            List<String> found = Arrays.asList(name1, name2);
+            assertTrue(found.toString(), found.contains("Meadow Crossing Road SW"));
+            assertTrue(found.toString(), found.contains("Meadow Run Drive SW"));
+        }
+    }
+
+    /**
+     * Invoked by JDBC43Test as the first of a two part test that caches an unshared connection across servlet requests.
+     */
+    public void testCompletionStageCachesUnsharedManualCommitConnectionAcrossServletBoundaryPart1() throws Exception {
+        // Use a data source where the HandleList is enabled
+        final Connection con = unsharablePool2DataSource.getConnection();
+        con.setAutoCommit(false);
+        CompletableFuture<Statement> creationStage = AccessController
+                        .doPrivileged((PrivilegedExceptionAction<CompletableFuture<Statement>>) () -> CompletableFuture.completedFuture(con.createStatement()));
+        CompletableFuture<Statement> stage = creationStage
+                        .thenApply(s -> {
+                            try {
+                                s.executeUpdate("INSERT INTO STREETS VALUES ('Century Valley Road NE', 'Rochester', 'MN')");
+                            } catch (SQLException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        });
+        stage.join(); // ensure that the connection has been enlisted in a local transaction and work has been performed within it
+        stage = stage
+                        .thenApplyAsync(s -> {
+                            try {
+                                Thread.sleep(5000); // this encourages the current servlet request to go out of scope, if it hasn't already
+                            } catch (InterruptedException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        })
+                        .thenApply(s -> {
+                            try {
+                                assertFalse(s.getConnection().getAutoCommit());
+                                s.executeUpdate("INSERT INTO STREETS VALUES ('Century Hills Drive NE', 'Rochester', 'MN')");
+                            } catch (SQLException x) {
+                                throw new CompletionException(x);
+                            }
+                            return s;
+                        })
+                        .whenComplete((s, failure) -> {
+                            if (s != null)
+                                try {
+                                    Connection c = s.getConnection();
+                                    try {
+                                        if (failure == null)
+                                            c.commit();
+                                        else
+                                            c.rollback();
+                                    } finally {
+                                        c.close();
+                                    }
+                                } catch (SQLException x) {
+                                    if (failure == null)
+                                        throw new CompletionException(x);
+                                }
+                        });
+
+        Object previous = completionStages.put("testCompletionStageCachesUnsharedManualCommitConnectionAcrossServletBoundary", stage);
+        assertNull("Test method was invoked more the once, invalidating the test logic", previous);
+    }
+
+    /**
+     * Invoked by JDBC43Test as the second of a two part test that caches an unshared connection across servlet requests.
+     */
+    public void testCompletionStageCachesUnsharedManualCommitConnectionAcrossServletBoundaryPart2() throws Exception {
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Statement> stage = (CompletableFuture<Statement>) completionStages.get("testCompletionStageCachesUnsharedManualCommitConnectionAcrossServletBoundary");
+        try {
+            Statement s = stage.join();
+            fail("Connection (and its Statement) should have been closed by handle list. " + s);
+        } catch (CompletionException x) {
+            if (x.getCause() instanceof SQLRecoverableException)
+                ; // pass - Connection and Statement are closed
+            else
+                throw x;
+        }
+
+        // confirm that the first SQL command rolled back upon exiting the LTC,
+        // and the second SQL command never executed because the connection was closed.
+        try (Connection con = unsharablePool2DataSource.getConnection();
+                        Statement st = con.createStatement();
+                        ResultSet result = st.executeQuery("SELECT NAME FROM STREETS WHERE NAME LIKE 'Century%'")) {
+            assertFalse(result.next());
         }
     }
 
@@ -649,6 +827,44 @@ public class JDBC43TestServlet extends FATServlet {
     }
 
     /**
+     * Obtain an unshared connection and intentionally exit the servlet request without closing it.
+     */
+    public void testLeakConnection() throws Exception {
+        Connection con = unsharablePool2DataSource.getConnection();
+        Statement stmt = con.createStatement();
+        ResultSet result = stmt.executeQuery("SELECT CITY,STATE FROM STREETS WHERE NAME='Civic Center Drive NW'");
+        assertTrue(result.next());
+        assertEquals("Rochester", result.getString(1));
+    }
+
+    /**
+     * Obtain 2 unshared connections and intentionally exit the servlet request without closing them.
+     */
+    public void testLeakConnections() throws Exception {
+        Connection con1 = unsharablePool2DataSource.getConnection();
+        Statement stmt1 = con1.createStatement();
+        ResultSet result = stmt1.executeQuery("SELECT CITY,STATE FROM STREETS WHERE NAME='Valleyhigh Drive NW'");
+        assertTrue(result.next());
+        assertEquals("Rochester", result.getString(1));
+
+        assertNotNull(unsharablePool2DataSource.getConnection());
+    }
+
+    /**
+     * Obtain all 2 of the connections from the pool, proving that no connections were leaked.
+     */
+    public void testLeakedConnectionsWereReturned() throws Exception {
+        Connection con1 = unsharablePool2DataSource.getConnection();
+        Statement stmt1 = con1.createStatement();
+        Connection con2 = unsharablePool2DataSource.getConnection();
+        Statement stmt2 = con2.createStatement();
+        stmt1.close();
+        stmt2.close();
+        con1.close();
+        con2.close();
+    }
+
+    /**
      * Verify that that DatabaseMetaData indicates spec version 4.3 and that the method supports sharding is functional
      */
     @Test
@@ -837,7 +1053,7 @@ public class JDBC43TestServlet extends FATServlet {
      * Abort a sharable connection from a thread other than the thread that is using it.
      * Verify that endRequest is invoked on the JDBC driver.
      */
-    //@AllowedFFDC("javax.transaction.xa.XAException") // seen by transaction manager for aborted connection
+    @AllowedFFDC("javax.transaction.xa.XAException") // seen by transaction manager for aborted connection
     @Test
     public void testOtherThreadAbortSharable() throws Exception {
         AtomicInteger[] requests;
@@ -850,7 +1066,7 @@ public class JDBC43TestServlet extends FATServlet {
             ends = requests[END].get();
             assertEquals(ends + 1, begins);
 
-            //con1.setAutoCommit(false); // TODO enable once abort path is fixed
+            con1.setAutoCommit(false);
             PreparedStatement ps = con1.prepareStatement("INSERT INTO STREETS VALUES(?, ?, ?)");
             ps.setString(1, "Overland Drive NW");
             ps.setString(2, "Rochester");
@@ -888,9 +1104,9 @@ public class JDBC43TestServlet extends FATServlet {
             }).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
         }
 
+        assertEquals(ends + 1, requests[END].get());
         tx.begin();
         try {
-            assertEquals(ends + 1, requests[END].get());
 
             Connection con3 = sharableXADataSource.getConnection();
             requests = (AtomicInteger[]) con3.unwrap(Supplier.class).get();
@@ -901,23 +1117,22 @@ public class JDBC43TestServlet extends FATServlet {
             PreparedStatement ps3 = con3.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
             ps3.setString(1, "Overland Drive NW");
             ResultSet result = ps3.executeQuery();
-            //assertFalse(result.next()); // TODO enable once prior TODOs are removed
+            assertFalse(result.next());
             ps3.close();
 
             Connection con4 = sharableXADataSource.getConnection();
             PreparedStatement ps4 = con4.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
             ps4.setString(1, "Essex Parkway NW");
             result = ps4.executeQuery();
-            //assertFalse(result.next()); // TODO enable once prior TODOs are removed
+            assertFalse(result.next());
 
-            //con4.close(); // TODO replace with the following once the abort path is fixed to invoke ManagedConnection.destroy when the transaction ends.
-            //singleThreadExecutor.submit(new Callable<Void>() {
-            //    @Override
-            //    public Void call() throws SQLException {
-            //        con4.abort(singleThreadExecutor);
-            //        return null;
-            //    }
-            //}).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
+            singleThreadExecutor.submit(new Callable<Void>() {
+                @Override
+                public Void call() throws SQLException {
+                    con4.abort(singleThreadExecutor);
+                    return null;
+                }
+            }).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
         } finally {
             tx.rollback();
         }
@@ -929,7 +1144,7 @@ public class JDBC43TestServlet extends FATServlet {
      * Abort an unsharable connection from a thread other than the thread that is using it.
      * Verify that endRequest is invoked on the JDBC driver in response to the abort.
      */
-    //@AllowedFFDC("javax.transaction.xa.XAException") // seen by transaction manager for aborted connection
+    @AllowedFFDC("javax.transaction.xa.XAException") // seen by transaction manager for aborted connection
     @Test
     public void testOtherThreadAbortUnsharable() throws Exception {
         AtomicInteger[] requests;
@@ -942,7 +1157,7 @@ public class JDBC43TestServlet extends FATServlet {
             ends = requests[END].get();
             assertEquals(ends + 1, begins);
 
-            //con1.setAutoCommit(false); //TODO enable once abort path is fixed
+            con1.setAutoCommit(false);
             PreparedStatement ps = con1.prepareStatement("INSERT INTO STREETS VALUES(?, ?, ?)");
             ps.setString(1, "Badger Hills Drive NW");
             ps.setString(2, "Rochester");
@@ -958,10 +1173,9 @@ public class JDBC43TestServlet extends FATServlet {
             }).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
         }
 
-        // TODO Why is crossing the LTC boundary needed for ManagedConnection.destroy/Connection.endRequest to be invoked after abort?
+        assertEquals(ends + 1, requests[END].get());
         tx.begin();
         try {
-            assertEquals(ends + 1, requests[END].get()); // TODO move the assert before tx.begin once abort path is fixed
 
             final Connection con2 = unsharableXADataSource.getConnection();
             try {
@@ -973,18 +1187,15 @@ public class JDBC43TestServlet extends FATServlet {
                 PreparedStatement ps2 = con2.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
                 ps2.setString(1, "Badger Hills Drive NW");
                 ResultSet result = ps2.executeQuery();
-                // assertFalse(result.next()); //TODO enable once prior TODOs are removed
+                assertFalse(result.next());
             } finally {
-                con2.close(); // TODO replace with the following once the abort path is fixed such that
-                // ManagedConnection.destroy is invoked either upon abort or when the transaction ends.
-                // Currently, destroy is not invoked until server shutdown!
-                //singleThreadExecutor.submit(new Callable<Void>() {
-                //    @Override
-                //    public Void call() throws SQLException {
-                //        con2.abort(singleThreadExecutor);
-                //        return null;
-                //    }
-                //}).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
+                singleThreadExecutor.submit(new Callable<Void>() {
+                    @Override
+                    public Void call() throws SQLException {
+                        con2.abort(singleThreadExecutor);
+                        return null;
+                    }
+                }).get(TIMEOUT_NS, TimeUnit.NANOSECONDS);
             }
         } finally {
             tx.rollback();
@@ -1206,7 +1417,7 @@ public class JDBC43TestServlet extends FATServlet {
             ends = requests[END].get();
             assertEquals(ends + 1, begins);
 
-            // con1.setAutoCommit(false); // TODO enable once abort path is fixed
+            con1.setAutoCommit(false);
             PreparedStatement ps = con1.prepareStatement("INSERT INTO STREETS VALUES(?, ?, ?)");
             ps.setString(1, "Superior Drive NW");
             ps.setString(2, "Rochester");
@@ -1246,14 +1457,14 @@ public class JDBC43TestServlet extends FATServlet {
             PreparedStatement ps3 = con3.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
             ps3.setString(1, "Superior Drive NW");
             ResultSet result = ps3.executeQuery();
-            // assertFalse(result.next()); // TODO enable once prior TODOs are removed
+            assertFalse(result.next());
             ps3.close();
 
             Connection con4 = defaultDataSource.getConnection();
             PreparedStatement ps4 = con4.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
             ps4.setString(1, "Technology Drive NW");
             result = ps4.executeQuery();
-            // assertFalse(result.next()); // TODO enable once prior TODOs are removed
+            assertFalse(result.next());
 
             con4.abort(singleThreadExecutor);
         } finally {
@@ -1280,7 +1491,7 @@ public class JDBC43TestServlet extends FATServlet {
             ends = requests[END].get();
             assertEquals(ends + 1, begins);
 
-            // con1.setAutoCommit(false); TODO enable once abort path is fixed
+            con1.setAutoCommit(false);
             PreparedStatement ps = con1.prepareStatement("INSERT INTO STREETS VALUES(?, ?, ?)");
             ps.setString(1, "Commerce Drive NW");
             ps.setString(2, "Rochester");
@@ -1290,11 +1501,9 @@ public class JDBC43TestServlet extends FATServlet {
             con1.abort(singleThreadExecutor);
         }
 
-        // TODO Why is crossing the LTC boundary needed for ManagedConnection.destroy/Connection.endRequest to be invoked after abort?
+        assertEquals(ends + 1, requests[END].get());
         tx.begin();
         try {
-            assertEquals(ends + 1, requests[END].get()); // TODO move the assert before tx.begin once abort path is fixed
-
             Connection con2 = unsharablePool1DataSource.getConnection();
             try {
                 requests = (AtomicInteger[]) con2.unwrap(Supplier.class).get();
@@ -1305,7 +1514,7 @@ public class JDBC43TestServlet extends FATServlet {
                 PreparedStatement ps2 = con2.prepareStatement("SELECT CITY, STATE FROM STREETS WHERE NAME = ?");
                 ps2.setString(1, "Commerce Drive NW");
                 ResultSet result = ps2.executeQuery();
-                // assertFalse(result.next()); TODO enable once prior TODOs are removed
+                assertFalse(result.next());
             } finally {
                 con2.abort(singleThreadExecutor);
             }
@@ -2490,6 +2699,30 @@ public class JDBC43TestServlet extends FATServlet {
             ps.close();
         } finally {
             c.close();
+        }
+    }
+
+    /**
+     * Invoked by HandleListTestServlet.testUnsharedConnectionNotReassociatedAcrossServletRequests, as an inline, but separate, servlet request.
+     */
+    public void testUnsharedConnectionNotReassociatedAcrossServletRequestsInnerRequest() throws Exception {
+        try {
+            Connection con = unsharablePool1DataSource.getConnection();
+            con.close();
+            fail();
+        } catch (SQLTransientConnectionException x) {
+            // expected
+        }
+    }
+
+    /**
+     * Invoked by HandleListTestServlet.testUnsharedConnectionReassociatedAcrossServletRequests, as an inline, but separate, servlet request.
+     */
+    public void testUnsharedConnectionReassociatedAcrossServletRequestsInnerRequest() throws Exception {
+        Connection con = unsharablePool2DataSource.getConnection();
+        try {
+        } finally {
+            con.close();
         }
     }
 

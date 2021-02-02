@@ -84,8 +84,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
 
     //other object not needing Cloning
     //========================
-    protected WebApp _webapp;
-
+    private WebApp _webApp;           //PH08872
     private DispatcherType dispatcherType = DispatcherType.REQUEST;
     private boolean isNamedDispatcher = false;
     
@@ -124,7 +123,11 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public WebApp getWebApp()
     {
-        return _webapp;
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)) {
+            logger.logp(Level.FINE, CLASS_NAME,"getWebApp", "webapp -> "+ _webApp +" ,this -> " + this);
+        }
+        
+        return _webApp;
     }
 
     /* (non-Javadoc)
@@ -132,6 +135,10 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public void initForNextDispatch(IExtendedRequest req) //, WebAppRequestDispatcherInfo di)
     {
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)) {
+            logger.logp(Level.FINE, CLASS_NAME,"initForNextDispatch", "req -> "+ req +" ,this -> " + this);
+        }
+        
         _request = req;
         if (req != null)
         {
@@ -206,7 +213,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
         this._exceptionStack.clear();
         this._pathInfo = null;
         this._servletPath = null;
-        this._webapp = null;
+        this._webApp = null;
         this.relativeUri = null;
         this.queryString = null;
         this._requestUri = null;
@@ -217,7 +224,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
 
     private IHttpSessionContext getSessionContext()
     {
-        return _webapp.getSessionContext();
+        return _webApp.getSessionContext();
     }
 
     //---session related----
@@ -271,7 +278,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public void sessionPreInvoke()
     {
-        reqContext.sessionPreInvoke(_webapp);
+        reqContext.sessionPreInvoke(_webApp);
     }
 
     /* (non-Javadoc)
@@ -297,7 +304,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public String encodeURL(String arg0)
     {
-        return reqContext.encodeURL(_webapp, (HttpServletRequest) _request, arg0);
+        return reqContext.encodeURL(_webApp, (HttpServletRequest) _request, arg0);
     }
     /**
      * @see com.ibm.ws.webcontainer.webapp.IWebAppDispatcherContext#getRelativeUri()
@@ -555,8 +562,10 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
 //		}
 
             response.resetBuffer();
-
-            location = convertRelativeURIToURL(location);
+            
+            if (!WCCustomProperties.REDIRECT_TO_RELATIVE_URL) {
+                location = convertRelativeURIToURL(location);
+            }
 
             // 115010 - begin - make header name begin with upper case
             response.setHeader("Location", location);
@@ -661,13 +670,14 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     private String convertRelativeURIToURL(String relativeURI)
     {
-
+        String location = null;
         if (relativeURI == null)
         {
             throw new IllegalStateException();
         }
         else
         {
+            location = relativeURI;
             relativeURI = relativeURI.trim();
         }
 
@@ -819,7 +829,8 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
         }
 
         // Could not convert
-        return relativeURI;
+        logger.logp(Level.FINE, CLASS_NAME,"convertRelativeURIToURL", "could not convert [" + location + "]");
+        return location;
     }
 
     public void callPage(String fileName, javax.servlet.http.HttpServletRequest hreq) throws IOException, ServletException
@@ -1035,7 +1046,11 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public void setWebApp(WebApp app)
     {
-        this._webapp = app;
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)) {
+            logger.logp(Level.FINE, CLASS_NAME,"setWebApp", "webapp -> "+ app +" ,this -> " + this);
+        }
+        
+        this._webApp = app;
         if (reqContext != null)
         {
             reqContext.setCurrWebAppBoundary(app);
@@ -1084,7 +1099,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
      */
     public boolean isSecurityEnabledForApplication(){
         //since security enabled/disabled will restart the apps (is this only for the feature set or for app security too???)
-        return _webapp.isSecurityEnabledForApplication();
+        return _webApp.isSecurityEnabledForApplication();
     }
 
 
@@ -1140,7 +1155,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
             logger.entering (CLASS_NAME, "hasSlashStarMapping");
         }
         WebAppConfiguration webAppConfig = null;		
-        WebApp webApp = this._webapp;
+        WebApp webApp = this._webApp;
 
         if (webApp != null) {
             webAppConfig = webApp.getConfiguration();			

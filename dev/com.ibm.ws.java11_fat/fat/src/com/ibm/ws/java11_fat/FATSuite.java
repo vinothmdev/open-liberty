@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -17,6 +17,13 @@ import org.junit.runners.Suite.SuiteClasses;
 @RunWith(Suite.class)
 @SuiteClasses({
                 Java11Test.class,
-                Java11CNFETest.class
+                Java12Test.class,
+                Java13Test.class,
+                Java14Test.class,
+                Java15Test.class,
+                Java11CNFETest.class,
+                JavaInfoTest.class,
+                MultiReleaseJarTest.class
 })
-public class FATSuite {}
+public class FATSuite {
+}

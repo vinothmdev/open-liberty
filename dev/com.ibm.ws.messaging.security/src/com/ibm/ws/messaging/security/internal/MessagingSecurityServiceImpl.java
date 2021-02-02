@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2013 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -43,7 +43,6 @@ import com.ibm.ws.messaging.security.MSTraceConstants;
 import com.ibm.ws.messaging.security.MessagingSecurityConstants;
 import com.ibm.ws.messaging.security.MessagingSecurityException;
 import com.ibm.ws.messaging.security.MessagingSecurityService;
-import com.ibm.ws.messaging.security.RuntimeSecurityService;
 import com.ibm.ws.messaging.security.authentication.MessagingAuthenticationService;
 import com.ibm.ws.messaging.security.authentication.internal.MessagingAuthenticationServiceImpl;
 import com.ibm.ws.messaging.security.authorization.MessagingAuthorizationService;
@@ -76,7 +75,7 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
                                                             MSTraceConstants.MESSAGING_SECURITY_RESOURCE_BUNDLE);
 
     // Absolute class name along with the package name, used for tracing
-    private static final String CLASS_NAME = "com.ibm.ws.messaging.security.internal.MessagingSecurityServiceImpl";
+    private static final String CLASS_NAME = "com.ibm.ws.messaging.security.internal.MessagingSecurityServiceImpl.";
 
     // Liberty Security Service
     private SecurityService securityService = null;
@@ -104,8 +103,6 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
     // The Key for this Map will be TopicSpace/Topic
     private Map<String, TopicPermission> topicPermissions;
 
-    private final RuntimeSecurityService runtimeSecurityService = RuntimeSecurityService.SINGLETON_INSTANCE;
-
     private String bundleLocation;
 
     /**
@@ -116,16 +113,16 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      */
     @Activate
     protected void activate(BundleContext ctx, Map<String, Object> properties) {
-
-        SibTr.entry(tc, CLASS_NAME + "activate", properties);
+        final String methodName = "activate";
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+          SibTr.entry(tc, methodName, new Object[] {this, properties});
 
         this.properties = properties;
         this.bundleLocation = ctx.getBundle().getLocation();
         populateDestinationPermissions();
-        runtimeSecurityService.modifyMessagingServices(this);
 
-        SibTr.exit(tc, CLASS_NAME + "activate");
-
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+          SibTr.exit(tc, methodName);
     }
 
     /**
@@ -139,13 +136,15 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      */
     @Modified
     protected void modify(ComponentContext cc, Map<String, Object> properties) {
-        SibTr.entry(tc, CLASS_NAME + "modify", properties);
+        final String methodName = "modify";
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+            SibTr.entry(tc, methodName, new Object[] {this, properties});
 
         this.properties = properties;
         populateDestinationPermissions();
-        runtimeSecurityService.modifyMessagingServices(this);
+        
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-            SibTr.exit(tc, CLASS_NAME + "modify");
+            SibTr.exit(tc, methodName);
         }
     }
 
@@ -157,9 +156,10 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      */
     @Deactivate
     protected void deactivate(ComponentContext context) {
-        SibTr.entry(tc, CLASS_NAME + "deactivate", context);
+        final String methodName = "deactivate";
+          if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+        SibTr.entry(tc, methodName, new Object[] {this, context});
 
-        runtimeSecurityService.modifyMessagingServices(null);
         queuePermissions = null;
         topicPermissions = null;
         temporaryDestinationPermissions = null;
@@ -167,7 +167,23 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
         sibAuthorizationService = null;
         this.bundleLocation = null;
         
-        SibTr.exit(tc, CLASS_NAME + "deactivate");
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+          SibTr.exit(tc, methodName);
+    }
+
+    /*
+     * Delay this service from starting until LTPAConfiguration is available.
+     * See RTC 269685: Ltpa2 key generation may on occasion take some time; if not available when e.g. an MDB runs an exception
+     * is raised during authentication resulting in an FFDC dump.
+     * This function is a "dummy" that will influence OSGi's running of this bundle, delaying until the service can be resolved.
+     */
+    @Reference( service = com.ibm.ws.security.token.ltpa.LTPAConfiguration.class )
+    protected void setLTPA2(Object arg) {
+        final String methodName = "setLTPA2";
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+          SibTr.entry(tc, methodName, new Object[] {this, arg});
+          SibTr.exit(tc, methodName);
+        }
     }
 
     /**
@@ -177,11 +193,14 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      */
     @Reference
     protected void setSecurityService(SecurityService securityService) {
-        SibTr.entry(tc, CLASS_NAME + "setSecurityService", securityService);
+        final String methodName = "setSecurityService";
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+            SibTr.entry(tc, methodName, new Object[] {this, securityService});
 
         this.securityService = securityService;
-
-        SibTr.exit(tc, CLASS_NAME + "setSecurityService");
+ 
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+            SibTr.exit(tc, methodName);
     }
 
     /**
@@ -190,9 +209,12 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      * @param reference
      */
     protected void unsetSecurityService(SecurityService securityService) {
-        SibTr.entry(tc, CLASS_NAME + "unsetSecurityService", securityService);
-
-        SibTr.exit(tc, CLASS_NAME + "unsetSecurityService");
+        final String methodName = "unsetSecurityService";
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+          SibTr.entry(tc, methodName, new Object[] {this, securityService});
+        
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+          SibTr.exit(tc, methodName);
     }
 
     /**
@@ -725,7 +747,6 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
     public void configurationEvent(ConfigurationEvent event) {
         if (event.getType() == ConfigurationEvent.CM_UPDATED && pids.contains(event.getPid())) {
             populateDestinationPermissions();
-            runtimeSecurityService.modifyMessagingServices(this);
         }
 
     }

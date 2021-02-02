@@ -45,7 +45,7 @@ public class EntityMappingsFactory {
             final String pkg = determineJAXBPackage(bais).getJaxbPackage();
             bais.reset();
 
-            final JAXBContext jaxbCtx = JAXBContext.newInstance(pkg);
+            final JAXBContext jaxbCtx = JAXBContext.newInstance(pkg, EntityMappingsFactory.class.getClassLoader());
             final Unmarshaller unmarshaller = jaxbCtx.createUnmarshaller();
 
             MessageDigest md = MessageDigest.getInstance(digestType);
@@ -114,7 +114,8 @@ public class EntityMappingsFactory {
         V1_0("1.0", Constants.JPA_10_JAXB_PACKAGE),
         V2_0("2.0", Constants.JPA_20_JAXB_PACKAGE),
         V2_1("2.1", Constants.JPA_21_JAXB_PACKAGE),
-        V2_2("2.2", Constants.JPA_21_JAXB_PACKAGE);
+        V2_2("2.2", Constants.JPA_21_JAXB_PACKAGE),
+        V3_0("3.0", Constants.JPA_30_JAXB_PACKAGE);
 
         private final String version;
         private final String jaxbPackage;

@@ -10,6 +10,8 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.rest.client.fat;
 
+import static org.junit.Assert.assertNotNull;
+
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -29,13 +31,19 @@ import mpRestClient10.headerPropagation.HeaderPropagationTestServlet;
 @RunWith(FATRunner.class)
 public class HeaderPropagationTest extends FATServletClient {
 
+    final static String SERVER_NAME = "mpRestClient10.headerPropagation";
+
     @ClassRule
     public static RepeatTests r = RepeatTests.withoutModification()
-        .andWith(new FeatureReplacementAction("mpRestClient-1.0", "mpRestClient-1.1").forServers("mpRestClient10.headerPropagation"));
+        .andWith(FATSuite.MP_REST_CLIENT("1.1", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.2", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(),"1.3", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(),"1.4", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(),"2.0", SERVER_NAME));
 
     private static final String appName = "headerPropagationApp";
 
-    @Server("mpRestClient10.headerPropagation")
+    @Server(SERVER_NAME)
     @TestServlet(servlet = HeaderPropagationTestServlet.class, contextRoot = appName)
     public static LibertyServer server;
 
@@ -43,10 +51,11 @@ public class HeaderPropagationTest extends FATServletClient {
     public static void setUp() throws Exception {
         ShrinkHelper.defaultApp(server, appName, "mpRestClient10.headerPropagation");
         server.startServer();
+        assertNotNull("LTPA configuration should report it is ready", server.waitForStringInLog("CWWKS4105I"));
     }
 
     @AfterClass
     public static void afterClass() throws Exception {
-        server.stopServer();
+        server.stopServer("CWWKE1102W");  //ignore server quiesce timeouts due to slow test machines
     }
 }

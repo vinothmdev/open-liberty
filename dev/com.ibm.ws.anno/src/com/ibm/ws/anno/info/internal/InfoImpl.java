@@ -12,7 +12,7 @@ package com.ibm.ws.anno.info.internal;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Modifier;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -82,7 +82,7 @@ public abstract class InfoImpl implements Info {
         return infoStore;
     }
 
-    protected abstract String internName(String name);
+    protected abstract String internName(String useName);
 
     // TODO: Should this be allowed??
     //       The current implementation will cause the
@@ -159,8 +159,12 @@ public abstract class InfoImpl implements Info {
         return declaredAnnotations;
     }
 
-    public void setDeclaredAnnotations(AnnotationInfoImpl[] annos) {
-        declaredAnnotations = Arrays.asList(annos);
+    public void setDeclaredAnnotations(List<AnnotationInfoImpl> annos) {
+        if ( (annos == null) || annos.isEmpty() ) {
+            declaredAnnotations = Collections.emptyList();
+        } else {
+            declaredAnnotations = new ArrayList<>(annos);
+        }
     }
 
     @Override

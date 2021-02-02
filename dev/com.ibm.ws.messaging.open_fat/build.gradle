@@ -8,5 +8,8 @@
  * Contributors:
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
-apply from: '../cnf/gradle/scripts/fat.gradle'
+apply from: '../wlp-gradle/subprojects/fat.gradle'
 
+addRequiredLibraries {
+  dependsOn addJakartaTransformer
+}

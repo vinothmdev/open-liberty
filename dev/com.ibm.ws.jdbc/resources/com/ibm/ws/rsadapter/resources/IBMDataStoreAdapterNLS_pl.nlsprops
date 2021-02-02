@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2001, 2016 IBM Corporation and others.
+# Copyright (c) 2001, 2019 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -271,6 +271,22 @@ DSRA4011.tran.none.iso.switch.unsupported=DSRA4011E: Sterownik JDBC nie obs\u014
 DSRA4011.tran.none.iso.switch.unsupported.explanation=Specyfikacja JDBC nie obs\u0142uguje prze\u0142\u0105czania na poziom odseparowania TRANSACTION_NONE.
 DSRA4011.tran.none.iso.switch.unsupported.useraction=Unikaj prze\u0142\u0105czania na poziom odseparowania TRANSACTION_NONE. 
 
+DSRA4012.ignored.datasource.config.used=DSRA4012I: W przypadku korzystania z produktu Oracle UCP nast\u0119puj\u0105ce w\u0142a\u015bciwo\u015bci \u017ar\u00f3d\u0142a danych s\u0105 ignorowane: {0}.
+DSRA4012.ignored.datasource.config.used.explanation=Podane w\u0142a\u015bciwo\u015bci \u017ar\u00f3d\u0142a danych nie s\u0105 poprawne, je\u015bli u\u017cywany jest produkt Oracle UCP.
+DSRA4012.ignored.datasource.config.used.useraction=Usu\u0144 w\u0142a\u015bciwo\u015bci \u017ar\u00f3d\u0142a danych, kt\u00f3re nie s\u0105 poprawne, a zamiast nich u\u017cyj r\u00f3wnowa\u017cnej funkcjonalno\u015bci produktu Oracle UCP, je\u015bli jest dost\u0119pna.
+
+DSRA4013.ignored.connection.manager.config.used=DSRA4013I: W\u0142a\u015bciwo\u015bci mened\u017cera po\u0142\u0105cze\u0144 s\u0105 niepoprawne. W przypadku korzystania z produktu Oracle UCP nast\u0119puj\u0105ce w\u0142a\u015bciwo\u015bci mened\u017cera po\u0142\u0105cze\u0144 s\u0105 poprawne: {0}.
+DSRA4013.ignored.connection.manager.config.used.explanation=W przypadku korzystania z produktu Oracle UCP poprawne s\u0105 tylko wymienione w\u0142a\u015bciwo\u015bci mened\u017cera po\u0142\u0105cze\u0144.
+DSRA4013.ignored.connection.manager.config.used.useraction=Usu\u0144 w\u0142a\u015bciwo\u015bci mened\u017cera po\u0142\u0105cze\u0144, kt\u00f3re nie s\u0105 poprawne, a zamiast nich u\u017cyj r\u00f3wnowa\u017cnej funkcjonalno\u015bci produktu Oracle UCP, je\u015bli jest dost\u0119pna.
+
+DSRA4014.URL.for.Driver.missing=DSRA4014E: Typ java.sql.Driver zosta\u0142 podany dla \u017ar\u00f3d\u0142a danych {0}, ale nie okre\u015blono atrybutu URL.
+DSRA4014.URL.for.Driver.missing.explanation=Nale\u017cy poda\u0107 adres URL po\u0142\u0105czenia dla \u017ar\u00f3d\u0142a danych typu java.sql.Driver.
+DSRA4014.URL.for.Driver.missing.useraction=Dodaj poprawny adres URL \u017ar\u00f3d\u0142a danych.
+
+DSRA4015.no.ucp.connection.pool.datasource=DSRA4015E: \u0179r\u00f3d\u0142o danych {0} zosta\u0142o skonfigurowane z typem {1}, kt\u00f3ry nie jest obs\u0142ugiwany przez produkt Oracle UCP. Zamiast niego u\u017cyj typu XADataSource lub DataSource.
+DSRA4015.no.ucp.connection.pool.datasource.explanation=\u0179r\u00f3d\u0142o danych zosta\u0142o skonfigurowane z typem ConnectionPoolDataSource lub Driver, kt\u00f3ry nie zosta\u0142 zaimplementowany przez sterownik produktu Oracle UCP.
+DSRA4015.no.ucp.connection.pool.datasource.useraction=Zaktualizuj \u017ar\u00f3d\u0142o danych, aby u\u017cywa\u0142o typu XADataSource lub DataSource.
+
 # ----------------------------------------------------------------------------
 # 
 # Using 7000-7599 for DataStore Helper exception messages and warnings
@@ -349,7 +365,19 @@ PROP_SET_ERROR.useraction=Sprawd\u017a, czy okre\u015blona warto\u015b\u0107 jes
 # 8050-8055 deleted
 # 8060 deleted
 # 8065 deleted
-
+     
+# 8066E
+# {0}         The invalid attribute value
+# {1}         The allowed attribute values
+# Do not translate: identifyException, as
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET=DSRA8066E: Dla atrybutu ''as'' w elemencie identifyException okre\u015blono niepoprawn\u0105 warto\u015b\u0107 ''{0}''. Dozwolone warto\u015bci to: {1}.
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.explanation=Okre\u015blono niepoprawn\u0105 warto\u015b\u0107 elementu konfiguracji identifyException.
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.useraction=Zmie\u0144 konfiguracj\u0119, aby okre\u015bli\u0107 jedn\u0105 z dozwolonych warto\u015bci.
+# 8067E
+# Do not translate: errorCode, sqlState, identifyException
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE=DSRA8067E: W elemencie identifyException musi by\u0107 okre\u015blony co najmniej jeden z atrybut\u00f3w 'errorCode' lub 'sqlState'.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.explanation=Nale\u017cy okre\u015bli\u0107 jeden z atrybut\u00f3w errorCode lub sqlState.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.useraction=Zmie\u0144 konfiguracj\u0119 tak, aby okre\u015bla\u0142a co najmniej jeden z atrybut\u00f3w errorCode lub sqlState w elemencie identifyException.
 # 8100E      JAVAX_CONN_ERR
 # 
 # {0}        Type of Connection: XAConnection or PooledConnection.
@@ -534,6 +562,13 @@ NO_WRAPPED_OBJECT.useraction=Sprawd\u017a, czy opakowanie i parametry opakowaneg
 
 # 9123 deleted
 
+# 9124       NOT_AN_INTERFACE
+#
+# {0}        The Class that was specified to unwrap to
+NOT_AN_INTERFACE=DSRA9124E: Nie mo\u017cna odpakowa\u0107 obiektu do klasy {0}, poniewa\u017c klasa {0} nie jest klas\u0105 interfejsu.
+NOT_AN_INTERFACE.explanation=Metoda unwrap zezwala tylko na odpakowywanie do klasy interfejsu.
+NOT_AN_INTERFACE.useraction=Odpakuj do klasy interfejsu, a nie do klasy konkretnej.
+
 # 9130E      OPERATION_NOT_PERMITTED
 # 
 # {0}        The operation.
@@ -625,5 +660,8 @@ KERBEROS_NOT_SUPPORTED_WARNING.useraction= Wy\u0142\u0105cz uwierzytelnianie Ker
 
 # 9544-9548 deleted
 
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED=DSRA9549E: Nie mo\u017cna u\u017cywa\u0107 pakietu IBM Java 8 SDK z baz\u0105 danych Oracle. Sterownik JDBC Oracle obs\u0142uguje uwierzytelnianie Kerberos wy\u0142\u0105cznie przy u\u017cyciu domy\u015blnych interfejs\u00f3w API zabezpiecze\u0144 dost\u0119pnych w pakietach OpenJDK, OpenJ9 lub podobnych pakietach SDK.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.explanation=Nie mo\u017cna u\u017cywa\u0107 pakietu IBM Java 8 SDK z baz\u0105 danych Oracle. Sterownik JDBC Oracle obs\u0142uguje uwierzytelnianie Kerberos wy\u0142\u0105cznie przy u\u017cyciu domy\u015blnych interfejs\u00f3w API zabezpiecze\u0144 dost\u0119pnych w pakietach OpenJDK, OpenJ9 lub podobnych pakietach SDK.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.useraction=Wy\u0142\u0105cz uwierzytelnianie Kerberos dla \u017ar\u00f3d\u0142a danych Oracle lub skorzystaj z pakietu Java SDK innego ni\u017c IBM Java 8 SDK.
 # 9600-9603 deleted 
 # 9900 deleted

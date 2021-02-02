@@ -1,15 +1,17 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2018 IBM Corporation and others.
+ * Copyright (c) 2013, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
  * http://www.eclipse.org/legal/epl-v10.html
  *
  * Contributors:
- *     IBM Corporation - initial API and implementation
+ * IBM Corporation - initial API and implementation
  *******************************************************************************/
 package com.ibm.ws.security.openidconnect.common;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.Enumeration;
@@ -27,6 +29,8 @@ import org.osgi.service.cm.ConfigurationAdmin;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.config.xml.internal.nester.Nester;
+import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.security.common.config.CommonConfigUtils;
 // import com.ibm.ws.security.oauth20.util.OIDCConstants;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.FilterUtils;
@@ -35,8 +39,11 @@ import com.ibm.wsspi.kernel.service.utils.FilterUtils;
  * This is the config utility class
  */
 public class ConfigUtils {
-    private static final TraceComponent tc = Tr.register(ConfigUtils.class);
+    private static final TraceComponent tc = Tr.register(ConfigUtils.class, TraceConstants.TRACE_GROUP, TraceConstants.MESSAGE_BUNDLE);
     private final AtomicServiceReference<ConfigurationAdmin> configAdminRef;
+
+    private final CommonConfigUtils commonConfigUtils = new CommonConfigUtils();
+
     public static final String CFG_KEY_SCOPE_TO_CLAIM_MAP = "scopeToClaimMap";
     public static final String CFG_KEY_CLAIM_TO_UR_MAP = "claimToUserRegistryMap";
     public static final String CFG_KEY_DISCOVERY = "discovery";
@@ -349,4 +356,102 @@ public class ConfigUtils {
 
         return value;
     }
+
+    public List<String> readAndSanitizeForwardLoginParameter(Map<String, Object> props, String configId, String configAttributeName) {
+        String[] attributeValue = commonConfigUtils.getStringArrayConfigAttribute(props, configAttributeName);
+        if (attributeValue == null) {
+            return new ArrayList<String>();
+        }
+        List<String> configuredForwardAuthzParamList = new ArrayList<String>(Arrays.asList(attributeValue));
+        return removeDisallowedForwardAuthzParametersFromConfiguredList(configuredForwardAuthzParamList, configId, configAttributeName);
+    }
+
+    List<String> removeDisallowedForwardAuthzParametersFromConfiguredList(List<String> configuredList, String configId, String configAttributeName) {
+        if (configuredList == null) {
+            return new ArrayList<String>();
+        }
+        Set<String> configuredDisallowedParameters = new HashSet<String>(configuredList);
+        configuredDisallowedParameters.retainAll(getDisallowedForwardAuthzParameterNames());
+        if (!configuredDisallowedParameters.isEmpty()) {
+            Tr.warning(tc, "DISALLOWED_FORWARD_AUTHZ_PARAMS_CONFIGURED", new Object[] { configId, configuredDisallowedParameters, configAttributeName });
+            configuredList.removeAll(configuredDisallowedParameters);
+        }
+        return configuredList;
+    }
+
+    Set<String> getDisallowedForwardAuthzParameterNames() {
+        Set<String> disallowedParamNames = new HashSet<String>();
+        disallowedParamNames.add(Constants.REDIRECT_URI);
+        disallowedParamNames.add(Constants.CLIENT_ID);
+        disallowedParamNames.add(Constants.RESPONSE_TYPE);
+        disallowedParamNames.add(Constants.NONCE);
+        disallowedParamNames.add(Constants.STATE);
+        disallowedParamNames.add(Constants.SCOPE);
+        return disallowedParamNames;
+    }
+
+    /**
+     * Populates a map of custom request parameter names and values to add to a certain OpenID Connect request type.
+     *
+     * @param configAdmin
+     *            Config admin that has access to the necessary server configuration properties.
+     * @param paramMapToPopulate
+     *            Request-specific map of custom parameters to populate (for example, a map of parameters to add to authorization
+     *            requests).
+     * @param configuredCustomRequestParams
+     *            List of configured custom parameter elements for a particular request type.
+     * @param configAttrName
+     *            Name of the config attribute that specifies the parameter name.
+     * @param configAttrValue
+     *            Name of the config attribute that specifies the parameter value.
+     */
+    public void populateCustomRequestParameterMap(ConfigurationAdmin configAdmin, HashMap<String, String> paramMapToPopulate, String[] configuredCustomRequestParams, String configAttrName, String configAttrValue) {
+        if (configuredCustomRequestParams == null) {
+            return;
+        }
+        for (String configuredParameter : configuredCustomRequestParams) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Configured custom request param [" + configuredParameter + "]");
+            }
+            Configuration config = getConfigurationFromConfigAdmin(configAdmin, configuredParameter);
+            if (config != null) {
+                addCustomRequestParameterValueToMap(config, paramMapToPopulate, configAttrName, configAttrValue);
+            }
+        }
+    }
+
+    Configuration getConfigurationFromConfigAdmin(ConfigurationAdmin configAdmin, String configParameter) {
+        Configuration config = null;
+        try {
+            config = configAdmin.getConfiguration(configParameter, "");
+        } catch (IOException e) {
+        }
+        return config;
+    }
+
+    @FFDCIgnore(ClassCastException.class)
+    void addCustomRequestParameterValueToMap(Configuration config, HashMap<String, String> paramMapToPopulate, String configAttrName, String configAttrValue) {
+        Dictionary<String, Object> configProps = config.getProperties();
+        if (configProps == null || configAttrName == null || configAttrValue == null) {
+            return;
+        }
+        String paramName = null;
+        String paramValue = null;
+        try {
+            paramName = (String) configProps.get(configAttrName);
+            paramValue = (String) configProps.get(configAttrValue);
+        } catch (ClassCastException e) {
+            // Do nothing. We expect string values for these props, so leave the values null if they're not strings
+        }
+        if (paramName != null && paramValue != null) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Adding parameter name [" + paramName + "] and value [" + paramValue + "] to map");
+            }
+            if (paramMapToPopulate == null) {
+                paramMapToPopulate = new HashMap<String, String>();
+            }
+            paramMapToPopulate.put(paramName, paramValue);
+        }
+    }
+
 }

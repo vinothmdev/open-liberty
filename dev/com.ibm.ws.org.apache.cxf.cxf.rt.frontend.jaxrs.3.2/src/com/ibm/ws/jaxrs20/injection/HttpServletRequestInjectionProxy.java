@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -44,20 +44,23 @@ public class HttpServletRequestInjectionProxy extends HttpServletRequestWrapper 
                                                               public Object invoke(Object proxy,
                                                                                    Method method,
                                                                                    Object[] args) throws Throwable {
-                                                                  if (tc.isEntryEnabled()) {
-                                                                      Tr.entry(tc, "invoke");
-                                                                  }
-                                                                  Object result;
+                                                                  Object result = null;
                                                                   if ("toString".equals(method.getName()) && (method.getParameterTypes().length == 0)) {
                                                                       result = "Injection Proxy for " + contextClass.getName();
-                                                                      if (tc.isEntryEnabled()) {
-                                                                          Tr.exit(tc, "invoke", result);
+                                                                      if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                                                                          Tr.debug(tc, "invoke - toString " + result);
                                                                       }
                                                                       return result;
                                                                   }
-                                                                  result = method.invoke(getHttpServletRequest(), args);
-                                                                  if (tc.isEntryEnabled()) {
-                                                                      Tr.exit(tc, "invoke", result);
+                                                                  if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                                                                      Tr.entry(tc, "invoke " + method + " ", args);
+                                                                  }
+                                                                  Object context = getHttpServletRequest();
+                                                                  if (context != null) {
+                                                                      result = method.invoke(context, args);                                                                      
+                                                                  }
+                                                                  if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                                                                      Tr.exit(tc, "invoke " + result);
                                                                   }
                                                                   return result;
                                                               }
@@ -66,13 +69,16 @@ public class HttpServletRequestInjectionProxy extends HttpServletRequestWrapper 
 
     private static HttpServletRequest getHttpServletRequest() {
         final String methodName = "getHttpServletRequest";
-        if (tc.isEntryEnabled()) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, methodName);
         }
         // use runtimeContext from TLS
         InjectionRuntimeContext runtimeContext = InjectionRuntimeContextHelper.getRuntimeContext();
         // get the real context from the RuntimeContext
         Object context = runtimeContext.getRuntimeCtxObject(contextClass.getName());
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+            Tr.exit(tc, methodName, context);
+        }
         return (HttpServletRequest) context;
     }
 
@@ -110,16 +116,17 @@ public class HttpServletRequestInjectionProxy extends HttpServletRequestWrapper 
         }
 
         final ServletRequest request = getHttpServletRequest();
-        @SuppressWarnings("unchecked")
-        final Class<? extends ServletRequest> wrappedServletType = wrappedType;
+        if (request != null) {
+            @SuppressWarnings("unchecked")
+            final Class<? extends ServletRequest> wrappedServletType = wrappedType;
 
-        if (wrappedServletType.isAssignableFrom(request.getClass())) {
-            return true;
-        } else if (request instanceof ServletRequestWrapper) {
-            return ((ServletRequestWrapper) request).isWrapperFor(wrappedType);
-        } else {
-            return false;
+            if (wrappedServletType.isAssignableFrom(request.getClass())) {
+                return true;
+            } else if (request instanceof ServletRequestWrapper) {
+                return ((ServletRequestWrapper) request).isWrapperFor(wrappedType);
+            }          
         }
+        return false;
     }
 
     /*
@@ -131,13 +138,14 @@ public class HttpServletRequestInjectionProxy extends HttpServletRequestWrapper 
     public boolean isWrapperFor(ServletRequest wrapped) {
         final ServletRequest request = getHttpServletRequest();
 
-        if (request == wrapped) {
-            return true;
-        } else if (request instanceof ServletRequestWrapper) {
-            return ((ServletRequestWrapper) request).isWrapperFor(wrapped);
-        } else {
-            return false;
+        if (request != null) {
+            if (request == wrapped) {
+                return true;
+            } else if (request instanceof ServletRequestWrapper) {
+                return ((ServletRequestWrapper) request).isWrapperFor(wrapped);
+            }            
         }
+        return false;
     }
 
     /*

@@ -8,15 +8,6 @@
  * Contributors:
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
-
-plugins {
-  id "net.ossindex.audit" version "0.3.8-beta"
-}
-
-audit {
-    failOnError = true
-}
-
 // This task no longer runs as part of the build, since rmic -iiop was removed in JDK 11 we now check in the generate java stubs
 task rmic(type: Exec, dependsOn: compileJava) {
     String rmicClasspath = sourceSets.main.runtimeClasspath.asPath
@@ -25,3 +16,7 @@ task rmic(type: Exec, dependsOn: compileJava) {
     executable 'rmic'
     args '-iiop', '-keep', '-d', compileJava.destinationDir, '-classpath', rmicClasspath, 'javax.management.j2ee.Management', 'javax.management.j2ee.ManagementHome'
 }
+
+//Unit tests assert the checksum of the bundle jar so ensure jar is done first.
+//Unit testing alone does not require assembling the jar. 
+test.dependsOn 'jar'

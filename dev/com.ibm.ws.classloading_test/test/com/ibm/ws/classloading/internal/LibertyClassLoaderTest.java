@@ -15,6 +15,7 @@ import static com.ibm.ws.classloading.internal.TestUtil.createAppClassloader;
 import static com.ibm.ws.classloading.internal.TestUtil.getClassLoadingService;
 import static com.ibm.ws.classloading.internal.TestUtil.getOtherClassesURL;
 import static com.ibm.ws.classloading.internal.TestUtil.getServletJarURL;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -30,14 +31,16 @@ import org.junit.Test;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.InvalidSyntaxException;
 
-import test.common.SharedOutputManager;
-
+import com.ibm.ws.classloading.configuration.GlobalClassloadingConfiguration;
 import com.ibm.ws.classloading.internal.TestUtil.ClassSource;
+import com.ibm.ws.kernel.boot.classloader.ClassLoaderHook;
 import com.ibm.wsspi.adaptable.module.Container;
 import com.ibm.wsspi.classloading.ClassLoaderConfiguration;
 import com.ibm.wsspi.classloading.ClassLoaderIdentity;
 import com.ibm.wsspi.classloading.ClassLoadingServiceException;
 import com.ibm.wsspi.classloading.GatewayConfiguration;
+
+import test.common.SharedOutputManager;
 
 public class LibertyClassLoaderTest {
     @Rule
@@ -52,27 +55,23 @@ public class LibertyClassLoaderTest {
 
     @Test
     public void testClassNotFound() {
-        try {
-            loader.findClassBytes("non.existent.Class");
-            fail("call should have thrown an exception");
-        } catch (ClassNotFoundException e) {
-            assertTrue("Should have thrown exception for non.existent.Class, but exception was:" + e, e.getMessage().contains("non.existent.Class"));
-        }
+        assertNull(loader.findClassBytes("non.existent.Class", "non/existent/Class.class"));
     }
 
     @Test
     public void testClassFormatError() throws Exception {
         Container c = buildMockContainer("testClasses", getOtherClassesURL(ClassSource.A));
 
-        loader = new AppClassLoader(loader.getParent(), loader.config, Arrays.asList(c), (DeclaredApiAccess) (loader.getParent()), null, null) {
+        loader = new AppClassLoader(loader.getParent(), loader.config, Arrays.asList(c), (DeclaredApiAccess) (loader.getParent()), null, null, new GlobalClassloadingConfiguration()) {
             @Override
-            protected com.ibm.ws.classloading.internal.AppClassLoader.ByteResourceInformation findBytes(String resourceName) throws IOException {
+            protected com.ibm.ws.classloading.internal.AppClassLoader.ByteResourceInformation findClassBytes(String className, String resourceName,
+                                                                                                             ClassLoaderHook hook) throws IOException {
                 throw new IOException();
             }
         };
 
         try {
-            loader.findClassBytes("test");
+            loader.findClassBytes("test", "test.class");
             fail("call should have thrown an exception");
         } catch (ClassFormatError e) {
             assertTrue("Should have traced an error", outputManager.checkForStandardErr("CWWKL0002E"));

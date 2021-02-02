@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,9 +11,10 @@
 package com.ibm.ws.jaxrs20.client.security;
 
 import java.lang.reflect.Method;
+import java.net.URI;
 import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.security.PrivilegedExceptionAction;
-import java.util.Map;
 
 import javax.net.ssl.SSLSocketFactory;
 
@@ -31,14 +32,19 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.jaxrs20.client.JAXRSClientConstants;
 
-/**
- *
- */
 public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseInterceptor<Message> {
 
     private static final TraceComponent tc = Tr.register(LibertyJaxRsClientSSLOutInterceptor.class);
 
     private static final String HTTPS_SCHEMA = "https";
+
+    private static final boolean overrideUserTLS = AccessController.doPrivileged(new PrivilegedAction<Boolean>() {
+
+        @Override
+        public Boolean run() {
+            return Boolean.getBoolean("com.ibm.ws.jaxrs.client.security.overrideUserTLSConfig");
+        }
+    });
 
     private TLSConfiguration secConfig = null;
 
@@ -57,7 +63,11 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
         String address = (String) message.get(Message.ENDPOINT_ADDRESS);
         if (!address.startsWith(HTTPS_SCHEMA)) {
             return; // only process HTTPS requests
-        } ;
+        }
+
+        if (!overrideUserTLS && PropertyUtils.isTrue(message.get("org.apache.cxf.microprofile.client.sslConfigProvided"))) {
+            return; // SSL config already provided
+        }
 
         //see if SSL Ref id is used
         Object sslRefObj = message.get(JAXRSClientConstants.SSL_REFKEY);
@@ -71,35 +81,34 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
         // getSocketFactory will return null if either the ssl feature is not enabled
         // or if it is enabled but there is no SSL configuration defined.  A null here
         // means to use the JDK's SSL implementation.
-        if (getSocketFactory(sslRef) != null) {
+        SSLSocketFactory socketFactory = getSocketFactory(sslRef, message);
+        if (socketFactory != null) {
             Object disableCNCheckObj = message.get(JAXRSClientConstants.DISABLE_CN_CHECK);
             Conduit cd = message.getExchange().getConduit(message);
-            configClientSSL(cd, sslRef, PropertyUtils.isTrue(disableCNCheckObj));
+            configClientSSL(cd, sslRef, PropertyUtils.isTrue(disableCNCheckObj), socketFactory);
         }
     }
 
-    private void configClientSSL(Conduit conduit, String sslRef, boolean disableCNCheck) {
+    private void configClientSSL(Conduit conduit, String sslRef, boolean disableCNCheck, SSLSocketFactory socketFactory) {
 
         //for HTTPS protocol
         if (conduit instanceof HTTPConduit) {
             HTTPConduit httpConduit = (HTTPConduit) conduit;
 
-            TLSClientParameters tlsClientParams = retriveHTTPTLSClientParametersUsingSSLRef(httpConduit, sslRef, disableCNCheck);
+            TLSClientParameters tlsClientParams = retriveHTTPTLSClientParametersUsingSSLRef(httpConduit, sslRef, disableCNCheck, socketFactory);
             if (null != tlsClientParams) {
                 httpConduit.setTlsClientParameters(tlsClientParams);
             }
         }
     }
 
-    private TLSClientParameters retriveHTTPTLSClientParametersUsingSSLRef(HTTPConduit httpConduit, String sslRef, boolean disableCNCheck) {
+    private TLSClientParameters retriveHTTPTLSClientParametersUsingSSLRef(HTTPConduit httpConduit, String sslRef, boolean disableCNCheck, SSLSocketFactory sslSocketFactory) {
         TLSClientParameters tlsClientParams = null;
         if (this.secConfig == null) {
             tlsClientParams = httpConduit.getTlsClientParameters();
         } else {
             tlsClientParams = this.secConfig.getTlsClientParams();
         }
-
-        SSLSocketFactory sslSocketFactory = null;
 
         if (!StringUtils.isEmpty(sslRef)) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -110,7 +119,6 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
                 Tr.debug(tc, "Get Liberty default SSLSocketFactory.");
             }
         }
-        sslSocketFactory = getSocketFactory(sslRef);
 
         if (null != sslSocketFactory) {
             if (null == tlsClientParams) {
@@ -130,7 +138,7 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
         this.secConfig = secConfig;
     }
 
-    private SSLSocketFactory getSocketFactory(String sslRef) {
+    private SSLSocketFactory getSocketFactory(String sslRef, Message message) {
         try {
             final Class<?> jaxrsSslMgrClass = Class.forName("com.ibm.ws.jaxrs20.appsecurity.security.JaxRsSSLManager");
             if (jaxrsSslMgrClass == null) {
@@ -144,10 +152,13 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
 
                 @Override
                 public Method run() throws NoSuchMethodException, SecurityException {
-                    return jaxrsSslMgrClass.getDeclaredMethod("getSSLSocketFactoryBySSLRef", String.class, Map.class, boolean.class);
+                    return jaxrsSslMgrClass.getDeclaredMethod("getSSLSocketFactoryBySSLRef", String.class, String.class, String.class);
                 }
             });
-            Object[] parameters = { sslRef, null, false }; //getSSLSocketFactoryBySSLRef ignores the third (boolean) parameter
+
+            URI uri = URI.create((String) message.get(Message.REQUEST_URI));
+
+            Object[] parameters = { sslRef, uri.getHost(), Integer.toString(uri.getPort()) };
             SSLSocketFactory ssLSocketFactory = (SSLSocketFactory) m.invoke(classObject, parameters);
             return ssLSocketFactory;
         } catch (Exception e) {

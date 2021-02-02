@@ -83,11 +83,22 @@ public final class URITemplate {
             } else if (chunk instanceof Variable) {
                 Variable var = (Variable) chunk;
                 variables.add(var.getName());
-                if (var.getPattern() != null) {
+                // Liberty change begin
+                String pattern = var.getPattern();
+                if (pattern != null) {
                     customVariables.add(var.getName());
-                    patternBuilder.append('(');
-                    patternBuilder.append(var.getPattern());
-                    patternBuilder.append(')');
+                    // #11893 Add parenthesis to the pattern to identify a regex in the pattern, 
+                    // however do not add them if they already exist since that will cause the Matcher
+                    // to create extraneous values.  Parens identify a group so multiple parens would
+                    // indicate multiple groups.
+                    if (pattern.startsWith("(") && pattern.endsWith(")")) {
+                        patternBuilder.append(pattern);
+                    } else {
+                        patternBuilder.append('(');
+                        patternBuilder.append(pattern);
+                        patternBuilder.append(')');
+                    }
+                    //Liberty change end
                 } else {
                     patternBuilder.append(DEFAULT_PATH_VARIABLE_REGEX);
                 }
@@ -424,27 +435,23 @@ public final class URITemplate {
     // Liberty Change end
 
     public static int compareTemplates(URITemplate t1, URITemplate t2) {
-        String l1 = t1.getLiteralChars();
-        String l2 = t2.getLiteralChars();
-        if (!l1.equals(l2)) {
-            // descending order
-            return l1.length() < l2.length() ? 1 : -1;
-        }
-
-        int g1 = t1.getVariables().size();
-        int g2 = t2.getVariables().size();
+        int l1 = t1.getLiteralChars().length();
+        int l2 = t2.getLiteralChars().length();
         // descending order
-        int result = g1 < g2 ? 1 : g1 > g2 ? -1 : 0;
+        int result = l1 < l2 ? 1 : l1 > l2 ? -1 : 0;
         if (result == 0) {
-            int gCustom1 = t1.getCustomVariables().size();
-            int gCustom2 = t2.getCustomVariables().size();
-            if (gCustom1 != gCustom2) {
-                // descending order
-                return gCustom1 < gCustom2 ? 1 : -1;
+            int g1 = t1.getVariables().size();
+            int g2 = t2.getVariables().size();
+            // descending order
+            result = g1 < g2 ? 1 : g1 > g2 ? -1 : 0;
+            if (result == 0) {
+                int gCustom1 = t1.getCustomVariables().size();
+                int gCustom2 = t2.getCustomVariables().size();
+                result = gCustom1 < gCustom2 ? 1 : gCustom1 > gCustom2 ? -1 : 0;
+                if (result == 0) {
+                    result = t1.getPatternValue().compareTo(t2.getPatternValue());
+                }
             }
-        }
-        if (result == 0) {
-            result = t1.getPatternValue().compareTo(t2.getPatternValue());
         }
 
         return result;

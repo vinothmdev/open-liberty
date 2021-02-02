@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -40,25 +40,18 @@ public class WCPushBuilderSecurityTest extends LoggingTest {
 
     @BeforeClass
     public static void setUp() throws Exception {
-
         LOG.info("Setup : add TestPushBuilderSecurity to the server if not already present.");
 
         WCApplicationHelper.addWarToServerApps(SHARED_SERVER.getLibertyServer(), "TestPushBuilderSecurity.war", true, "testpushbuildersecurity.war.servlets");
 
         SHARED_SERVER.startIfNotStarted();
-
-        LOG.info("Setup : wait for message to indicate app has started");
-
-        SHARED_SERVER.getLibertyServer().waitForStringInLog("CWWKZ0001I.* TestPushBuilderSecurity", 10000);
-
+        WCApplicationHelper.waitForAppStart("TestPushBuilderSecurity", WCPushBuilderSecurityTest.class.getName(), SHARED_SERVER.getLibertyServer());
         LOG.info("Setup : complete, ready for Tests");
-
     }
 
     @AfterClass
     public static void testCleanup() throws Exception {
-
-        SHARED_SERVER.getLibertyServer().stopServer(null);
+        SHARED_SERVER.getLibertyServer().stopServer();
     }
 
     /**
@@ -112,7 +105,6 @@ public class WCPushBuilderSecurityTest extends LoggingTest {
      */
     @Override
     protected SharedServer getSharedServer() {
-        // TODO Auto-generated method stub
         return SHARED_SERVER;
     }
 

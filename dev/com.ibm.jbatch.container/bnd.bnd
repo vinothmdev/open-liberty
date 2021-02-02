@@ -1,5 +1,5 @@
 #*******************************************************************************
-# Copyright (c) 2017 IBM Corporation and others.
+# Copyright (c) 2017, 2020 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -15,10 +15,10 @@ Bundle-Name: Java Batch RI core runtime implementation
 Bundle-SymbolicName: com.ibm.jbatch.container
 Bundle-Description:  Java Batch RI core runtime implementation
 
-# java batch is part of EE7 and therefore requires java 1.7
-Require-Capability: osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=1.7))" 
 
 WS-TraceGroup: wsbatch
+
+jakartaeeMe: true
 
 #######################################################################
 # Please be careful and circulate the idea in a design discussion
@@ -50,6 +50,7 @@ Include-Resource: \
   OSGI-INF/metatype=resources/OSGI-INF/metatype,\
   OSGI-INF/l10n=resources/OSGI-INF/l10n,\
   com/ibm/jbatch/container/jsl/jobXML_1_0.xsd=src/com/ibm/jbatch/container/jsl/jobXML_1_0.xsd,\
+  com/ibm/jbatch/container/jsl/jobXML_2_0.xsd=src/com/ibm/jbatch/container/jsl/jobXML_2_0.xsd,\
   xsd=resources/xsd
 
 -dsannotations: com.ibm.jbatch.container.api.impl.JobOperatorImpl,\
@@ -69,6 +70,9 @@ Include-Resource: \
  com.ibm.jbatch.container.ws.impl.WSJobRepositoryImpl,\
  com.ibm.jbatch.container.ws.impl.BatchLocationServiceImpl
 
+# Using version=! in order to not have a version attached to the import for packages that were removed
+# from Java after Java 8.  Doing this keeps the import like before Java 11 support. It will get the 
+# packages from Java when using Java 8 or earlier and from the new shipped bundles for Java 9 and later.
 ##
 # Using '*' below causes problems with our two separate src dirs
 ##
@@ -80,13 +84,16 @@ Import-Package: com.ibm.jbatch.spi,\
 	javax.inject;resolution:=optional,\
 	javax.batch.*,\
 	org.xml.sax,\
+	javax.xml.bind;version=!,\
+	javax.xml.bind.annotation;version=!,\
+	javax.xml.bind.annotation.adapters;version=!,\
 	*
-Private-Package: com.ibm.jbatch.container.*,\
-	com.ibm.jbatch.container.modelresolver.impl
+Private-Package: com.ibm.jbatch.container.*
 
 instrument.classesExcludes: com/ibm/jbatch/container/internal/resources/*.class
 
 -buildpath: \
+	com.ibm.websphere.javaee.jaxb.2.2;version=latest,\
 	com.ibm.jbatch.jsl.model;version=latest,\
 	com.ibm.websphere.appserver.spi.logging;version=latest,\
 	com.ibm.websphere.javaee.batch.1.0;version=latest,\
@@ -125,7 +132,7 @@ instrument.classesExcludes: com/ibm/jbatch/container/internal/resources/*.class
 	org.jmock:jmock;strategy=exact;version=2.5.1, \
 	org.jmock:jmock-legacy;version=2.5.0, \
 	com.ibm.ws.org.objenesis:objenesis;version=1.0, \
-	cglib:cglib-nodep;version=3.2.7, \
+	cglib:cglib-nodep;version=3.3.0, \
 	org.mockito:mockito-all;version=1.9.5, \
 	com.ibm.ws.kernel.boot;version=latest, \
 	com.ibm.ws.logging;version=latest,\

@@ -18,8 +18,10 @@ src: \
 
 fat.project: true
 
-javac.source: 1.8
-javac.target: 1.8
+tested.features: \
+  servlet-5.0,\
+  componenttest-2.0
+
 
 -buildpath: \
     com.ibm.websphere.javaee.jcache.1.1;version=latest,\

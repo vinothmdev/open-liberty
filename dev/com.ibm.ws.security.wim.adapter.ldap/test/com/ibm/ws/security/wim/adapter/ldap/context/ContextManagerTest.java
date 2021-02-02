@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -681,6 +681,7 @@ public class ContextManagerTest {
         cm.setSSLEnabled(true);
         cm.setConnectTimeout(12345l);
         cm.setReadTimeout(12345l);
+        cm.setJndiOutputEnabled(true);
         cm.addFailoverServer("localhost", failoverLdapServer.getLdapServer().getPort());
         cm.setContextPool(true, 0, 1, 3, 1000l, 2000l);
         cm.setWriteToSecondary(true);
@@ -697,6 +698,7 @@ public class ContextManagerTest {
         assertTrue("Did not find SSL Enabled in toString: " + toString, toString.contains("iSSLEnabled=true"));
         assertTrue("Did not find Connect Timeout in toString: " + toString, toString.contains("iConnectTimeout=12345"));
         assertTrue("Did not find Read Timeout in toString: " + toString, toString.contains("iReadTimeout=12345"));
+        assertTrue("Did not find JndiOutputEnabled in toString: " + toString, toString.contains("iJndiOutputEnabled=true"));
         assertTrue("Did not find Primary Server in toString: " + toString, toString.contains("iPrimaryServer=localhost:" + primaryLdapServer.getLdapServer().getPort()));
         assertTrue("Did not find Failover Servers in toString: " + toString,
                    toString.contains("iFailoverServers=[localhost:" + failoverLdapServer.getLdapServer().getPort() + "]"));
@@ -730,9 +732,11 @@ public class ContextManagerTest {
 
         try {
             /*
-             * Configure the context manager with a 100 ms connect timeout.
+             * Configure the context manager with a 500 ms connect timeout.
+             * Bumped up from a 100ms timeout as that's probably too much precision to expect from our build machines
+             * Looking for a balance of testing the timeout without making the unit test take a long time
              */
-            long expectedTimeout = 100L;
+            long expectedTimeout = 500L;
             ContextManager cm = new ContextManager();
             cm.setPrimaryServer("localhost", serverSocket.getLocalPort());
             cm.setContextPool(false, null, null, null, null, null);
@@ -744,16 +748,16 @@ public class ContextManagerTest {
                 cm.createDirContext(USER_DN, "password".getBytes());
                 fail("Expected NamingException.");
             } catch (NamingException e) {
-                // javax.naming.NamingException: LDAP response read timed out, timeout used:100ms.
+                // javax.naming.NamingException: LDAP response read timed out, timeout used:500ms.
                 time = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - time);
                 assertTrue("Expected connect timeout to be " + expectedTimeout + " ms but was " + time,
                            time >= expectedTimeout && time <= (expectedTimeout + 200));
             }
 
             /*
-             * Configure the context manager with a 500 ms connect timeout.
+             * Configure the context manager with a 1000 ms connect timeout.
              */
-            expectedTimeout = 500L;
+            expectedTimeout = 1000L;
             cm.setConnectTimeout(expectedTimeout);
             cm.initialize();
 
@@ -762,7 +766,7 @@ public class ContextManagerTest {
                 cm.createDirContext(USER_DN, "password".getBytes());
                 fail("Expected NamingException.");
             } catch (NamingException e) {
-                // javax.naming.NamingException: LDAP response read timed out, timeout used:500ms.
+                // javax.naming.NamingException: LDAP response read timed out, timeout used:1000ms.
                 time = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - time);
                 assertTrue("Expected connect timeout to be " + expectedTimeout + " millisecond but was " + time,
                            time >= expectedTimeout && time <= (expectedTimeout + 200));

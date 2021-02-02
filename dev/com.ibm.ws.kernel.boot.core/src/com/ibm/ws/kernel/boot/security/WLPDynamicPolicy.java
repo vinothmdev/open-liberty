@@ -15,18 +15,14 @@ import java.security.AllPermission;
 import java.security.CodeSource;
 import java.security.Permission;
 import java.security.PermissionCollection;
-import java.security.Permissions;
 import java.security.Policy;
 import java.security.ProtectionDomain;
 import java.util.Enumeration;
-import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-/**
- *
- */
 public class WLPDynamicPolicy extends Policy {
+
     // The policy that this WLPDynamicPolicy is replacing
     private Policy policy;
 
@@ -60,8 +56,8 @@ public class WLPDynamicPolicy extends Policy {
             }
 
             @Override
-            public Enumeration elements() {
-                return new Enumeration() {
+            public Enumeration<Permission> elements() {
+                return new Enumeration<Permission>() {
                     int cur = 0;
 
                     @Override
@@ -70,7 +66,7 @@ public class WLPDynamicPolicy extends Policy {
                     }
 
                     @Override
-                    public Object nextElement() {
+                    public Permission nextElement() {
                         if (cur == 0) {
                             cur = 1;
                             return allPermission;
@@ -93,7 +89,8 @@ public class WLPDynamicPolicy extends Policy {
 
     private PermissionCollection getMergedPermissions(CodeSource codesource) {
         if (permissionsCombiner != null && codesource != null && codesource.getLocation() != null) {
-            return permissionsCombiner.getCombinedPermissions(new Permissions(), codesource); // TODO: Determine if this needs merging with the static permissions.
+            //return permissionsCombiner.getCombinedPermissions(new Permissions(), codesource); // TODO: Determine if this needs merging with the static permissions.
+            return permissionsCombiner.getCombinedPermissions(policy.getPermissions(codesource), codesource); // TODO: Determine if this needs merging with the static permissions.
         } else {
             return policy.getPermissions(codesource);
         }
@@ -113,10 +110,16 @@ public class WLPDynamicPolicy extends Policy {
     public boolean implies(ProtectionDomain domain, Permission permission) {
         if (contains(domain.getCodeSource())) {
             return true;
+        } else if (policy == null || policy.implies(domain, permission)) {
+            return true;
         } else {
-            return policy == null ? true : policy.implies(domain, permission);
+            // Special fallback case for JDK modules that have missing permissions
+            // By adding modules here, we are effectively granting AllPermissions to those JDK modules
+            String location = (domain != null && domain.getCodeSource() != null && domain.getCodeSource().getLocation() != null) //
+                            ? domain.getCodeSource().getLocation().toExternalForm() : "";
+            // Added because of https://github.com/eclipse/openj9/issues/6119
+            return location.startsWith("jrt:/jdk.attach");
         }
-
     }
 
     @Override
@@ -133,9 +136,7 @@ public class WLPDynamicPolicy extends Policy {
             return false;
         // Check to see if this URL is in our set of URLs to give AllPermissions to.
 
-        for (Iterator iter = urls.iterator(); iter.hasNext();) {
-            URL u = (URL) iter.next();
-
+        for (URL u : urls) {
             if (u.toString().equals(url.toString())) {
                 return true;
             }

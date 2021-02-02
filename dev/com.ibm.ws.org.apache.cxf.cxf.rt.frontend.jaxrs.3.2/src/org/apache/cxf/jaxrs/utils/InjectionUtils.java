@@ -46,6 +46,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.SortedSet;
@@ -73,7 +74,7 @@ import org.apache.cxf.common.i18n.BundleUtils;
 import org.apache.cxf.common.classloader.ClassLoaderUtils;
 import org.apache.cxf.common.util.ClassHelper;
 import org.apache.cxf.common.util.PrimitiveUtils;
-import org.apache.cxf.common.util.ProxyClassLoader;
+import org.apache.cxf.common.util.ProxyClassLoaderCache;
 import org.apache.cxf.common.util.ReflectionUtil;
 import org.apache.cxf.common.util.StringUtils;
 import org.apache.cxf.helpers.CastUtils;
@@ -108,6 +109,7 @@ import org.apache.cxf.message.MessageUtils;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.container.service.annotations.WebAnnotations;
+import com.ibm.ws.container.service.annocache.AnnotationsBetaHelper;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.jaxrs20.api.JaxRsFactoryBeanCustomizer;
 import com.ibm.ws.jaxrs20.injection.InjectionRuntimeContextHelper;
@@ -115,6 +117,7 @@ import com.ibm.ws.jaxrs20.injection.metadata.InjectionRuntimeContext;
 import com.ibm.wsspi.adaptable.module.Container;
 import com.ibm.wsspi.adaptable.module.UnableToAdaptException;
 import com.ibm.wsspi.anno.info.ClassInfo;
+import com.ibm.wsspi.anno.info.FieldInfo;
 import com.ibm.wsspi.anno.info.MethodInfo;
 import com.ibm.wsspi.anno.targets.AnnotationTargets_Targets;
 
@@ -155,19 +158,12 @@ public final class InjectionUtils {
     private static final String ENUM_CONVERSION_CASE_SENSITIVE = "enum.conversion.case.sensitive";
 
     private static final String IGNORE_MATRIX_PARAMETERS = "ignore.matrix.parameters";
-
-//    private static List<String> JAXRS_JEE_COMPONENTS = Collections.<String> emptyList();
-
-    private static List<String> explicitLifcycle = new ArrayList<String>();
-    static {
-        explicitLifcycle.add("javax.enterprise.context.RequestScoped");
-        explicitLifcycle.add("javax.enterprise.context.ApplicationScoped");
-        explicitLifcycle.add("javax.enterprise.context.SessionScoped");
-        explicitLifcycle.add("javax.enterprise.context.Dependent");
-    }
-
+    
+    private static ProxyClassLoaderCache proxyClassLoaderCache = 
+        new ProxyClassLoaderCache();
+    
     private InjectionUtils() {
-
+        // Empty
     }
 
     public static Field getDeclaredField(Class<?> cls, String fieldName) {
@@ -437,6 +433,7 @@ public final class InjectionUtils {
         } catch (IllegalAccessException ex) {
             reportServerError("METHOD_ACCESS_FAILURE", method.getName());
         } catch (InvocationTargetException ex) {
+            Tr.error(tc, ex.getCause().getMessage(), ex); // Liberty change
             Response r = JAXRSUtils.convertFaultToResponse(ex.getCause(), inMessage);
             if (r != null) {
                 inMessage.getExchange().put(Response.class, r);
@@ -494,9 +491,12 @@ public final class InjectionUtils {
 
         value = decodeValue(value, decoded, pType);
 
+        final Optional<ParamConverter<T>> converter = getParamConverter(pClass, genericType, paramAnns, message);
         Object result = null;
         try {
-            result = createFromParameterHandler(value, pClass, genericType, paramAnns, message);
+            if (converter.isPresent()) {
+                result = converter.get().fromString(value);
+            }
         } catch (IllegalArgumentException nfe) {
             throw createParamConversionException(pType, nfe);
         }
@@ -508,7 +508,12 @@ public final class InjectionUtils {
                 theResult = pClass.cast(result);
             }
             return theResult;
+        } else if (converter.isPresent() && !pClass.isPrimitive()) {
+            // The converter was applied and returned null value, acceptable
+            // outcome for non-primitive type.
+            return pClass.cast(result);
         }
+
         if (Number.class.isAssignableFrom(pClass) && "".equals(value)) {
             //pass empty string to boxed number type will result in 404
             return null;
@@ -596,6 +601,18 @@ public final class InjectionUtils {
             return ExceptionUtils.toNotFoundException(ex, null);
         }
         return ExceptionUtils.toBadRequestException(ex, null);
+    }
+
+    public static <T> Optional<ParamConverter<T>> getParamConverter(Class<T> pClass,
+            Type genericType, Annotation[] anns, Message message) {
+                                                                
+        if (message != null) {
+            ServerProviderFactory pf = ServerProviderFactory.getInstance(message);
+            ParamConverter<T> pm = pf.createParameterHandler(pClass, genericType, anns, message);
+            return Optional.ofNullable(pm);
+        }
+
+        return Optional.empty();
     }
 
     public static <T> T createFromParameterHandler(String value,
@@ -708,7 +725,7 @@ public final class InjectionUtils {
         }
 
         Map<String, MultivaluedMap<String, String>> parsedValues =
-                        new HashMap<String, MultivaluedMap<String, String>>();
+                        new HashMap<>();
         for (Map.Entry<String, List<String>> entry : values.entrySet()) {
             String memberKey = entry.getKey();
             String beanKey = null;
@@ -723,7 +740,7 @@ public final class InjectionUtils {
 
             MultivaluedMap<String, String> value = parsedValues.get(beanKey);
             if (value == null) {
-                value = new MetadataMap<String, String>();
+                value = new MetadataMap<>();
                 parsedValues.put(beanKey, value);
             }
             value.put(memberKey, entry.getValue());
@@ -764,8 +781,8 @@ public final class InjectionUtils {
                 }
 
                 if (setter != null && getter != null) {
-                    Class<?> type = null;
-                    Type genericType = null;
+                    final Class<?> type;
+                    final Type genericType;
                     Object paramValue = null;
                     if (setter instanceof Method) {
                         type = Method.class.cast(setter).getParameterTypes()[0];
@@ -828,19 +845,17 @@ public final class InjectionUtils {
         return null;
     }
 
-    // CHECKSTYLE:OFF
     private static Object injectIntoMap(Class<?> rawType, Type genericType,
                                         Annotation[] paramAnns,
                                         MultivaluedMap<String, String> processedValues,
                                         boolean decoded,
                                         ParameterType pathParam, Message message) {
-        // CHECKSTYLE:ON
         ParameterizedType paramType = (ParameterizedType) genericType;
         Class<?> keyType = (Class<?>) paramType.getActualTypeArguments()[0];
         Type secondType = InjectionUtils.getType(paramType.getActualTypeArguments(), 1);
 
         if (secondType instanceof ParameterizedType) {
-            MultivaluedMap<Object, Object> theValues = new MetadataMap<Object, Object>();
+            MultivaluedMap<Object, Object> theValues = new MetadataMap<>();
             ParameterizedType valueParamType = (ParameterizedType) secondType;
             Class<?> valueType = (Class<?>) InjectionUtils.getType(valueParamType
                             .getActualTypeArguments(), 0);
@@ -901,10 +916,10 @@ public final class InjectionUtils {
     private static List<MultivaluedMap<String, String>> processValues(Class<?> type, Type genericType,
                                                                       MultivaluedMap<String, String> values,
                                                                       boolean isbean) {
-        List<MultivaluedMap<String, String>> valuesList =
-                        new ArrayList<MultivaluedMap<String, String>>();
+        final List<MultivaluedMap<String, String>> valuesList;
 
         if (isbean && InjectionUtils.isSupportedCollectionOrArray(type)) {
+            valuesList = new ArrayList<>();
             Class<?> realType = InjectionUtils.getActualType(genericType);
             for (Map.Entry<String, List<String>> entry : values.entrySet()) {
                 String memberKey = entry.getKey();
@@ -947,7 +962,7 @@ public final class InjectionUtils {
                     MultivaluedMap<String, String> splitValues =
                                     (idx < valuesList.size()) ? valuesList.get(idx) : null;
                     if (splitValues == null) {
-                        splitValues = new MetadataMap<String, String>();
+                        splitValues = new MetadataMap<>();
                         valuesList.add(splitValues);
                     }
                     splitValues.add(memberKey, value);
@@ -955,7 +970,7 @@ public final class InjectionUtils {
                 }
             }
         } else {
-            valuesList.add(values);
+            valuesList = Collections.singletonList(values);
         }
 
         return valuesList;
@@ -997,6 +1012,7 @@ public final class InjectionUtils {
     }
 
     //CHECKSTYLE:OFF
+    @FFDCIgnore(value = { IndexOutOfBoundsException.class }) // Liberty Change
     private static Object injectIntoCollectionOrArray(Class<?> rawType,
                                                       Type genericType,
                                                       Annotation[] paramAnns,
@@ -1004,10 +1020,31 @@ public final class InjectionUtils {
                                                       boolean isbean, boolean decoded,
                                                       ParameterType pathParam, Message message) {
         //CHECKSTYLE:ON
+        // Liberty change start
+        ParamConverter<?> pm = null;
+        if (message != null) {
+            ServerProviderFactory pf = ServerProviderFactory.getInstance(message);
+            pm = pf.createParameterHandler(rawType, genericType, paramAnns, message);
+            if (pm != null) {
+                if (tc.isDebugEnabled() && values.size() > 1) {
+                    Tr.debug(tc, "injectIntoCollectionOrArray unexpected: size of values > 1, values.size()=" + values.size());
+                }
+                for (Map.Entry<String, List<String>> entry : values.entrySet()) {
+                    // always only ever 1?
+                    // if a user specifies the wrong id we should return null instead of blowing up
+                    try {
+                        return pm.fromString(entry.getValue().get(0));
+                    } catch (IndexOutOfBoundsException e) {
+                        return null;
+                    }
+                }
+            }
+        }
+        // Liberty change end
         Class<?> type = getCollectionType(rawType);
 
-        Class<?> realType = null;
-        Type realGenericType = null;
+        final Class<?> realType;
+        final Type realGenericType;
         if (rawType.isArray()) {
             realType = rawType.getComponentType();
             realGenericType = realType;
@@ -1068,9 +1105,9 @@ public final class InjectionUtils {
         }
         List<String> newValues = new ArrayList<>();
         for (String v : values) {
-            String[] segments = StringUtils.split(v, "/");
+            String[] segments = v.split("/");
             for (String s : segments) {
-                if (s.length() != 0) {
+                if (!s.isEmpty()) {
                     newValues.add(s);
                 }
             }
@@ -1111,7 +1148,7 @@ public final class InjectionUtils {
 
         Object value = null;
         if (InjectionUtils.isSupportedCollectionOrArray(paramType)) {
-            MultivaluedMap<String, String> paramValuesMap = new MetadataMap<String, String>();
+            MultivaluedMap<String, String> paramValuesMap = new MetadataMap<>();
             paramValuesMap.put("", paramValues);
             value = InjectionUtils.injectIntoCollectionOrArray(paramType, genericType, paramAnns,
                                                                paramValuesMap, false, decoded, pathParam, message);
@@ -1143,7 +1180,7 @@ public final class InjectionUtils {
         } else if (SecurityContext.class.isAssignableFrom(type)) {
             proxy = new ThreadLocalSecurityContext();
         } else if (ContextResolver.class.isAssignableFrom(type)) {
-            proxy = new ThreadLocalContextResolver<Object>();
+            proxy = new ThreadLocalContextResolver<>();
         } else if (Request.class.isAssignableFrom(type)) {
             proxy = new ThreadLocalRequest();
         } else if (Providers.class.isAssignableFrom(type)) {
@@ -1163,17 +1200,46 @@ public final class InjectionUtils {
             proxy = createThreadLocalServletApiContext(type.getName());
         }
         if (proxy == null) {
-            ProxyClassLoader loader = new ProxyClassLoader(getClassLoader(Proxy.class));
-            loader.addLoader(getClassLoader(type));
-            loader.addLoader(getClassLoader(ThreadLocalProxy.class));
-            return (ThreadLocalProxy<T>) Proxy.newProxyInstance(loader,
-                                                                new Class[] { type, ThreadLocalProxy.class },
-                                                                new ThreadLocalInvocationHandler<T>());
+            ClassLoader loader
+                = proxyClassLoaderCache.getProxyClassLoader(Proxy.class.getClassLoader(), 
+                                                            new Class<?>[]{Proxy.class, ThreadLocalProxy.class, type}); 
+            if (!canSeeAllClasses(loader, new Class<?>[]{Proxy.class, ThreadLocalProxy.class, type})) {
+                // Liberty change start - (LOG to Tr)
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "find a loader from ProxyClassLoader cache," 
+                        + " but can't see all interfaces");
+                
+                    Tr.debug(tc, "create a new one with parent  " + Proxy.class.getClassLoader());
+                }
+                //Liberty change end
+                proxyClassLoaderCache.removeStaleProxyClassLoader(type);
+                proxyClassLoaderCache.getProxyClassLoader(Proxy.class.getClassLoader(), 
+                                                          new Class<?>[]{Proxy.class, ThreadLocalProxy.class, type}); 
+            }
+            return (ThreadLocalProxy<T>)Proxy.newProxyInstance(loader,
+                                                     new Class[] {type, ThreadLocalProxy.class },
+                                                     new ThreadLocalInvocationHandler<T>());
         }
 
         return (ThreadLocalProxy<T>) proxy;
     }
-
+    
+    private static boolean canSeeAllClasses(ClassLoader loader, Class<?>[] interfaces) {
+        for (Class<?> currentInterface : interfaces) {
+            String ifName = currentInterface.getName();
+            try {
+                Class<?> ifClass = Class.forName(ifName, true, loader);
+                if (ifClass != currentInterface) {
+                    return false;
+                }
+               
+            } catch (NoClassDefFoundError | ClassNotFoundException e) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
     private static boolean isServletApiContext(String name) {
         return name.startsWith("javax.servlet.");
     }
@@ -1341,7 +1407,7 @@ public final class InjectionUtils {
                 Object oldProvider = pi.getOldProvider();
                 clz = oldProvider.getClass();
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    Tr.debug(tc, "injectContexts pre: oldProvider=" + oldProvider + " clz=" + clz + " loader="+getClassLoader(clz));
+                    Tr.debug(tc, "injectContexts pre: oldProvider=" + oldProvider.getClass().getSimpleName() + " clz=" + clz + " loader="+getClassLoader(clz));
                 }
             } else {
                 clz = requestObject.getClass();
@@ -1383,6 +1449,15 @@ public final class InjectionUtils {
          * when the first call come, the Provider init and @PostConstruct can get the context values
          */
         InjectionRuntimeContextHelper.initSingletonEJBCDIProvider(resource, message, requestObject);
+    }
+
+    private static ClassLoader getClassLoader(final Class<?> clazz) {
+        return AccessController.doPrivileged(new PrivilegedAction<ClassLoader>() {
+            @Override
+            public ClassLoader run() {
+                return clazz.getClassLoader();
+            }
+        });
     }
 
 // Liberty Change for CXF End
@@ -1497,7 +1572,7 @@ public final class InjectionUtils {
     }
 
     public static MultivaluedMap<String, Object> extractValuesFromBean(Object bean, String baseName) {
-        MultivaluedMap<String, Object> values = new MetadataMap<String, Object>();
+        MultivaluedMap<String, Object> values = new MetadataMap<>();
         fillInValuesFromBean(bean, baseName, values);
         return values;
     }
@@ -1520,20 +1595,14 @@ public final class InjectionUtils {
                     continue;
                 }
 
-                String propertyName = methodName.substring(minLen);
-                if (propertyName.length() == 1) {
-                    propertyName = propertyName.toLowerCase();
-                } else {
-                    propertyName = propertyName.substring(0, 1).toLowerCase()
-                                   + propertyName.substring(1);
-                }
+                String propertyName = StringUtils.uncapitalize(methodName.substring(minLen));
                 if (baseName.contains(propertyName)
                     || "class".equals(propertyName)
                     || "declaringClass".equals(propertyName)) {
                     continue;
                 }
                 if (!"".equals(baseName)) {
-                    propertyName = baseName + "." + propertyName;
+                    propertyName = baseName + '.' + propertyName;
                 }
 
                 Object value = extractFromMethod(bean, m);
@@ -1545,7 +1614,7 @@ public final class InjectionUtils {
                 } else if (value.getClass().isEnum()) {
                     values.putSingle(propertyName, value.toString());
                 } else if (isSupportedCollectionOrArray(value.getClass())) {
-                    List<Object> theValues = null;
+                    final List<Object> theValues;
                     if (value.getClass().isArray()) {
                         theValues = Arrays.asList((Object[]) value);
                     } else if (value instanceof Set) {
@@ -1558,7 +1627,7 @@ public final class InjectionUtils {
                     if (isSupportedMap(m.getGenericReturnType())) {
                         Map<Object, Object> map = CastUtils.cast((Map<?, ?>) value);
                         for (Map.Entry<Object, Object> entry : map.entrySet()) {
-                            values.add(propertyName + "." + entry.getKey().toString(),
+                            values.add(propertyName + '.' + entry.getKey().toString(),
                                        entry.getValue().toString());
                         }
                     }
@@ -1572,7 +1641,7 @@ public final class InjectionUtils {
     public static Map<Parameter, Class<?>> getParametersFromBeanClass(Class<?> beanClass,
                                                                       ParameterType type,
                                                                       boolean checkIgnorable) {
-        Map<Parameter, Class<?>> params = new LinkedHashMap<Parameter, Class<?>>();
+        Map<Parameter, Class<?>> params = new LinkedHashMap<>();
         for (Method m : beanClass.getMethods()) {
             String methodName = m.getName();
             boolean startsFromGet = methodName.startsWith("get");
@@ -1767,6 +1836,7 @@ public final class InjectionUtils {
         if (targetObject == null) {
             return null;
         }
+
         Type type = null;
 
         if (GenericEntity.class.isAssignableFrom(targetObject.getClass())) {
@@ -1776,15 +1846,11 @@ public final class InjectionUtils {
         } else if ((invoked != null) && (isAsyncMethod(invoked))) {
             //TODO: interesting
             type = processGenericTypeIfNeeded(serviceCls, targetType, getAsynchronizedGenericType(targetObject));
-        }
-
-        else {
-
+        } else {
             // when a method has been invoked it is still possible that either an ExceptionMapper
             // or a ResponseHandler filter overrides a response entity; if it happens then
             // the Type is the class of the response object, unless this new entity is assignable
             // to invoked.getReturnType(); same applies to the case when a method returns Response
-
             type = targetObject.getClass();
         }
 
@@ -1804,7 +1870,6 @@ public final class InjectionUtils {
     }
 
     public static Type processGenericTypeIfNeeded(Class<?> serviceCls, Class<?> paramCls, Type type) {
-
         if (type instanceof TypeVariable) {
             type = InjectionUtils.getSuperType(serviceCls, (TypeVariable<?>) type);
         } else if (type instanceof ParameterizedType) {
@@ -1826,16 +1891,16 @@ public final class InjectionUtils {
             type = paramCls;
         }
         return type;
-
     }
 
     public static Object getEntity(Object o) {
         return o instanceof GenericEntity ? ((GenericEntity<?>) o).getEntity() : o;
     }
 
-    private static final Set<String> JAXRS_COMPONENTS_INTERFACE;
+    private static final List<String> JAXRS_COMPONENTS_INTERFACE;
     static {
-        JAXRS_COMPONENTS_INTERFACE = new HashSet<String>();
+        JAXRS_COMPONENTS_INTERFACE = new ArrayList<String>();
+
         JAXRS_COMPONENTS_INTERFACE.add("javax.ws.rs.ext.MessageBodyWriter");
         JAXRS_COMPONENTS_INTERFACE.add("javax.ws.rs.ext.MessageBodyReader");
         JAXRS_COMPONENTS_INTERFACE.add("javax.ws.rs.ext.ExceptionMapper");
@@ -1849,140 +1914,289 @@ public final class InjectionUtils {
         JAXRS_COMPONENTS_INTERFACE.add("org.apache.cxf.jaxrs.ext.ContextResolver");
 
         JAXRS_COMPONENTS_INTERFACE.add("javax.ws.rs.core.Application");
-
     }
 
-    private static final Set<String> JAXRS_COMPONENTS_ABSTRACTCLASS;
+    private static final List<String> JAXRS_COMPONENTS_ABSTRACTCLASS;
     static {
-        JAXRS_COMPONENTS_ABSTRACTCLASS = new HashSet<String>();
+        JAXRS_COMPONENTS_ABSTRACTCLASS = new ArrayList<String>();
+
         JAXRS_COMPONENTS_ABSTRACTCLASS.add("javax.ws.rs.core.Application");
     }
 
-    /**
-     * @param moduleContainer
-     * @return
-     * @throws UnableToAdaptException
-     */
+    private static List<String> LIFECYCLE_CLASSES;
+    static {
+        LIFECYCLE_CLASSES = new ArrayList<String>();
+
+        LIFECYCLE_CLASSES.add("javax.enterprise.context.RequestScoped");
+        LIFECYCLE_CLASSES.add("javax.enterprise.context.ApplicationScoped");
+        LIFECYCLE_CLASSES.add("javax.enterprise.context.SessionScoped");
+        LIFECYCLE_CLASSES.add("javax.enterprise.context.Dependent");
+    }
+
     public static List<String> getJaxRsInjectionClasses(Container moduleContainer) {
+        if ( AnnotationsBetaHelper.getLibertyBeta() ) {
+            return getJaxRsInjectionClassesPostBeta(moduleContainer);
+        } else {
+            return getJaxRsInjectionClassesPreBeta(moduleContainer);
+        }
+    }
 
-//        if (!JAXRS_JEE_COMPONENTS.isEmpty()) {
-//            return JAXRS_JEE_COMPONENTS;
-//        }
-
-        WebAnnotations webAnnotations = null;
+    public static List<String> getJaxRsInjectionClassesPreBeta(Container moduleContainer) {
+        WebAnnotations webAnnotations;
         try {
-            webAnnotations = moduleContainer
-                            .adapt(WebAnnotations.class);
+            webAnnotations = moduleContainer.adapt(WebAnnotations.class);
             webAnnotations.openInfoStore();
-            AnnotationTargets_Targets annotationTargets = webAnnotations
-                            .getAnnotationTargets();
-            Set<String> allComponentsClassNames = new HashSet<String>();
-            //We should skip the annotation scan on Interface
+        } catch ( Exception e ) { 
+            // FFDC
+            return Collections.<String> emptyList();
+        }
 
-            // Scan annotation for @Provider, @Path, @ApplicationPath
-            allComponentsClassNames.addAll(annotationTargets.getAllInheritedAnnotatedClasses(
-                                                                                             Provider.class.getName(),
-                                                                                             AnnotationTargets_Targets.POLICY_SEED));
-            allComponentsClassNames
-                            .addAll(annotationTargets.getAllInheritedAnnotatedClasses(
-                                                                                      Path.class.getName(),
-                                                                                      AnnotationTargets_Targets.POLICY_SEED));
-            allComponentsClassNames.addAll(annotationTargets.getAllInheritedAnnotatedClasses(
-                                                                                             ApplicationPath.class.getName(), AnnotationTargets_Targets.POLICY_SEED));
+        try {
+            AnnotationTargets_Targets annotationTargets = webAnnotations.getAnnotationTargets();
 
-            Set<String> allComponentsClassNamesFinal = new HashSet<String>();
+            Set<String> componentsClassNames = new HashSet<String>();
 
-            //add the valid provider but no @Provider
-
-            for (String str : JAXRS_COMPONENTS_INTERFACE) {
-                allComponentsClassNames.addAll(annotationTargets.getAllImplementorsOf(str));
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(Provider.class.getName()) );
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(Path.class.getName()) );
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(ApplicationPath.class.getName()) );
+            for ( String interfaceName : JAXRS_COMPONENTS_INTERFACE ) {
+                componentsClassNames.addAll( annotationTargets.getAllImplementorsOf(interfaceName) );
+            }
+            for ( String abstractClassName : JAXRS_COMPONENTS_ABSTRACTCLASS) {
+                componentsClassNames.addAll(annotationTargets.getSubclassNames(abstractClassName) );
             }
 
-            for (String str : JAXRS_COMPONENTS_ABSTRACTCLASS) {
+            Set<String> injectionClassNames = new HashSet<String>();
 
-                allComponentsClassNames.addAll(annotationTargets.getSubclassNames(str));
-            }
+            for ( String componentClassName : componentsClassNames ) {
+                ClassInfo componentClass = webAnnotations.getClassInfo(componentClassName);
 
-            //filter the interface but add all implementors
-            //filter the class without @inject, @resources
-            //filter the class with @ApplicationScoped,@SessionScoped,@RequestScoped,@Dependent
-            for (String str : allComponentsClassNames) {
-
-                ClassInfo targetClass = webAnnotations.getClassInfo(str);
-                Set<String> impl = annotationTargets.getAllImplementorsOf(str);
-                if (!impl.isEmpty()) {
-                    if (shouldConsiderInjection(targetClass)) {
-                        allComponentsClassNamesFinal.addAll(impl);
+                Set<String> implementorNames = annotationTargets.getAllImplementorsOf(componentClassName);
+                if ( !implementorNames.isEmpty() ) {
+                    if ( shouldConsiderInjection(componentClass) ) {
+                        injectionClassNames.addAll(implementorNames);
                     }
 
                 } else {
-                    if (!targetClass.isInterface()) {
-                        if (shouldConsiderInjection(targetClass)) {
-                            allComponentsClassNamesFinal.add(str);
+                    if ( !componentClass.isInterface() ) {
+                        if (shouldConsiderInjection(componentClass)) {
+                            injectionClassNames.add(componentClassName);
                         }
                     }
-
                 }
-
             }
 
-            webAnnotations.closeInfoStore();
-            return new ArrayList<String>(allComponentsClassNamesFinal);
-        } catch (Exception e) {
-//            LOG.log(Level.FINE, "Exception when retrieve the JAX-RS components: ", e);
+            return new ArrayList<String>(injectionClassNames);
+
+        } catch ( Exception e ) {
+            // FFDC
+            return Collections.<String> emptyList();
+
+        } finally {
+            try {
+                webAnnotations.closeInfoStore();
+            } catch ( Exception e ) {
+                // FFDC
+            }
         }
-        return Collections.<String> emptyList();
     }
 
     /**
-     * @param targetClass
+     * Tell if injection is possible on a target class.
+     *
+     * Injection is possible if the class or one of its superclasses has
+     * an {@link javax.inject.Inject} annotation, except, ignore the class
+     * annotation if the class has a lifecycle class annotation.
+     *
+     * @param classInfo Class information which is to be tested.
+     *
+     * @return True or false telling if injection is possible on a target
+     *     class.
      */
-    private static boolean shouldConsiderInjection(ClassInfo clazz) {
-//        if (targetClass.getAnnotation("javax.inject.Inject") != null || targetClass.getAnnotation("javax.annotation.ManagedBean") != null
-//            || targetClass.getAnnotation("javax.annotation.Resource") != null) {
-
-        if (clazz.isAnnotationPresent("javax.inject.Inject") && !clazz.isAnnotationWithin(explicitLifcycle)) {
+    private static boolean shouldConsiderInjection(ClassInfo classInfo) {
+        if ( classInfo.isAnnotationPresent("javax.inject.Inject") &&
+             !classInfo.isAnnotationWithin(LIFECYCLE_CLASSES) ) {
             return true;
-        } else {
-
-            List<? extends com.ibm.wsspi.anno.info.FieldInfo> fields = clazz.getDeclaredFields();
-            Iterator<? extends com.ibm.wsspi.anno.info.FieldInfo> fieldToCheck = fields.iterator();
-            while (fieldToCheck.hasNext()) {
-                if (fieldToCheck.next().isAnnotationPresent("javax.inject.Inject")) {
-                    return true;
-                }
-            }
-
-            List<? extends MethodInfo> methods = clazz.getDeclaredMethods();
-            Iterator<? extends MethodInfo> methodToCheck = methods.iterator();
-            while (methodToCheck.hasNext()) {
-                if (methodToCheck.next().isAnnotationPresent("javax.inject.Inject")) {
-                    return true;
-                }
-            }
-
-            List<? extends MethodInfo> c = clazz.getDeclaredConstructors();
-            Iterator<? extends MethodInfo> constructorToCheck = c.iterator();
-            while (constructorToCheck.hasNext()) {
-                if (constructorToCheck.next().isAnnotationPresent("javax.inject.Inject")) {
-                    return true;
-                }
+        }
+        for ( FieldInfo fieldInfo : classInfo.getDeclaredFields() ) {
+            if ( fieldInfo.isAnnotationPresent("javax.inject.Inject") ) {
+                return true;
             }
         }
-        ClassInfo cls = clazz.getSuperclass();
-        if (cls != null) {
-            return shouldConsiderInjection(cls);
+        for ( MethodInfo methodInfo : classInfo.getDeclaredMethods() ) {
+            if ( methodInfo.isAnnotationPresent("javax.inject.Inject") ) {
+                return true;
+            }
+        }
+        for ( MethodInfo constructorInfo : classInfo.getDeclaredConstructors() ) {
+            if ( constructorInfo.isAnnotationPresent("javax.inject.Inject") ) {
+                return true;
+            }
+        }
+
+        ClassInfo superClassInfo = classInfo.getSuperclass();
+        if ( superClassInfo != null ) {
+            return shouldConsiderInjection(superClassInfo);
         } else {
             return false;
         }
     }
-    
-    private static ClassLoader getClassLoader(final Class<?> clazz) {
-        return AccessController.doPrivileged(new PrivilegedAction<ClassLoader>() {
-            @Override
-            public ClassLoader run() {
-                return clazz.getClassLoader();
+
+    //
+
+    public static List<String> getJaxRsInjectionClassesPostBeta(Container moduleContainer) {
+        com.ibm.ws.container.service.annocache.WebAnnotations webAnnotations;
+        try {
+            webAnnotations = moduleContainer.adapt(com.ibm.ws.container.service.annocache.WebAnnotations.class);
+        } catch ( Exception e ) { 
+            // FFDC
+            return Collections.<String> emptyList();
+        }
+
+        try {
+            com.ibm.wsspi.annocache.targets.AnnotationTargets_Targets annotationTargets =
+                webAnnotations.getAnnotationTargets();
+
+            Set<String> componentsClassNames = new HashSet<String>();
+
+            // Annotation cases ...
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(Provider.class.getName()) );
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(Path.class.getName()) );
+            componentsClassNames.addAll( annotationTargets.getAllInheritedAnnotatedClasses(ApplicationPath.class.getName()) );
+
+            // Interface cases ...
+            for ( String interfaceName : JAXRS_COMPONENTS_INTERFACE ) {
+                componentsClassNames.addAll( annotationTargets.getAllImplementorsOf(interfaceName) );
             }
-        });
+
+            // Subclass cases ...
+            for ( String abstractClassName : JAXRS_COMPONENTS_ABSTRACTCLASS) {
+                componentsClassNames.addAll( annotationTargets.getSubclassNames(abstractClassName) );
+            }
+
+            Set<String> injectionClassNames = new HashSet<String>();
+
+            InjectionTargets injectionTargets = new InjectionTargets(annotationTargets);
+
+            // For each component class:
+            //   If the component class or one of its superclasses has @Inject:
+            //     If the component class is an interface:
+            //       Add the implementors of the component class.
+            //     If the component class is not an interface:
+            //       Add the component class itself.
+
+            for ( String componentClassName : componentsClassNames ) {
+                if ( annotationTargets.isInterface(componentClassName) ) {
+                    Set<String> implementorNames = annotationTargets.getAllImplementorsOf(componentClassName);
+                    if ( !implementorNames.isEmpty() ) {
+                        if ( injectionTargets.accept(componentClassName) ) {
+                            injectionClassNames.addAll(implementorNames);
+                        }
+                    }
+                } else {
+                    if ( injectionTargets.accept(componentClassName) ) {
+                        injectionClassNames.add(componentClassName);
+                    }
+                }
+            }
+
+            return new ArrayList<String>(injectionClassNames);
+
+        } catch ( Exception e ) {
+            // FFDC
+            return Collections.<String> emptyList();
+        }
+    }
+
+    private static class InjectionTargets {
+
+        private static final String INJECT_ANNOTATION_CLASS_NAME = "javax.inject.Inject";
+        private static final String RESOURCE_ANNOTATION_CLASS_NAME = "javax.annotation.Resource";
+
+        private final com.ibm.wsspi.annocache.targets.AnnotationTargets_Targets targets;
+
+        private Set<String> injectClassTargets;
+        private Set<String> injectMethodTargets;
+        private Set<String> injectFieldTargets;
+
+        private final Map<String, Set<String>> lifecycleTargets;
+
+        public String getSuperclassName(String className) {
+            return targets.getSuperclassName(className);
+        }
+
+        public InjectionTargets(com.ibm.wsspi.annocache.targets.AnnotationTargets_Targets targets) {
+            this.targets = targets;
+            this.injectClassTargets = null;
+            this.injectMethodTargets = null;
+            this.injectFieldTargets = null;
+            this.lifecycleTargets = new HashMap<String, Set<String>>(LIFECYCLE_CLASSES.size());
+        }
+
+        public boolean isInjectClassTarget(String className) {
+            if ( injectClassTargets == null ) {
+                injectClassTargets = new HashSet<String>();
+                injectClassTargets.addAll(targets.getAnnotatedClasses(INJECT_ANNOTATION_CLASS_NAME));
+                injectClassTargets.addAll(targets.getAnnotatedClasses(RESOURCE_ANNOTATION_CLASS_NAME));
+            }
+            return injectClassTargets.contains(className);
+        }
+
+        public boolean isInjectFieldTarget(String className) {
+            if ( injectFieldTargets == null ) {
+                injectFieldTargets = new HashSet<String>();
+                injectFieldTargets.addAll(targets.getClassesWithFieldAnnotation(INJECT_ANNOTATION_CLASS_NAME));
+                injectFieldTargets.addAll(targets.getClassesWithFieldAnnotation(RESOURCE_ANNOTATION_CLASS_NAME));
+            }
+            return injectFieldTargets.contains(className);
+        }
+
+        public boolean isInjectMethodTarget(String className) {
+            if ( injectMethodTargets == null ) {
+                injectMethodTargets = new HashSet<String>();
+                injectMethodTargets.addAll(targets.getClassesWithMethodAnnotation(INJECT_ANNOTATION_CLASS_NAME));
+                injectMethodTargets.addAll(targets.getClassesWithMethodAnnotation(RESOURCE_ANNOTATION_CLASS_NAME));
+            }
+            return injectMethodTargets.contains(className);
+        }
+
+        public boolean isLifecycleTarget(String className) {
+            for ( String lifecycleClassName : LIFECYCLE_CLASSES ) {
+                Set<String> annotatedClassNames = lifecycleTargets.get(lifecycleClassName);
+                if ( annotatedClassNames == null ) {
+                    annotatedClassNames = targets.getAnnotatedClasses(lifecycleClassName);
+                    lifecycleTargets.put(lifecycleClassName, annotatedClassNames);
+                }
+                if ( annotatedClassNames.contains(className) ) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public boolean isInjectTarget(String className) {
+            return ( (isInjectClassTarget(className) && !isLifecycleTarget(className)) ||
+                     isInjectFieldTarget(className) || 
+                     isInjectMethodTarget(className) );
+        }
+
+        /**
+         * Tell if injection is possible on a target class.
+         *
+         * Injection is possible if the class or one of its superclasses has
+         * an {@link javax.inject.Inject} annotation, except, ignore the class
+         * annotation if the class has a lifecycle class annotation.
+         *
+         * @param classInfo Class information which is to be tested.
+         *
+         * @return True or false telling if injection is possible on a target
+         *     class.
+         */
+        private boolean accept(String className) {
+            while ( (className != null) && !isInjectTarget(className) ) {
+                className = getSuperclassName(className);
+            }
+            return ( className != null );
+        }
     }
 }

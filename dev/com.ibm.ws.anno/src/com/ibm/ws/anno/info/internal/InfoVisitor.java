@@ -11,6 +11,7 @@
 package com.ibm.ws.anno.info.internal;
 
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -25,7 +26,6 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.anno.info.internal.InfoVisitor_Annotation.AnnotationInfoVisitor;
-import com.ibm.ws.anno.info.internal.empty.EmptyCollections;
 
 // Visit rules:
 //
@@ -132,9 +132,10 @@ public class InfoVisitor extends ClassVisitor {
         private List<AnnotationInfoImpl>[] paramAnnotations;
 
         public InfoMethodVisitor() {
-            super(Opcodes.ASM7);
+            super(Opcodes.ASM8);
         }
 
+        @SuppressWarnings("unchecked")
         void setMethodInfo(MethodInfoImpl mii) {
             methodInfo = mii;
             annotations = new LinkedList<AnnotationInfoImpl>();
@@ -205,27 +206,8 @@ public class InfoVisitor extends ClassVisitor {
                 logParms[2] = methodInfo.getDeclaringClass().getHashText();
             }
 
-            AnnotationInfoImpl[][] arrAnnos = new AnnotationInfoImpl[paramAnnotations.length][];
-
-            for (int i = 0; i < paramAnnotations.length; ++i) {
-                List<AnnotationInfoImpl> annos = paramAnnotations[i];
-
-                AnnotationInfoImpl[] aAnnos;
-                if (annos == null || annos.isEmpty()) {
-                    aAnnos = EmptyCollections.emptyAnnotationInfoArray;
-                } else {
-                    aAnnos = annos.toArray(new AnnotationInfoImpl[annos.size()]);
-                }
-
-                arrAnnos[i] = aAnnos;
-            }
-            methodInfo.setParameterAnnotations(arrAnnos);
-
-            AnnotationInfoImpl[] annos = EmptyCollections.emptyAnnotationInfoArray;
-            if (annotations.size() > 0) {
-                annos = annotations.toArray(new AnnotationInfoImpl[annotations.size()]);
-            }
-            methodInfo.setDeclaredAnnotations(annos);
+            methodInfo.setParameterAnnotations(paramAnnotations);
+            methodInfo.setDeclaredAnnotations(annotations);
 
             this.methodInfo = null;
             paramAnnotations = null;
@@ -238,7 +220,7 @@ public class InfoVisitor extends ClassVisitor {
         private List<AnnotationInfoImpl> annotations;
 
         public InfoFieldVisitor() {
-            super(Opcodes.ASM7);
+            super(Opcodes.ASM8);
         }
 
         void setFieldInfo(FieldInfoImpl fii) {
@@ -266,11 +248,7 @@ public class InfoVisitor extends ClassVisitor {
                 logParms[2] = fieldInfo.getDeclaringClass().getHashText();
             }
 
-            AnnotationInfoImpl[] annos = EmptyCollections.emptyAnnotationInfoArray;
-            if (annotations.size() > 0) {
-                annos = annotations.toArray(new AnnotationInfoImpl[annotations.size()]);
-            }
-            fieldInfo.setDeclaredAnnotations(annos);
+            fieldInfo.setDeclaredAnnotations(annotations);
 
             fieldInfo = null;
             annotations = null;
@@ -308,7 +286,7 @@ public class InfoVisitor extends ClassVisitor {
     //
 
     public InfoVisitor(InfoStoreImpl infoStore, String externalName) {
-        super(Opcodes.ASM7);
+        super(Opcodes.ASM8);
 
         this.infoStore = infoStore;
         this.externalName = externalName;
@@ -545,7 +523,7 @@ public class InfoVisitor extends ClassVisitor {
             Tr.debug(tc, MessageFormat.format("[ {0} ] Package [ {1} ]", logParms));
         }
 
-        packageInfo.setDeclaredAnnotations(annotationInfos.toArray(new AnnotationInfoImpl[annotationInfos.size()]));
+        packageInfo.setDeclaredAnnotations(annotationInfos);
 
         packageInfo = null;
     }
@@ -555,10 +533,10 @@ public class InfoVisitor extends ClassVisitor {
             Tr.debug(tc, MessageFormat.format("[ {0} ] ENTER Class [ {1} ]", logParms));
         }
 
-        classInfo.setFields(fieldInfos.toArray(new FieldInfoImpl[fieldInfos.size()]));
-        classInfo.setConstructors(constructorInfos.toArray(new MethodInfoImpl[constructorInfos.size()]));
-        classInfo.setMethods(methodInfos.toArray(new MethodInfoImpl[methodInfos.size()]));
-        classInfo.setDeclaredAnnotations(annotationInfos.toArray(new AnnotationInfoImpl[annotationInfos.size()]));
+        classInfo.setFields(new ArrayList<FieldInfoImpl>(fieldInfos));
+        classInfo.setConstructors(new ArrayList<MethodInfoImpl>(constructorInfos));
+        classInfo.setMethods(new ArrayList<MethodInfoImpl>(methodInfos));
+        classInfo.setDeclaredAnnotations(new ArrayList<AnnotationInfoImpl>(annotationInfos));
 
         boolean didAdd = getInfoStore().addClassInfo(this.classInfo);
 

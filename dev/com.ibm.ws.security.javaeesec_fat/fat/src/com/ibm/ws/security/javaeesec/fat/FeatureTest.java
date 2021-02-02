@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -35,8 +35,8 @@ import com.ibm.ws.security.javaeesec.fat_helper.JavaEESecTestBase;
 import com.ibm.ws.security.javaeesec.fat_helper.LocalLdapServer;
 import com.ibm.ws.security.javaeesec.fat_helper.WCApplicationHelper;
 
-import componenttest.annotation.MinimumJavaLevel;
 import componenttest.annotation.ExpectedFFDC;
+import componenttest.annotation.SkipForRepeat;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
@@ -46,7 +46,6 @@ import componenttest.topology.impl.LibertyServerFactory;
 /**
  *
  */
-@MinimumJavaLevel(javaLevel = 8)
 @RunWith(FATRunner.class)
 @Mode(TestMode.FULL)
 public class FeatureTest extends JavaEESecTestBase {
@@ -94,12 +93,13 @@ public class FeatureTest extends JavaEESecTestBase {
 
     @AfterClass
     public static void tearDown() throws Exception {
-        myServer.stopServer();
-
-        if (ldapServer != null) {
-            ldapServer.stop();
+        try {
+            myServer.stopServer();
+        } finally {
+            if (ldapServer != null) {
+                ldapServer.stop();
+            }
         }
-        myServer.setServerConfigurationFile("server.xml");
     }
 
     @Before
@@ -148,11 +148,11 @@ public class FeatureTest extends JavaEESecTestBase {
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME, true, EJB_BEAN_JAR_NAME, true, "web.jar.base", "web.ejb.jar.bean", "web.war.ejb.is.servlet",
-                                      "web.war.identitystores.ldap.ldap1");
+                                      "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap");
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME2, true, EJB_BEAN_JAR_NAME, true, "web.jar.base",
-                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2");
+                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.ldap");
 
         // add the servlet war inside the ear
         WCApplicationHelper.packageWarsToEar(myServer, TEMP_DIR, EJB_EAR_NAME, true, EJB_WAR_NAME, EJB_WAR_NAME2);
@@ -201,6 +201,7 @@ public class FeatureTest extends JavaEESecTestBase {
      * <LI>
      * </OL>
      */
+    @SkipForRepeat(SkipForRepeat.EE9_FEATURES) // EE9 can't run with appSecurity-2.0
     @Test
     @ExpectedFFDC(value = { "java.lang.NoClassDefFoundError", "com.ibm.ws.container.service.state.StateChangeException" })
     public void testEJBAppSecurity20() throws Exception {
@@ -210,11 +211,11 @@ public class FeatureTest extends JavaEESecTestBase {
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME, true, EJB_BEAN_JAR_NAME, true, "web.jar.base", "web.ejb.jar.bean", "web.war.ejb.is.servlet",
-                                      "web.war.identitystores.ldap.ldap1");
+                                      "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap");
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME2, true, EJB_BEAN_JAR_NAME, true, "web.jar.base",
-                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2");
+                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.ldap");
 
         // add the servlet war inside the ear
         WCApplicationHelper.packageWarsToEar(myServer, TEMP_DIR, EJB_EAR_NAME_noPermission, true, EJB_WAR_NAME, EJB_WAR_NAME2);
@@ -227,12 +228,12 @@ public class FeatureTest extends JavaEESecTestBase {
         Log.info(logClass, getCurrentTestName(), "-----Accessing Application to test scenarios...");
         startServer(APP_SEC_2_XML_NAME, EJB_APP_NAME_noPermission);
         assertNotNull("Expected class not found error",
-                      myServer.waitForStringInLog("CWNEN0049W: Resource annotations on the methods of the web.ejb.jar.bean..*"));
+                      myServer.waitForStringInLog("CWNEN00\\d\\dW: Resource annotations on the methods of the web.ejb.jar.bean..*"));
         assertNotNull("Application was able not able to start",
                       myServer.waitForStringInLog("CWWKZ0002E: An exception occurred while starting the application securityejbinwar3."));
 
         myServer.removeInstalledAppForValidation(EJB_APP_NAME_noPermission);
-        myServer.stopServer("CWNEN0049W:*", "CWWKZ0106E:*", "CWWKZ0002E:*");
+        myServer.stopServer("CWNEN0049W:*", "CWNEN0050W:*", "CWWKZ0106E:*", "CWWKZ0002E:*");
         Log.info(logClass, getCurrentTestName(), "-----Exiting " + getCurrentTestName());
     }
 
@@ -245,13 +246,14 @@ public class FeatureTest extends JavaEESecTestBase {
      * In this test case the following configuration will be used.
      * 1. WAR 1 will use the LDAP Identity Store.
      * 2. WAR 2 will use the LDAP2 Identity Store.
-     * 3. AppSecurity feature 2.0 Will be used.
+     * 3. AppSecurity feature 1.0 Will be used.
      * </OL>
      * <P> The application will fail to start because the feature does not support Identity Store.
      * <OL>
      * <LI>
      * </OL>
      */
+    @SkipForRepeat(SkipForRepeat.EE9_FEATURES) // EE9 can't run with appSecurity-1.0
     @Test
     @ExpectedFFDC(value = { "java.lang.NoClassDefFoundError", "com.ibm.ws.container.service.state.StateChangeException" })
     public void testEJBAppSecurity10() throws Exception {
@@ -261,11 +263,11 @@ public class FeatureTest extends JavaEESecTestBase {
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME, true, EJB_BEAN_JAR_NAME, true, "web.jar.base", "web.ejb.jar.bean", "web.war.ejb.is.servlet",
-                                      "web.war.identitystores.ldap.ldap1");
+                                      "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap");
 
         // create ejbinwarservlet.war,
         WCApplicationHelper.createWar(myServer, TEMP_DIR, EJB_WAR_NAME2, true, EJB_BEAN_JAR_NAME, true, "web.jar.base",
-                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2");
+                                      "web.ejb.jar.bean", "web.war.ejb.is.servlet2", "web.war.identitystores.ldap.ldap2", "web.war.identitystores.ldap");
 
         // add the servlet war inside the ear
         WCApplicationHelper.packageWarsToEar(myServer, TEMP_DIR, EJB_EAR_NAME_noPermission, true, EJB_WAR_NAME, EJB_WAR_NAME2);
@@ -278,12 +280,12 @@ public class FeatureTest extends JavaEESecTestBase {
         Log.info(logClass, getCurrentTestName(), "-----Accessing Application to test scenarios...");
         startServer(APP_SEC_1_XML_NAME, EJB_APP_NAME_noPermission);
         assertNotNull("Expected class not found error",
-                      myServer.waitForStringInLog("CWNEN0049W: Resource annotations on the methods of the web.ejb.jar.bean..*"));
+                      myServer.waitForStringInLog("CWNEN00\\d\\dW: Resource annotations on the methods of the web.ejb.jar.bean..*"));
         assertNotNull("Application was able not able to start",
                       myServer.waitForStringInLog("CWWKZ0002E: An exception occurred while starting the application securityejbinwar3."));
 
         myServer.removeInstalledAppForValidation(EJB_APP_NAME_noPermission);
-        myServer.stopServer("CWNEN0049W:*", "CWWKZ0106E:*", "CWWKZ0002E:*");
+        myServer.stopServer("CWNEN0049W:*", "CWNEN0050W:*", "CWWKZ0106E:*", "CWWKZ0002E:*");
         Log.info(logClass, getCurrentTestName(), "-----Exiting " + getCurrentTestName());
     }
 

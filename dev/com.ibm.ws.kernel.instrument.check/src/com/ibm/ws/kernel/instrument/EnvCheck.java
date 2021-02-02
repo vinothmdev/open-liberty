@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,13 +14,13 @@ import java.lang.instrument.Instrumentation;
 import java.util.ResourceBundle;
 
 /**
- * Check's the version of the Java running before starting the java agent, if Java 5 (or below) is being used
+ * Check's the version of the Java running before starting the java agent, if Java 7 (or below) is being used
  * a translated error message is thrown.
  */
 public class EnvCheck {
     // See Launcher.ReturnCode.
     private static final int ERROR_BAD_JAVA_VERSION = 30;
-
+    
     /**
      * @param args - will just get passed onto BootstrapAgent if version check is successful
      */

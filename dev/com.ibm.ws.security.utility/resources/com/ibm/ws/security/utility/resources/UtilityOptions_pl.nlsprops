@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2010 IBM Corporation and others.
+# Copyright (c) 2010, 2020 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -135,6 +135,24 @@ sslCert.option-key.sigAlg=\ \ \ \ --sigAlg=algorytm podpisu
 sslCert.option-desc.sigAlg=\tAlgorytm podpisu dla certyfikatu.\n\
 \tDomy\u015blny algorytm podpisu to {8}.
 
+sslCert.option-key.keyType=\ \ \ \ --keyType
+sslCert.option-desc.keyType=\tOpcjonalna. Domy\u015blnie zostanie wygenerowany magazyn kluczy PKCS12. Aby\n\
+\twygenerowa\u0107 magazyn kluczy JKS, podaj opcj\u0119 --keyType o warto\u015bci\n\
+\tJKS. Nie ma potrzeby podawania tej opcji, je\u015bli oczekiwanym magazynem kluczy jest\n\
+\tPKCS12.\n\
+\tMagazyn PKCS12 ma wiele zalet: \u0142atwiej mo\u017cna go rozszerza\u0107, obs\u0142uguje\n\
+\tsilniejsze algorytmy szyfruj\u0105ce i jest szerzej obs\u0142ugiwany. PKCS12 jest\n\
+\tformatem cz\u0119sto udost\u0119pnianym przez o\u015brodki certyfikacji podczas\n\
+\twystawiania certyfikat\u00f3w.
+
+sslCert.option-key.ext=\ \ \ \ --extInfo=informacje o rozszerzeniu certyfikatu
+sslCert.option-desc.ext=\tInformacje o rozszerzeniu certyfikatu, kt\u00f3re maj\u0105 zosta\u0107 dodane do certyfikatu.\n\
+\tDomy\u015blnym rozszerzeniem jest wpis alternatywnej nazwy tematu u\u017cywaj\u0105cy \n\
+\tnazwy hosta. Sk\u0142adnia tej opcji jest taka sama, jak\n\
+\t \
+opcji -ext komendy Jave Keytool. Tej opcji mo\u017cna u\u017cy\u0107 wiele razy w komendzie\n\
+\ 
+line.
 
 # -------- CREATE LTPA KEYS OPTIONS --------------------------------------#
 # List of descriptive text for options. Use "\n\" for line continuations.
@@ -175,3 +193,22 @@ klucz, kt\u00f3ry ma by\u0107 u\u017cywany do kodowania has\u0142a kluczy LTPA\n
 \tudost\u0119pni\u0107 na serwerze, definiuj\u0105c zmienn\u0105\n\
 \twlp.password.encryption.key, kt\u00f3rej warto\u015bci\u0105 b\u0119dzie ten klucz.\n \tJe\u015bli ta opcja nie zostanie podana, powinien zosta\u0107 u\u017cyty klucz\n\
 \tdomy\u015blny.
+
+# -------- tlsProfiler OPTIONS ------------------------------------------------#
+# List of descriptive text for options. Use "\n\" for line continuations.
+# The code provides no whitespace: begin keys with "\ \ \ \ " for leading
+# whitespace, and begin descriptions with \t 
+#------------------------------\n at 72 chars -------------------------\n\#
+#------------------------------\n at 72 chars Leading "\ \ \ \ "-------\n\#
+#------------------------------\n at 72 chars Leading "\t"-------------\n\#
+tlsProfiler.desc=\tPrzetestuj kompatybilno\u015b\u0107 hosta i portu docelowego z dost\u0119pnymi protoko\u0142ami TLS i zestawami algorytm\u00f3w szyfrowania.
+tlsProfiler.usage.options=\t{0} tlsProfiler [opcje]
+tlsProfiler.required-key.port=\ \ \ \ --port
+tlsProfiler.required-desc.port=\tPodaj numer portu.
+tlsProfiler.required-key.host=\ \ \ \ --host
+tlsProfiler.required-desc.host=\tPodaj nazw\u0119 lub adres hosta.
+tlsProfiler.option-key.file=\ \ \ \ --file
+tlsProfiler.option-desc.file=\tOpcjonalna. Wynik zostanie zapisany do podanego pliku \n\
+\tzamiast na ekran konsoli.
+tlsProfiler.option-key.verbose=\ \ \ \ --verbose
+tlsProfiler.option-desc.verbose=\tUwzgl\u0119dnij dodatkowe informacje o niezabezpieczonych protoko\u0142ach.

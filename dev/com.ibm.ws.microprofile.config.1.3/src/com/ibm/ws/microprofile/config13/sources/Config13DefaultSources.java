@@ -17,6 +17,10 @@ import org.eclipse.microprofile.config.spi.ConfigSource;
 import com.ibm.ws.microprofile.config.sources.DefaultSources;
 import com.ibm.ws.microprofile.config.sources.SystemConfigSource;
 
+import io.openliberty.microprofile.config.internal.serverxml.AppPropertyConfigSource;
+import io.openliberty.microprofile.config.internal.serverxml.ServerXMLDefaultVariableConfigSource;
+import io.openliberty.microprofile.config.internal.serverxml.ServerXMLVariableConfigSource;
+
 public class Config13DefaultSources extends DefaultSources {
 
     /**
@@ -34,6 +38,7 @@ public class Config13DefaultSources extends DefaultSources {
         sources.add(new EnvConfig13Source());
         sources.add(new AppPropertyConfigSource());
         sources.add(new ServerXMLVariableConfigSource());
+        sources.add(new ServerXMLDefaultVariableConfigSource());
 
         sources.addAll(getPropertiesFileConfigSources(classloader));
 

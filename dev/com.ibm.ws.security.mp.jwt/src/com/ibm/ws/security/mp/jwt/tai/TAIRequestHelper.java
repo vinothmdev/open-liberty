@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,17 +10,23 @@
  *******************************************************************************/
 package com.ibm.ws.security.mp.jwt.tai;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Sensitive;
 import com.ibm.ws.security.authentication.filter.AuthenticationFilter;
+import com.ibm.ws.security.common.http.AuthUtils;
+import com.ibm.ws.security.jwt.config.MpConfigProperties;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtConfig;
 import com.ibm.ws.security.mp.jwt.TraceConstants;
+import com.ibm.ws.security.mp.jwt.config.MpConstants;
 import com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException;
-import com.ibm.ws.security.mp.jwt.impl.utils.ClientConstants;
 import com.ibm.ws.security.mp.jwt.impl.utils.MicroProfileJwtTaiRequest;
 
 /**
@@ -39,6 +45,9 @@ public class TAIRequestHelper {
     public final static String REQ_CONTENT_TYPE_APP_FORM_URLENCODED = "application/x-www-form-urlencoded";
     private static final String ACCESS_TOKEN = "access_token";
     private static final String AUTHN_TYPE = "MP-JWT";
+    public static final String KEY_AUTHORIZATION_HEADER_SCHEME = "authorizationHeaderScheme";
+
+    private final AuthUtils authUtils = new AuthUtils();
 
     /**
      * Creates a new {@link MicroProfileJwtTaiRequest} object and sets the object as an attribute in the request object provided.
@@ -61,21 +70,15 @@ public class TAIRequestHelper {
 
     /**
      * Returns whether the provided request should be handled by the microprofile jwt TAI, based on the request path and
-     * information
-     * in the {@link McroProfileJwtTaiRequest} object provided.
-     *
-     * @param request
-     * @param mpJwtTaiRequest
-     * @return
+     * information in the {@link McroProfileJwtTaiRequest} object provided.
      */
-    public boolean requestShouldBeHandledByTAI(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
+    public boolean requestShouldBeHandledByTAI(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
         String methodName = "requestShouldBeHandledByTAI";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, request, mpJwtTaiRequest);
         }
 
-        String loginHint = getLoginHint(request);
-        mpJwtTaiRequest = setTaiRequestConfigInfo(request, loginHint, mpJwtTaiRequest, defaultConfig);
+        mpJwtTaiRequest = setTaiRequestConfigInfo(request, mpJwtTaiRequest, isNewMpJwtAndMpConfig(request));
         boolean result = false;
         boolean ignoreAppAuthMethod = true;
 
@@ -86,7 +89,7 @@ public class TAIRequestHelper {
 
         }
         if (mpJwtConfig != null) {
-            if (shouldDeferToJwtSso(request, mpJwtConfig)) {
+            if (shouldDeferToJwtSso(request, mpJwtConfig, mpJwtTaiRequest.getJwtSsoConfig())) {
                 return false;
             }
             ignoreAppAuthMethod = mpJwtConfig.ignoreApplicationAuthMethod(); // true by default
@@ -100,12 +103,33 @@ public class TAIRequestHelper {
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, result);
         }
+        if (result) {
+            request.setAttribute(KEY_AUTHORIZATION_HEADER_SCHEME, mpJwtConfig.getAuthorizationHeaderScheme());
+        }
+
         return result;
     }
 
+    private boolean isNewMpJwtAndMpConfig(HttpServletRequest request) {
+        boolean newMpjwtAndMpConfig = false;
+        MpConfigProperties mpConfigProps = getMpConfigPropsFromRequestObject(request);
+        if (mpConfigProps != null && !mpConfigProps.isEmpty()) {
+            newMpjwtAndMpConfig = true;
+        }
+        return newMpjwtAndMpConfig;
+    }
+
+    public MpConfigProperties getMpConfigPropsFromRequestObject(HttpServletRequest request) {
+        if (request == null) {
+            return new MpConfigProperties();
+        }
+        MicroProfileJwtTaiRequest mpJwtTaiRequest = (MicroProfileJwtTaiRequest) request.getAttribute(ATTRIBUTE_TAI_REQUEST);
+        return mpJwtTaiRequest.getMpConfigProps();
+    }
+
     // if we don't have a valid bearer header, and jwtsso is active, we should defer.
-    private boolean shouldDeferToJwtSso(HttpServletRequest req, MicroProfileJwtConfig config) {
-        if (!isJwtSsoFeatureActive(config)) {
+    private boolean shouldDeferToJwtSso(HttpServletRequest req, MicroProfileJwtConfig config, MicroProfileJwtConfig jwtssoConfig) {
+        if ((!isJwtSsoFeatureActive(config)) && (jwtssoConfig == null)) {
             return false;
         }
 
@@ -149,49 +173,12 @@ public class TAIRequestHelper {
 
     }
 
-    String getLoginHint(HttpServletRequest request) {
-        String methodName = "getLoginHint";
-        if (tc.isDebugEnabled()) {
-            Tr.entry(tc, methodName, request);
-        }
-        String specifiedServiceId = getLoginHintFromHeaderOrParameter(request);
-        if (specifiedServiceId == null || specifiedServiceId.isEmpty()) {
-            // The request did not contain a login hint
-            specifiedServiceId = null;
-        }
-        if (tc.isDebugEnabled()) {
-            Tr.exit(tc, methodName, specifiedServiceId);
-        }
-        return specifiedServiceId;
-    }
-
-    String getLoginHintFromHeaderOrParameter(HttpServletRequest request) {
-        String methodName = "getLoginHintFromHeaderOrParameter";
-        if (tc.isDebugEnabled()) {
-            Tr.entry(tc, methodName, request);
-        }
-        String specifiedServiceId = request.getHeader(ClientConstants.LOGIN_HINT);
-        if (tc.isDebugEnabled()) {
-            Tr.debug(tc, "specifiedService(h) id:" + specifiedServiceId);
-        }
-        if (specifiedServiceId == null || specifiedServiceId.isEmpty()) {
-            specifiedServiceId = request.getParameter(ClientConstants.LOGIN_HINT);
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, "specifiedService(p) id:" + specifiedServiceId);
-            }
-        }
-        if (tc.isDebugEnabled()) {
-            Tr.exit(tc, methodName, specifiedServiceId);
-        }
-        return specifiedServiceId;
-    }
-
     public String getBearerToken(HttpServletRequest req, MicroProfileJwtConfig clientConfig) {
         String methodName = "getBearerToken";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, req, clientConfig);
         }
-        String token = getBearerTokenFromHeader(req);
+        String token = getBearerTokenFromHeader(req, clientConfig);
         if (token == null) {
             token = getBearerTokenFromParameter(req);
         }
@@ -201,23 +188,98 @@ public class TAIRequestHelper {
         return token;
     }
 
-    String getBearerTokenFromHeader(HttpServletRequest req) {
+    String getBearerTokenFromHeader(HttpServletRequest req, MicroProfileJwtConfig clientConfig) {
         String methodName = "getBearerTokenFromHeader";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, req);
         }
-        String hdrValue = req.getHeader(Authorization_Header);
+        String token = null;
+        String tokenHeaderName = getTokenHeaderName(req, clientConfig);
+        if ("Cookie".equals(tokenHeaderName)) {
+            token = getTokenFromCookie(req, clientConfig);
+        } else {
+            token = getTokenFromHeader(tokenHeaderName, req);
+        }
         if (tc.isDebugEnabled()) {
-            Tr.debug(tc, "Authorization header=", hdrValue);
+            Tr.exit(tc, methodName, token);
         }
-        String bearerAuthzMethod = "Bearer ";
-        if (hdrValue != null && hdrValue.startsWith(bearerAuthzMethod)) {
-            hdrValue = hdrValue.substring(bearerAuthzMethod.length());
+        return token;
+    }
+
+    String getTokenHeaderName(HttpServletRequest request, MicroProfileJwtConfig clientConfig) {
+        String serverConfigTokenHeader = clientConfig.getTokenHeader();
+        if (serverConfigTokenHeader != null) {
+            return serverConfigTokenHeader;
+        }
+        String defaultValue = Authorization_Header;
+        String tokenHeaderName = getValueFromMpConfigProps(request, MpConstants.TOKEN_HEADER, defaultValue);
+        if (!isSupportedTokenHeaderName(tokenHeaderName)) {
+            Tr.warning(tc, "MP_CONFIG_VALUE_NOT_SUPPORTED", new Object[] { tokenHeaderName, MpConstants.TOKEN_HEADER, getSupportedTokenHeaderNames(), defaultValue });
+            return defaultValue;
+        }
+        return tokenHeaderName;
+    }
+
+    String getValueFromMpConfigProps(HttpServletRequest request, String propName, String defaultValue) {
+        MpConfigProperties mpConfigProps = getMpConfigPropsFromRequestObject(request);
+        if (mpConfigProps == null) {
+            return defaultValue;
+        }
+        String mpConfigPropValue = mpConfigProps.get(propName);
+        if (mpConfigPropValue == null || mpConfigPropValue.isEmpty()) {
+            return defaultValue;
         }
         if (tc.isDebugEnabled()) {
-            Tr.exit(tc, methodName, hdrValue);
+            Tr.debug(tc, "Obtained " + propName + " from MP Config properties: [" + mpConfigPropValue + "]");
         }
-        return hdrValue;
+        return mpConfigPropValue;
+    }
+
+    boolean isSupportedTokenHeaderName(String tokenHeader) {
+        List<String> supportedNames = getSupportedTokenHeaderNames();
+        return supportedNames.contains(tokenHeader);
+    }
+
+    List<String> getSupportedTokenHeaderNames() {
+        List<String> supportedNames = new ArrayList<String>();
+        supportedNames.add(Authorization_Header);
+        supportedNames.add("Cookie");
+        return supportedNames;
+    }
+
+    @Sensitive
+    String getTokenFromCookie(HttpServletRequest req, MicroProfileJwtConfig clientConfig) {
+        String tokenCookieName = getTokenCookieName(req, clientConfig);
+        Cookie[] cookies = req.getCookies();
+        if (cookies != null) {
+            for (Cookie cookie : cookies) {
+                if (cookie != null && cookie.getName().equals(tokenCookieName)) {
+                    if (tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Found a " + tokenCookieName + " cookie as expected");
+                    }
+                    return cookie.getValue();
+                }
+            }
+        }
+        return null;
+    }
+
+    String getTokenCookieName(HttpServletRequest request, MicroProfileJwtConfig clientConfig) {
+        String serverConfigCookieName = clientConfig.getCookieName();
+        if (serverConfigCookieName != null) {
+            return serverConfigCookieName;
+        }
+        return getValueFromMpConfigProps(request, MpConstants.TOKEN_COOKIE, "Bearer");
+    }
+
+    @Sensitive
+    String getTokenFromHeader(String tokenHeaderName, HttpServletRequest req) {
+        String hdrValue = req.getHeader(tokenHeaderName);
+        if (tc.isDebugEnabled()) {
+            Tr.debug(tc, tokenHeaderName + " header null? ", (hdrValue == null));
+        }
+        String expectedHeaderScheme = (String) req.getAttribute(KEY_AUTHORIZATION_HEADER_SCHEME);
+        return authUtils.getBearerTokenFromHeader(hdrValue, expectedHeaderScheme);
     }
 
     String getBearerTokenFromParameter(HttpServletRequest req) {
@@ -242,22 +304,16 @@ public class TAIRequestHelper {
         return param;
     }
 
-    MicroProfileJwtTaiRequest setTaiRequestConfigInfo(HttpServletRequest request, String specifiedServiceId, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
+    MicroProfileJwtTaiRequest setTaiRequestConfigInfo(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
         String methodName = "setTaiRequestConfigInfo";
         if (tc.isDebugEnabled()) {
-            Tr.entry(tc, methodName, request, specifiedServiceId, mpJwtTaiRequest);
+            Tr.entry(tc, methodName, request, mpJwtTaiRequest);
         }
-        if (specifiedServiceId == null) {
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, "Specific config ID not provided, so will set generic config information for MpJwtTaiRequest object");
-            }
-            MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfo(request, mpJwtTaiRequest, defaultConfig);
-            if (tc.isDebugEnabled()) {
-                Tr.exit(tc, methodName, result);
-            }
-            return result;
+        if (tc.isDebugEnabled()) {
+            Tr.debug(tc, "Specific config ID not provided, so will set generic config information for MpJwtTaiRequest object");
         }
-        MicroProfileJwtTaiRequest result = setSpecificConfigTaiRequestInfo(request, specifiedServiceId, mpJwtTaiRequest);
+        MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfo(request, mpJwtTaiRequest, defaultConfig);
+
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, result);
         }
@@ -304,7 +360,7 @@ public class TAIRequestHelper {
                 }
             } else if (defaultConfig) {
                 mpJwtTaiRequest.addGenericConfig(mpJwtConfig);
-            } else if (!isMpJwtDefaultConfig(mpJwtConfig)){
+            } else if (!isMpJwtDefaultConfig(mpJwtConfig)) {
                 mpJwtTaiRequest.addGenericConfig(mpJwtConfig);
             }
         }
@@ -313,35 +369,14 @@ public class TAIRequestHelper {
         }
         return mpJwtTaiRequest;
     }
-    
+
     public boolean isMpJwtDefaultConfig(MicroProfileJwtConfig mpJwtConfig) {
         boolean isDefault = false;
         if ("defaultMpJwt".equals(mpJwtConfig.getUniqueId())) {
             isDefault = true;
         }
         return isDefault;
-        
-    }
 
-    MicroProfileJwtTaiRequest setSpecificConfigTaiRequestInfo(HttpServletRequest request, String configId, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
-        String methodName = "setSpecificConfigTaiRequestInfo";
-        if (tc.isDebugEnabled()) {
-            Tr.entry(tc, methodName, request, configId, mpJwtTaiRequest);
-        }
-        if (mpJwtTaiRequest == null) {
-            mpJwtTaiRequest = createMicroProfileJwtTaiRequestAndSetRequestAttribute(request);
-        }
-
-        MicroProfileJwtConfig config = getConfigAssociatedWithRequestAndId(request, configId);
-        if (config == null) {
-            mpJwtTaiRequest = handleNoMatchingConfiguration(configId, mpJwtTaiRequest);
-        } else {
-            mpJwtTaiRequest.setSpecifiedConfig(config);
-        }
-        if (tc.isDebugEnabled()) {
-            Tr.exit(tc, methodName, mpJwtTaiRequest);
-        }
-        return mpJwtTaiRequest;
     }
 
     MicroProfileJwtTaiRequest handleNoMatchingConfiguration(String configId, MicroProfileJwtTaiRequest mpJwtTaiRequest) {

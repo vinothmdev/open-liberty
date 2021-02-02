@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,10 +12,14 @@ package com.ibm.ws.security.utility.tasks;
 
 import java.io.File;
 import java.io.PrintStream;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.security.cert.CertificateException;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.List;
 
 import org.apache.commons.io.FilenameUtils;
 
@@ -44,6 +48,14 @@ public class CreateSSLCertificateTask extends BaseCommandTask {
     static final String ARG_CREATE_CONFIG_FILE = "--createConfigFile";
     static final String ARG_KEYSIZE = "--keySize";
     static final String ARG_SIGALG = "--sigAlg";
+    static final String ARG_KEY_TYPE = "--keyType";
+    static final String ARG_EXT = "--extInfo";
+
+    static final String JKS_KEYFILE = "key.jks";
+    static final String PKCS12_KEYFILE = "key.p12";
+
+    static final String JKS = "jks";
+    static final String PKCS12 = "pkcs12";
 
     private final DefaultSSLCertificateCreator creator;
     private final IFileUtility fileUtility;
@@ -138,7 +150,18 @@ public class CreateSSLCertificateTask extends BaseCommandTask {
         }
 
         // Create the directories we need before we prompt for a password
-        String location = dir + "resources" + SLASH + "security" + SLASH + "key.jks";
+        String location = null;
+
+        String keyType = getArgumentValue(ARG_KEY_TYPE, args, null);
+        if (keyType != null) {
+            if (keyType.equalsIgnoreCase(JKS))
+                location = dir + "resources" + SLASH + "security" + SLASH + JKS_KEYFILE;
+            else if (keyType.equalsIgnoreCase(PKCS12))
+                location = dir + "resources" + SLASH + "security" + SLASH + PKCS12_KEYFILE;
+        } else {
+            location = dir + "resources" + SLASH + "security" + SLASH + PKCS12_KEYFILE;
+        }
+
         File fLocation = new File(location);
         location = fileUtility.resolvePath(fLocation);
         if (!fileUtility.createParentDirectory(stdout, fLocation)) {
@@ -158,13 +181,14 @@ public class CreateSSLCertificateTask extends BaseCommandTask {
         String subjectDN = getArgumentValue(ARG_SUBJECT, args, new DefaultSubjectDN(null, ou_name).getSubjectDN());
         int keySize = Integer.valueOf(getArgumentValue(ARG_KEYSIZE, args, String.valueOf(DefaultSSLCertificateCreator.DEFAULT_SIZE)));
         String sigAlg = getArgumentValue(ARG_SIGALG, args, DefaultSSLCertificateCreator.SIGALG);
+        List<String> extInfo = getExtInfoArgumentValues(ARG_EXT, args);
 
         try {
             String encoding = getArgumentValue(ARG_ENCODING, args, PasswordUtil.getDefaultEncoding());
             String key = getArgumentValue(ARG_KEY, args, null);
             stdout.println(getMessage("sslCert.createKeyStore", location));
             String encodedPassword = PasswordUtil.encode(password, encoding, key);
-            creator.createDefaultSSLCertificate(location, password, validity, subjectDN, keySize, sigAlg);
+            creator.createDefaultSSLCertificate(location, password, keyType, null, validity, subjectDN, keySize, sigAlg, extInfo);
             String xmlSnippet = null;
             if (serverName != null) {
                 stdout.println(getMessage("sslCert.serverXML", serverName, subjectDN));
@@ -203,7 +227,8 @@ public class CreateSSLCertificateTask extends BaseCommandTask {
                arg.equals(ARG_VALIDITY) || arg.equals(ARG_SUBJECT) ||
                arg.equals(ARG_ENCODING) || arg.equals(ARG_KEY) ||
                arg.equals(ARG_CREATE_CONFIG_FILE) || arg.equals(ARG_KEYSIZE) ||
-               arg.equals(ARG_CLIENT) || arg.equals(ARG_SIGALG);
+               arg.equals(ARG_CLIENT) || arg.equals(ARG_SIGALG) ||
+               arg.equals(ARG_KEY_TYPE) || arg.equals(ARG_EXT);
     }
 
     /** {@inheritDoc} */
@@ -250,6 +275,67 @@ public class CreateSSLCertificateTask extends BaseCommandTask {
      */
     private String getArgumentValue(String arg, String[] args, String defalt) {
         return getArgumentValue(arg, args, defalt, ARG_PASSWORD, stdin, stdout);
+    }
+
+    /**
+     * getExtInfoArgumentValues(String, String[])
+     */
+    private List<String> getExtInfoArgumentValues(String arg, String[] args) {
+        boolean addSAN = true;
+        ArrayList<String> extArgs = new ArrayList<String>();
+        for (int i = 1; i < args.length; i++) {
+            String key = args[i].split("=")[0];
+            if (key.equals(arg)) {
+                String value = getValue(args[i]);
+                if (value.substring(0, 3).equalsIgnoreCase("SAN"))
+                    addSAN = false;
+                extArgs.add(value);
+            }
+        }
+        if (addSAN) {
+            String defaultSAN = defaultExtInfo();
+            if (defaultSAN != null)
+                extArgs.add(defaultSAN);
+        }
+        return extArgs;
+    }
+
+    /**
+     * Create the default SAN extension value
+     *
+     * @param hostName May be {@code null}. If {@code null} an attempt is made to determine it.
+     */
+    public String defaultExtInfo() {
+        String hostname = getHostName();
+        String ext = null;
+
+        InetAddress addr;
+        try {
+            addr = InetAddress.getByName(hostname);
+            if (addr != null && addr.toString().startsWith("/"))
+                ext = "SAN=ip:" + hostname;
+            else {
+                // If the hostname start with a digit keytool will not create a SAN with the value
+                if (!Character.isDigit(hostname.charAt(0)))
+                    ext = "SAN=dns:" + hostname;
+            }
+        } catch (UnknownHostException e) {
+            // use return null and not set SAN if there is an exception here
+        }
+        return ext;
+    }
+
+    /**
+     * Get the host name.
+     *
+     * @return String value of the host name or "localhost" if not able to resolve
+     */
+    private String getHostName() {
+        try {
+            return java.net.InetAddress.getLocalHost().getCanonicalHostName();
+        } catch (java.net.UnknownHostException e) {
+            return "localhost";
+        }
     }
 
     /**

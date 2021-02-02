@@ -1,15 +1,14 @@
 
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2018 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * Copyright IBM Corp. 2018
- *
- * The source code for this program is not published or otherwise divested
- * of its trade secrets, irrespective of what has been deposited with the
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.logs;
 
 import java.io.IOException;
@@ -42,7 +41,9 @@ public class LogServlet extends HttpServlet {
         logger.finer("finer trace");
         logger.finest("finest trace");
         logger.exiting("LogServlet", "doGet");
-
+        System.out.println("{\"key\":\"value\"}");
+        System.err.println("{\"key\":\"value\",\"loglevel\":\"System.err\"}");
+        System.out.println("{}");
         res.getWriter().print(new Date());
     }
 }

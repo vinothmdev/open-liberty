@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2018 IBM Corporation and others.
+ * Copyright (c) 2012, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -22,9 +22,11 @@ import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_BIND_PA
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_CACHE_SIZE;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_CACHE_TIME_OUT;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_CONNECT_TIMEOUT;
+import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_DEREFALIASES;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_ENABLED;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_HOST;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_INIT_POOL_SIZE;
+import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_JNDI_OUTPUT_ENABLED;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_MAX_POOL_SIZE;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_POOL_TIME_OUT;
 import static com.ibm.websphere.security.wim.ConfigConstants.CONFIG_PROP_POOL_WAIT_TIME;
@@ -410,6 +412,11 @@ public class LdapConnection {
         iContextManager.setReadTimeout((Long) configProps.get(CONFIG_PROP_READ_TIMEOUT));
 
         /*
+         * Set JNDI packet output to system out
+         */
+        iContextManager.setJndiOutputEnabled((Boolean) configProps.get(CONFIG_PROP_JNDI_OUTPUT_ENABLED));
+
+        /*
          * Determine referral handling behavior. Initially the attribute was spelled missing an 'r' so
          * for backwards compatibility, support customers who might still be using it. The "referal"
          * attribute has no default so unless it is set we won't use it.
@@ -418,6 +425,11 @@ public class LdapConnection {
         String referral = (String) configProps.get(CONFIG_PROP_REFERRAL);
         referral = referal != null ? referal : referral;
         iContextManager.setReferral(referral.toLowerCase());
+
+        /*
+         * Set alias dereferencing handling.
+         */
+        iContextManager.setDerefAliases((String) configProps.get(CONFIG_PROP_DEREFALIASES));
 
         /*
          * Set binary attribute names.
@@ -1443,7 +1455,11 @@ public class LdapConnection {
                             }
 
                             while (neu.hasMoreElements()) {
-                                allNeu.add(neu.nextElement());
+                                SearchResult sr = neu.nextElement();
+                                if (iAttrRangeStep > 0) { // Should only enable this on ActiveDirectory, not supported on other Ldaps, added for OLGH 10144
+                                    supportRangeAttributes(sr.getAttributes(), name, ctx);
+                                }
+                                allNeu.add(sr);
                                 count++;
                             }
 
@@ -1581,12 +1597,11 @@ public class LdapConnection {
         /*
          * We didn't find any cached attributes, so search for the entity and it's attributes.
          */
-        String filter = iLdapConfigMgr.getLdapRDNFilter(null, LdapHelper.getRDN(uniqueName));
-        String parent = LdapHelper.getParentDN(uniqueName);
+        String filter = "objectclass=*";
         SearchControls controls = new SearchControls();
         controls.setTimeLimit(iTimeLimit);
         controls.setCountLimit(iCountLimit);
-        controls.setSearchScope(SearchControls.ONELEVEL_SCOPE);
+        controls.setSearchScope(SearchControls.OBJECT_SCOPE);
         controls.setReturningAttributes(attrIds); // Only retrieve requested attributes
         controls.setReturningObjFlag(false);
 
@@ -1594,18 +1609,18 @@ public class LdapConnection {
         NamingEnumeration<SearchResult> neu = null;
         try {
             try {
-                neu = ctx.search(parent, filter, controls);
+                neu = ctx.search(uniqueName, filter, controls);
             } catch (NamingException e) {
                 if (!ContextManager.isConnectionException(e)) {
                     throw e;
                 }
                 ctx = iContextManager.reCreateDirContext(ctx, e.toString());
-                neu = ctx.search(parent, filter, controls);
+                neu = ctx.search(uniqueName, filter, controls);
             }
             if (neu.hasMoreElements()) {
                 SearchResult thisEntry = neu.nextElement();
                 if (thisEntry != null) {
-                    DN = LdapHelper.prepareDN(thisEntry.getName(), parent);
+                    DN = LdapHelper.prepareDN(thisEntry.getNameInNamespace(), null);
                     attributes = thisEntry.getAttributes();
                     if (iAttrRangeStep > 0) {
                         supportRangeAttributes(attributes, DN, ctx);
@@ -1614,7 +1629,7 @@ public class LdapConnection {
             }
 
         } catch (NameNotFoundException e) {
-            String msg = Tr.formatMessage(tc, WIMMessageKey.ENTITY_NOT_FOUND, WIMMessageHelper.generateMsgParms(parent));
+            String msg = Tr.formatMessage(tc, WIMMessageKey.ENTITY_NOT_FOUND, WIMMessageHelper.generateMsgParms(uniqueName));
             throw new EntityNotFoundException(WIMMessageKey.ENTITY_NOT_FOUND, msg, e);
         } catch (NamingException e) {
             String msg = Tr.formatMessage(tc, WIMMessageKey.NAMING_EXCEPTION, WIMMessageHelper.generateMsgParms(e.toString(true)));
@@ -1900,9 +1915,32 @@ public class LdapConnection {
                 }
 
                 String entityType = iLdapConfigMgr.getEntityType(attrs, null, dn, null, inEntityTypes);
+
                 // Skip if for RACF we found an incorrect entity type
-                if (iLdapConfigMgr.isRacf() && !inEntityTypes.contains(entityType))
-                    continue;
+                if (iLdapConfigMgr.isRacf()) {
+                    boolean entityTypeMatches = false;
+                    for (String inType : inEntityTypes) {
+                        /*
+                         * It would be better if we had a utility method to check if a type is a sub-type of another type.
+                         */
+                        if ("PersonAccount".equals(entityType)) {
+                            entityTypeMatches = inType.equals("LoginAccount") || inType.equals("PersonAccount");
+                        } else if ("Group".equals(entityType)) {
+                            entityTypeMatches = inType.equals("Group");
+                        }
+                        if (entityTypeMatches) {
+                            break;
+                        }
+                    }
+
+                    if (!entityTypeMatches) {
+                        if (tc.isDebugEnabled()) {
+                            Tr.debug(tc, METHODNAME + " Excluding '" + dn + "' from result since it is unexpected entity type.");
+                        }
+                        continue;
+                    }
+                }
+
                 String extId = iLdapConfigMgr.getExtIdFromAttributes(dn, entityType, attrs);
                 String uniqueName = getUniqueName(dn, entityType, attrs);
                 LdapEntry ldapEntry = new LdapEntry(dn, extId, uniqueName, entityType, attrs);
@@ -1980,7 +2018,7 @@ public class LdapConnection {
                 String attrId = attrName.substring(0, pos);
                 Attribute newAttr = new BasicAttribute(attrId);
                 if (tc.isDebugEnabled()) {
-                    Tr.debug(tc, METHODNAME + " Range attriute retrieved: " + attrName);
+                    Tr.debug(tc, METHODNAME + " Range attribute retrieved: " + attrName);
                 }
 
                 for (NamingEnumeration<?> neu2 = attr.getAll(); neu2.hasMoreElements();) {

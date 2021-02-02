@@ -12,6 +12,7 @@ package com.ibm.ws.microprofile.rest.client.fat;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.runner.RunWith;
 
 import com.ibm.websphere.simplicity.ShrinkHelper;
@@ -19,6 +20,8 @@ import com.ibm.websphere.simplicity.ShrinkHelper;
 import componenttest.annotation.Server;
 import componenttest.annotation.TestServlet;
 import componenttest.custom.junit.runner.FATRunner;
+import componenttest.rules.repeater.FeatureReplacementAction;
+import componenttest.rules.repeater.RepeatTests;
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.utils.FATServletClient;
 import mpRestClient11.produceConsume.ProduceConsumeTestServlet;
@@ -31,8 +34,16 @@ import mpRestClient11.produceConsume.ProduceConsumeTestServlet;
 public class ProduceConsumeTest extends FATServletClient {
 
     private static final String appName = "produceConsumeApp";
+    final static String SERVER_NAME = "mpRestClient11.produceConsume";
 
-    @Server("mpRestClient11.produceConsume")
+    @ClassRule
+    public static RepeatTests r = RepeatTests.withoutModification()
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.2", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.3", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.4", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "2.0", SERVER_NAME));
+
+    @Server(SERVER_NAME)
     @TestServlet(servlet = ProduceConsumeTestServlet.class, contextRoot = appName)
     public static LibertyServer server;
 
@@ -40,10 +51,11 @@ public class ProduceConsumeTest extends FATServletClient {
     public static void setUp() throws Exception {
         ShrinkHelper.defaultDropinApp(server, appName, "mpRestClient11.produceConsume");
         server.startServer();
+        server.waitForStringInLog("CWWKO0219I"); // CWWKO0219I: TCP Channel defaultHttpEndpoint-ssl has been started and is now listening for requests on host *  (IPv6) port 8020.
     }
 
     @AfterClass
     public static void afterClass() throws Exception {
-        server.stopServer(/*"CWWKF0033E"*/); //ignore this error for mismatch with jsonb-1.0 and Java EE 7
+        server.stopServer("CWWKE1102W");  //ignore server quiesce timeouts due to slow test machines
     }
 }

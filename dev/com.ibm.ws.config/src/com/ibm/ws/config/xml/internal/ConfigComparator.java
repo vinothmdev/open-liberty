@@ -23,6 +23,7 @@ import java.util.regex.Matcher;
 import com.ibm.websphere.config.ConfigUpdateException;
 import com.ibm.websphere.metatype.MetaTypeFactory;
 import com.ibm.ws.config.admin.ConfigID;
+import com.ibm.ws.config.xml.LibertyVariable;
 import com.ibm.ws.config.xml.internal.ConfigDelta.REASON;
 import com.ibm.ws.config.xml.internal.ConfigElement.Reference;
 import com.ibm.ws.config.xml.internal.MetaTypeRegistry.RegistryEntry;
@@ -31,29 +32,43 @@ import com.ibm.ws.config.xml.internal.metatype.ExtendedAttributeDefinition;
 /**
  * Computes delta between two server configurations.
  */
-class ConfigComparator {
+public class ConfigComparator {
 
     private final BaseConfiguration oldConfiguration;
     private final BaseConfiguration newConfiguration;
     private final MetaTypeRegistry metatypeRegistry;
     private RegistryEntry parentRegistryEntry;
+    private final Map<String, DeltaType> serviceBindingVariableChanges;
 
     public ConfigComparator(BaseConfiguration oldConfiguration, BaseConfiguration newConfiguration, MetaTypeRegistry registry) {
+        this(oldConfiguration, newConfiguration, registry, null);
+    }
+
+    public ConfigComparator(BaseConfiguration oldConfiguration, BaseConfiguration newConfiguration, MetaTypeRegistry registry, Map<String, DeltaType> variableDelta) {
         this.oldConfiguration = oldConfiguration;
         this.newConfiguration = newConfiguration;
         this.metatypeRegistry = registry;
+        this.serviceBindingVariableChanges = variableDelta;
     }
 
-    private RegistryEntry getRegistry(RegistryEntry parent, String name) {
+    private RegistryEntry getRegistry(RegistryEntry parent, String childNodeName) {
         if (metatypeRegistry == null)
             return null;
 
         RegistryEntry entry = null;
         // Attempt to look up the registry entry by childAlias value
-        if (parent != null) {
-            entry = metatypeRegistry.getRegistryEntry(parent.getPid(), name);
+        RegistryEntry pe = parent;
+        while (pe != null) {
+            // The parent entry must have ibm:supportsExtensions defined for ibm:childAlias to be valid here
+            if (pe.getObjectClassDefinition().supportsExtensions()) {
+                RegistryEntry childAliasEntry = metatypeRegistry.getRegistryEntry(pe.getPid(), childNodeName);
+                if (childAliasEntry != null)
+                    return childAliasEntry;
+            }
+            pe = pe.getExtendedRegistryEntry();
         }
-        return (entry == null) ? metatypeRegistry.getRegistryEntryByPidOrAlias(name) : entry;
+
+        return (entry == null) ? metatypeRegistry.getRegistryEntryByPidOrAlias(childNodeName) : entry;
     }
 
     public ComparatorResult computeDelta() throws ConfigUpdateException {
@@ -552,14 +567,19 @@ class ConfigComparator {
     }
 
     private Map<String, DeltaType> computeVariableDelta() throws ConfigUpdateException {
+        // server.xml variables and file system variables can't change at the same time
+        if (this.serviceBindingVariableChanges != null) {
+            return this.serviceBindingVariableChanges;
+        }
+
         Map<String, DeltaType> deltaMap = new HashMap<String, DeltaType>();
 
         LinkedList<String> stack = new LinkedList<String>();
 
-        Map<String, ConfigVariable> newVariables = newConfiguration.getVariables();
+        Map<String, LibertyVariable> newVariables = newConfiguration.getVariables();
 
-        Map<String, ConfigVariable> oldVariables = oldConfiguration.getVariables();
-        for (ConfigVariable oldVariable : oldVariables.values()) {
+        Map<String, LibertyVariable> oldVariables = oldConfiguration.getVariables();
+        for (LibertyVariable oldVariable : oldVariables.values()) {
             String variableName = oldVariable.getName();
             DeltaType delta = compareVariable(oldVariables, newVariables, variableName, stack);
             if (delta != null) {
@@ -568,7 +588,7 @@ class ConfigComparator {
         }
 
         // process new variables
-        for (ConfigVariable newVariable : newVariables.values()) {
+        for (LibertyVariable newVariable : newVariables.values()) {
             String variableName = newVariable.getName();
             if (oldVariables.containsKey(variableName)) {
                 continue;
@@ -580,8 +600,8 @@ class ConfigComparator {
         return deltaMap;
     }
 
-    private DeltaType compareVariable(Map<String, ConfigVariable> oldVariables,
-                                      Map<String, ConfigVariable> newVariables,
+    private DeltaType compareVariable(Map<String, LibertyVariable> oldVariables,
+                                      Map<String, LibertyVariable> newVariables,
                                       String variableName,
                                       LinkedList<String> stack) throws ConfigUpdateException {
         if (stack.contains(variableName)) {
@@ -590,8 +610,8 @@ class ConfigComparator {
             stack.add(variableName);
         }
 
-        ConfigVariable oldVariable = oldVariables.get(variableName);
-        ConfigVariable newVariable = newVariables.get(variableName);
+        LibertyVariable oldVariable = oldVariables.get(variableName);
+        LibertyVariable newVariable = newVariables.get(variableName);
 
         DeltaType delta = null;
 
@@ -599,8 +619,10 @@ class ConfigComparator {
             delta = (newVariable == null) ? null : DeltaType.ADDED;
         } else if (newVariable == null) {
             delta = DeltaType.REMOVED;
-        } else if (oldVariable.getValue().equals(newVariable.getValue())) {
+        } else if (oldVariable.getValue() != null && oldVariable.getValue().equals(newVariable.getValue())) {
             delta = compareVariableReferences(oldVariables, newVariables, oldVariable.getValue(), stack);
+        } else if (oldVariable.getDefaultValue() != null && oldVariable.getDefaultValue().equals(newVariable.getDefaultValue())) {
+            delta = compareVariableReferences(oldVariables, newVariables, oldVariable.getDefaultValue(), stack);
         } else {
             delta = DeltaType.MODIFIED;
         }
@@ -610,8 +632,8 @@ class ConfigComparator {
         return delta;
     }
 
-    private DeltaType compareVariableReferences(Map<String, ConfigVariable> oldVariables,
-                                                Map<String, ConfigVariable> newVariables,
+    private DeltaType compareVariableReferences(Map<String, LibertyVariable> oldVariables,
+                                                Map<String, LibertyVariable> newVariables,
                                                 String variableValue,
                                                 LinkedList<String> stack) throws ConfigUpdateException {
         Matcher matcher = XMLConfigConstants.VAR_PATTERN.matcher(variableValue);

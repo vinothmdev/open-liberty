@@ -53,7 +53,9 @@ import com.ibm.ws.config.xml.internal.ConfigEvaluator.UnresolvedReference;
 import com.ibm.ws.config.xml.internal.ConfigEvaluator.UnresolvedService;
 import com.ibm.ws.config.xml.internal.MetaTypeRegistry.RegistryEntry;
 import com.ibm.ws.config.xml.internal.metatype.ExtendedAttributeDefinition;
+import com.ibm.ws.config.xml.internal.metatype.MetaTypeHelper;
 import com.ibm.ws.config.xml.internal.nester.Nester;
+import com.ibm.ws.config.xml.internal.variables.ConfigVariableRegistry;
 import com.ibm.ws.kernel.service.location.internal.SymbolRegistry;
 import com.ibm.ws.kernel.service.location.internal.VariableRegistryHelper;
 import com.ibm.wsspi.kernel.service.location.VariableRegistry;
@@ -90,7 +92,8 @@ public class ConfigEvaluatorTest {
     }
 
     @Before
-    public void setUp() throws Exception {}
+    public void setUp() throws Exception {
+    }
 
     @After
     public void tearDown() throws Exception {
@@ -103,7 +106,9 @@ public class ConfigEvaluatorTest {
         SharedLocationManager.createDefaultLocations(SharedConstants.SERVER_XML_INSTALL_ROOT, profileName);
         wsLocation = (WsLocationAdmin) SharedLocationManager.getLocationInstance();
 
-        configParser = new XMLConfigParser(wsLocation);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(new VariableRegistryHelper(), new String[0], null, wsLocation);
+
+        configParser = new XMLConfigParser(wsLocation, variableRegistry);
     }
 
     private class TestConfigEvaluator extends ConfigEvaluator {
@@ -247,6 +252,24 @@ public class ConfigEvaluatorTest {
         }
     }
 
+    private MockAttributeDefinition addIntegerTypeToRegistry(MetaTypeRegistry registry,
+                                                             String loggingPid) {
+        // Add a new integer logging element
+        MockObjectClassDefinition loggingOCD = new MockObjectClassDefinition("logging");
+        MockAttributeDefinition ad = new MockAttributeDefinition("integer", AttributeDefinition.INTEGER, 0, null);
+        ad.setValidate(new String[] { "8", "8" });
+        loggingOCD.addAttributeDefinition(ad);
+        loggingOCD.setAlias("logging");
+
+        MockBundle bundle = new MockBundle();
+        MockMetaTypeInformation metatype = new MockMetaTypeInformation(bundle);
+        metatype.add(loggingPid, true, loggingOCD);
+
+        assertFalse("The registry should be updated", registry.addMetaType(metatype).isEmpty());
+        return ad;
+
+    }
+
     private void addBooleanTypeToRegistry(MetaTypeRegistry registry,
                                           String loggingPid) {
         // Add a new boolean logging element
@@ -260,6 +283,22 @@ public class ConfigEvaluatorTest {
 
         assertFalse("The registry should be updated", registry.addMetaType(metatype).isEmpty());
 
+    }
+
+    private void addObscuredBooleanTypeToRegistry(MetaTypeRegistry registry,
+                                                  String loggingPid) {
+        // Add a new boolean logging element
+        MockObjectClassDefinition loggingOCD = new MockObjectClassDefinition("logging");
+        MockAttributeDefinition ad = new MockAttributeDefinition("boolean", AttributeDefinition.BOOLEAN, 0, null);
+        ad.setObscured("true");
+        loggingOCD.addAttributeDefinition(ad);
+        loggingOCD.setAlias("logging");
+
+        MockBundle bundle = new MockBundle();
+        MockMetaTypeInformation metatype = new MockMetaTypeInformation(bundle);
+        metatype.add(loggingPid, true, loggingOCD);
+
+        assertFalse("The registry should be updated", registry.addMetaType(metatype).isEmpty());
     }
 
     @Test
@@ -337,6 +376,49 @@ public class ConfigEvaluatorTest {
 
         entry = serverConfig.getFactoryInstance(registryEntry.getPid(), ocd.getAlias(), "idAAA");
         assertEquals("Expected string aaa", "aaa", evaluator.evaluate(entry, registryEntry).getProperties().get("enum"));
+    }
+
+    @Test
+    public void testOptionsInvalid() throws Exception {
+        changeLocationSettings("default");
+
+        MetaTypeRegistry registry = new MetaTypeRegistry();
+        MockMetaTypeInformation metatype = new MockMetaTypeInformation(new MockBundle());
+
+        MockObjectClassDefinition ocd = new MockObjectClassDefinition("com.ibm.enum");
+        ocd.setAlias("enum");
+        MockAttributeDefinition ad = new MockAttributeDefinition("enum", AttributeDefinition.INTEGER);
+        ad.setOptions(new String[] { "1", "2", "3" }, new String[] { "one", "TWO", "THREE" });
+        ad.setDefaultValue(new String[] { "TWO" });
+        ad.setValidate(new String[] { "TWO" });
+        ocd.addAttributeDefinition(ad);
+
+        metatype.add(ocd.getID(), true, ocd);
+        registry.addMetaType(metatype);
+        RegistryEntry registryEntry = registry.getRegistryEntry(ocd.getID());
+
+        ConfigEvaluator evaluator = createConfigEvaluator(registry, null);
+        String xml = "<server>" +
+                     "  <enum id='idone' enum='FOUR'/>" +
+                     "  <enum id='idONE' enum='ONE'/>" +
+                     "  <enum id='idTWO' enum='TWO'/>" +
+                     "</server>";
+
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        ConfigElement entry = serverConfig.getFactoryInstance(registryEntry.getPid(), ocd.getAlias(), "idone");
+        assertEquals("Expected integer 2 from default value",
+                     2, evaluator.evaluate(entry, registryEntry).getProperties().get("enum"));
+
+        entry = serverConfig.getFactoryInstance(registryEntry.getPid(), ocd.getAlias(), "idONE");
+        assertEquals("Expected integer 1", 1, evaluator.evaluate(entry, registryEntry).getProperties().get("enum"));
+
+        entry = serverConfig.getFactoryInstance(registryEntry.getPid(), ocd.getAlias(), "idTWO");
+        assertEquals("Expected integer 2", 2, evaluator.evaluate(entry, registryEntry).getProperties().get("enum"));
+
+        outputMgr.dumpStreams();
+        assertTrue("We should get a message that an option is invalid", outputMgr.checkForMessages("CWWKG0032W.*TWO"));
+
     }
 
     @Test
@@ -735,6 +817,105 @@ public class ConfigEvaluatorTest {
     }
 
     @Test
+    public void testVariablesNoConflict() throws Exception {
+        changeLocationSettings("default");
+
+        String loggingPid = "com.ibm.ws.logging";
+
+        MockObjectClassDefinition loggingOCD = new MockObjectClassDefinition("logging");
+        MockAttributeDefinition logDirectoryAttribute = new MockAttributeDefinition("logDirectory", AttributeDefinition.STRING, 0, null);
+        loggingOCD.addAttributeDefinition(logDirectoryAttribute);
+        loggingOCD.setAlias("logging");
+
+        MockBundle bundle = new MockBundle();
+        MockMetaTypeInformation metatype = new MockMetaTypeInformation(bundle);
+        metatype.add(loggingPid, true, loggingOCD);
+
+        MetaTypeRegistry registry = new MetaTypeRegistry();
+        assertFalse("The registry should be updated", registry.addMetaType(metatype).isEmpty());
+
+        RegistryEntry loggingRE = registry.getRegistryEntry(loggingPid);
+
+        String xml = "<server>" +
+                     "  <logging id=\"log1\" logDirectory=\"${one}\" />\n" +
+                     "  <logging id=\"log1\" logDirectory=\"logs_directory\"/>\n" +
+                     "</server>";
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
+        variableRegistryHelper.addVariable("one", "logs_directory");
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
+        TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
+
+        ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "log1");
+
+        EvaluationResult result = evaluator.evaluate(entry, loggingRE);
+        Dictionary<String, Object> dictionary = result.getProperties();
+        assertEquals("logs_directory", dictionary.get("logDirectory"));
+
+        assertFalse("We should not get warning messages about a conflict",
+                    outputMgr.checkForMessages("CWWKG0102I.*"));
+
+    }
+
+    @Test
+    public void testVariablesInIDFields() throws Exception {
+        changeLocationSettings("default");
+
+        String loggingPid = "com.ibm.ws.logging";
+        String singletonPid = "com.ibm.ws.singleton";
+        MockObjectClassDefinition loggingOCD = new MockObjectClassDefinition("logging");
+        MockAttributeDefinition logDirectoryAttribute = new MockAttributeDefinition("logDirectory", AttributeDefinition.STRING, 0, null);
+        loggingOCD.addAttributeDefinition(logDirectoryAttribute);
+        loggingOCD.setAlias("logging");
+
+        MockObjectClassDefinition singletonOCD = new MockObjectClassDefinition("someSingleton");
+        MockAttributeDefinition someAttribute = new MockAttributeDefinition("someAttribute", AttributeDefinition.STRING, 0, null);
+        singletonOCD.addAttributeDefinition(someAttribute);
+        singletonOCD.setAlias("singleton");
+
+        MockBundle bundle = new MockBundle();
+        MockMetaTypeInformation metatype = new MockMetaTypeInformation(bundle);
+        metatype.add(loggingPid, true, loggingOCD);
+        metatype.add(singletonPid, false, singletonOCD);
+
+        MetaTypeRegistry registry = new MetaTypeRegistry();
+        assertFalse("The registry should be updated", registry.addMetaType(metatype).isEmpty());
+
+        RegistryEntry loggingRE = registry.getRegistryEntry(loggingPid);
+        RegistryEntry singletonRE = registry.getRegistryEntry(singletonPid);
+        String xml = "<server>" +
+                     "  <logging id=\"${one}\" logDirectory=\"${one}\"/>\n" +
+                     "  <singleton id=\"${one}\" someAttribute=\"${one}\"/>\n" +
+                     "</server>";
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
+        variableRegistryHelper.addVariable("one", "replacedValue");
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
+        TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
+
+        ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "${one}");
+
+        EvaluationResult result = evaluator.evaluate(entry, loggingRE);
+        Dictionary<String, Object> dictionary = result.getProperties();
+        assertEquals("replacedValue", dictionary.get("id"));
+        assertEquals("replacedValue", dictionary.get("logDirectory"));
+
+        ConfigElement singleton = serverConfig.getSingleton(singletonPid, "singleton");
+        result = evaluator.evaluate(singleton, singletonRE);
+        dictionary = result.getProperties();
+        assertEquals("replacedValue", dictionary.get("id"));
+        assertEquals("replacedValue", dictionary.get("someAttribute"));
+
+        assertTrue("We should get a warning messages about variables in ID fields",
+                   outputMgr.checkForMessages("CWWKG0104W.*\\{one\\}.*logging.*"));
+        assertFalse("We should not get a warning message for variables in a singleton",
+                    outputMgr.checkForMessages("CWWKG0104W.*\\{one\\}.*singleton.*"));
+
+    }
+
+    @Test
     public void testImplicitVariables() throws Exception {
         changeLocationSettings("default");
 
@@ -822,7 +1003,7 @@ public class ConfigEvaluatorTest {
         assertEquals("a=" + nestedPortPid, dictionary.get("a"));
         assertEquals("z=" + nestedPortPid, dictionary.get("z"));
 
-        VariableRegistry vr = new ConfigVariableRegistry(new VariableRegistryHelper(), new String[0], null);
+        VariableRegistry vr = new ConfigVariableRegistry(new VariableRegistryHelper(), new String[0], null, wsLocation);
         assertEquals("portRef should not be in the variable registry", "${portRef}", vr.resolveString("${portRef}"));
         // Just checking that the variable registry is sane
         assertEquals("server config dir should be in the variable registry", wsLocation.resolveString("${" + WsLocationConstants.LOC_SERVER_CONFIG_DIR + "}"),
@@ -870,7 +1051,7 @@ public class ConfigEvaluatorTest {
 
         VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
         variableRegistryHelper.addVariable("test", "expanded variable");
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "one");
@@ -909,7 +1090,7 @@ public class ConfigEvaluatorTest {
 
         VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
         variableRegistryHelper.addVariable("com.ibm.ws.logging.log.directory", "a,b,c");
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "one");
@@ -947,7 +1128,7 @@ public class ConfigEvaluatorTest {
 
         VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
         variableRegistryHelper.addVariable("com.ibm.ws.logging.log.directory", "a,b,c");
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "one");
@@ -988,13 +1169,13 @@ public class ConfigEvaluatorTest {
 
         VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
         variableRegistryHelper.addVariable("com.ibm.ws.logging.log.directory", "a,b,c");
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         ConfigElement entry = serverConfig.getFactoryInstance(loggingPid, "logging", "one");
 
         try {
-            EvaluationResult result = evaluator.evaluate(entry, loggingRE);
+            evaluator.evaluate(entry, loggingRE);
         } catch (ConfigEvaluatorException ex) {
             // Passed
             return;
@@ -1161,7 +1342,7 @@ public class ConfigEvaluatorTest {
         variableRegistryHelper.addVariable("singleValue", "a");
         variableRegistryHelper.addVariable("intValues", "1,2,3,4,5");
         variableRegistryHelper.addVariable("varArray", "${multiValue}, ${singleValue}, ${intValues}");
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         Map<ConfigID, String> pids = new HashMap<ConfigID, String>();
@@ -1400,7 +1581,7 @@ public class ConfigEvaluatorTest {
 
         String[] commandLineVariables = new String[] { "--onlyCLV=foo", "--inBoth=fromCLV", "--zzz", "--emptyInCLV", "--=====", "--=bcd", "--empty=", "onlyCLV=invalidFromCLV",
                                                        "-inBoth=invalidFromBoth" };
-        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, commandLineVariables, null);
+        ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, commandLineVariables, null, wsLocation);
         TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
         ConfigElement loggingElement = serverConfig.getSingleton(loggingPid, loggingRE.getAlias());
@@ -1590,7 +1771,7 @@ public class ConfigEvaluatorTest {
             RegistryEntry re = registry.getRegistryEntry(pid);
 
             VariableRegistryHelper variableRegistryHelper = new VariableRegistryHelper(new SymbolRegistry());
-            ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null);
+            ConfigVariableRegistry variableRegistry = new ConfigVariableRegistry(variableRegistryHelper, new String[0], null, wsLocation);
             TestConfigEvaluator evaluator = createConfigEvaluator(registry, variableRegistry, null);
 
             for (boolean variables : new boolean[] { false, true }) {
@@ -2029,6 +2210,98 @@ public class ConfigEvaluatorTest {
         RegistryEntry registryEntry = registry.getRegistryEntry(loggingPid);
         entry = serverConfig.getFactoryInstance(loggingPid, registryEntry.getAlias(), "one");
         evaluator.evaluate(entry, registryEntry);
+    }
+
+    @Test
+    public void testObscuredBoolean() throws ConfigParserException, ConfigValidationException, ConfigEvaluatorException, ConfigMergeException {
+        changeLocationSettings("default");
+
+        String portPid = "com.ibm.ws.port";
+        String hostPid = "com.ibm.ws.host";
+        String hostPortPid = "com.ibm.ws.host.port";
+        String portAttribute = "portRef";
+        String loggingPid = "com.ibm.ws.logging";
+        MetaTypeRegistry registry = createRegistry(portPid, hostPid, hostPortPid, portAttribute, 2, portPid, true);
+        addObscuredBooleanTypeToRegistry(registry, loggingPid);
+
+        String xml = "<server>" +
+                     "    <logging id=\"one\" boolean=\"true\"/>" +
+                     "</server>";
+
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        ConfigEvaluator evaluator = createConfigEvaluator(registry, null);
+
+        ConfigElement entry = null;
+
+        RegistryEntry registryEntry = registry.getRegistryEntry(loggingPid);
+        entry = serverConfig.getFactoryInstance(loggingPid, registryEntry.getAlias(), "one");
+        evaluator.evaluate(entry, registryEntry);
+        assertEquals("true", entry.getAttribute("boolean").toString());
+    }
+
+    // Throws an exception because there is no default value
+    @Test(expected = ConfigEvaluatorException.class)
+    public void testInvalidInteger() throws ConfigParserException, ConfigValidationException, ConfigEvaluatorException, ConfigMergeException {
+        changeLocationSettings("default");
+
+        String portPid = "com.ibm.ws.port";
+        String hostPid = "com.ibm.ws.host";
+        String hostPortPid = "com.ibm.ws.host.port";
+        String portAttribute = "portRef";
+        String loggingPid = "com.ibm.ws.logging";
+        MetaTypeRegistry registry = createRegistry(portPid, hostPid, hostPortPid, portAttribute, 2, portPid, true);
+        addIntegerTypeToRegistry(registry, loggingPid);
+
+        String xml = "<server>" +
+                     "    <logging id=\"one\" integer=\"eight\"/>" +
+                     "</server>";
+
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        ConfigEvaluator evaluator = createConfigEvaluator(registry, null);
+
+        ConfigElement entry = null;
+
+        RegistryEntry registryEntry = registry.getRegistryEntry(loggingPid);
+        entry = serverConfig.getFactoryInstance(loggingPid, registryEntry.getAlias(), "one");
+
+        evaluator.evaluate(entry, registryEntry);
+
+    }
+
+    @Test
+    public void testInvalidIntegerDefaultValue() throws ConfigParserException, ConfigValidationException, ConfigEvaluatorException, ConfigMergeException {
+        changeLocationSettings("default");
+
+        String portPid = "com.ibm.ws.port";
+        String hostPid = "com.ibm.ws.host";
+        String hostPortPid = "com.ibm.ws.host.port";
+        String portAttribute = "portRef";
+        String loggingPid = "com.ibm.ws.logging";
+        MetaTypeRegistry registry = createRegistry(portPid, hostPid, hostPortPid, portAttribute, 2, portPid, true);
+        MockAttributeDefinition ad = addIntegerTypeToRegistry(registry, loggingPid);
+        ad.setDefaultValue(new String[] { "8" });
+
+        String xml = "<server>" +
+                     "    <logging id=\"one\" integer=\"eight\"/>" +
+                     "</server>";
+
+        ServerConfiguration serverConfig = configParser.parseServerConfiguration(new StringReader(xml));
+
+        ConfigEvaluator evaluator = createConfigEvaluator(registry, null);
+
+        ConfigElement entry = null;
+
+        RegistryEntry registryEntry = registry.getRegistryEntry(loggingPid);
+        entry = serverConfig.getFactoryInstance(loggingPid, registryEntry.getAlias(), "one");
+        try {
+            evaluator.evaluate(entry, registryEntry);
+        } finally {
+            assertTrue("We should get a message that the default is being used",
+                       outputMgr.checkForMessages("CWWKG0083W.*eight.*8"));
+        }
+
     }
 
     // Port is a singleton here so child elements should be merged. There should not be a cardinality violation
@@ -2634,6 +2907,33 @@ public class ConfigEvaluatorTest {
     }
 
     @Test
+    public void testFlatMerge() throws Exception {
+        String xml = "<server>" +
+                     "    <top id='top' varTest='${c1.0.multiAttr}' attr='top'>" +
+                     "      <c1 id='child1' attr='override_me' multiAttr='override_me' varTest2='${c1.0.c11.0.attr}'>" +
+                     //extra non-metatype attribute
+                     "        <c11 attr='c11a' foo='foo'/>" +
+                     //attribute as nested element
+                     "        <c11><attr>c11b</attr></c11>" +
+                     "        <c12 attr='c12a'/>" +
+                     "        <c12 attr='c12b'/>" +
+                     "      </c1>" +
+                     "      <c.2 attr='c2a'>" +
+                     "        <c.2.1 attr='c21a'/>" +
+                     "        <c.2.1 attr='c21b'/>" +
+                     "      </c.2>" +
+                     "      <c.2 attr='c2b'>" +
+                     "        <c.2.1 attr='c21c'/>" +
+                     "        <c.2.1 attr='c21d'/>" +
+                     "      </c.2>" +
+                     "      <c1 id='child1' attr='c1a' multiAttr='c1First' />" +
+                     "    </top>" +
+                     "</server>";
+
+        internalTestFlat(xml, "child1");
+    }
+
+    @Test
     public void testFlatCardinalityViolation() throws Exception {
         String xml = "<server>" +
                      "    <top id='top' varTest='${c1.0.multiAttr}' attr='top'>" +
@@ -2875,7 +3175,7 @@ public class ConfigEvaluatorTest {
             assertEquals(2, c21.size());
         }
 
-        VariableRegistry vr = new ConfigVariableRegistry(new VariableRegistryHelper(), new String[0], null);
+        VariableRegistry vr = new ConfigVariableRegistry(new VariableRegistryHelper(), new String[0], null, wsLocation);
         assertEquals("flat variable should not be in the variable registry", "${c1.0.multiAttr}", vr.resolveString("${c1.0.multiAttr}"));
     }
 

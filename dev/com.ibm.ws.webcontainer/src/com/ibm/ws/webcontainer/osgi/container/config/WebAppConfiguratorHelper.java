@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2016 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -9,13 +9,14 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 //  CHANGE HISTORY
-//      Defect          Date            Modified By             Description
+//    Defect | Issue   Date            Modified By             Description
 //--------------------------------------------------------------------------------------
 //      PM84305         07/10/13        pmdinh                  Prevent OOM which may occur due to application design
 //      PI05845         08/21/14        sartoris                tWAS PM94199 Conditionally enabled default error pages in Servlet 3.0
 //      131004          09/29/14        bitonti                 Unconditionally enable default error pages in Servlet 3.1
 //      148426          10/06/14        bitonti                 Give extension default error page precedence in Servlet 3.0
 //      PI67942         10/21/16        zaroman                 encode URI after dispatch
+//      11909           12/11/20        jimblye                 Allow context-root to be overridden in server.xml
 
 package com.ibm.ws.webcontainer.osgi.container.config;
 
@@ -44,9 +45,8 @@ import com.ibm.ejs.ras.TraceNLS;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.container.ErrorPage;
-import com.ibm.ws.container.service.annotations.FragmentAnnotations;
-import com.ibm.ws.container.service.annotations.SpecificAnnotations;
 import com.ibm.ws.container.service.annotations.WebAnnotations;
+import com.ibm.ws.container.service.annotations.SpecificAnnotations;
 import com.ibm.ws.container.service.app.deploy.WebModuleInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ExtendedApplicationInfo;
 import com.ibm.ws.container.service.config.ServletConfigurator;
@@ -142,10 +142,11 @@ import com.ibm.wsspi.webcontainer.metadata.WebModuleMetaData;
 import com.ibm.wsspi.webcontainer.webapp.WebAppConfig;
 
 /**
- * WebAppConfigurator processes all the required web application related configurations from web.xml, web-fragment.xml and annotations.
- * and configure them into the WebAppConfiguration.
+ * WebAppConfigurator processes all the required web application related configurations
+ * from web.xml, web-fragment.xml and annotations.  Configure them into the WebAppConfiguration.
  */
 public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
+    private static final String CLASS_NAME = WebAppConfiguratorHelper.class.getSimpleName();
 
     private static final TraceComponent tc = Tr.register(WebAppConfiguratorHelper.class, WebContainerConstants.TR_GROUP, WebContainerConstants.NLS_PROPS);
 
@@ -221,7 +222,9 @@ public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
      */
     public static int getVersionId(String version) throws IllegalStateException {
         int versionID = 0;
-        if ("4.0".equals(version)) {
+        if ("5.0".equals(version)) {
+            versionID = 50;
+        }else if ("4.0".equals(version)) {
             versionID = 40;
         }else if ("3.1".equals(version)) {
             versionID = 31;
@@ -716,8 +719,22 @@ public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
         }
         configureOrderedLibPaths(orderedLibPaths);
         
+        configureContextRoot();
+        
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, methodName, "WebAppConfiguration [ " + displayName + " ]");
+        }              
+    }
+    
+    /**
+     * Only sets the contextRoot if the context root has been overridden 
+     * by the server.xml in a <web-ext> element of <application>
+     */
+    private void configureContextRoot() {
+
+        String contextRoot = configurator.getContextRootFromServerConfig();
+        if (contextRoot != null) {
+            this.webAppConfiguration.config.setContextRoot(contextRoot);
         }
     }
 
@@ -799,9 +816,25 @@ public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
         configureFilterMappings(webFragment, webFragment.getFilterMappings());
     }
 
-    @Override
-    public void configureFromAnnotations(WebFragmentInfo webFragmentItem) throws UnableToAdaptException {
-        FragmentAnnotations fragmentAnnotations = configurator.getWebAnnotations().getFragmentAnnotations(webFragmentItem);
+    private void logAnnotations(String methodName, String title, WebFragmentInfo webFragmentItem, Set<String> annotationClassNames) {
+        if ( annotationClassNames.isEmpty() ) {
+            return;
+        }
+
+        if ( !TraceComponent.isAnyTracingEnabled() || !tc.isDebugEnabled()) {
+            return;
+        }
+
+        String prefix = CLASS_NAME + "." + methodName + ": ";
+        Tr.debug(tc, prefix + "[ " + webFragmentItem + " ]: " + title + ": [ " + annotationClassNames.size() + " ]");
+        for ( String className : annotationClassNames ) {
+            Tr.debug(tc, prefix + "  [ " + className + " ]");
+        }
+    }
+
+    public void configureFromAnnotations(WebFragmentInfo webFragmentItem) throws UnableToAdaptException {    	
+    	com.ibm.ws.container.service.annotations.FragmentAnnotations fragmentAnnotations =
+    		configurator.getWebAnnotations().getFragmentAnnotations(webFragmentItem);
 
         Set<String> webServletClassNames = fragmentAnnotations.selectAnnotatedClasses(WebServlet.class);
         configureServletAnnotation(webServletClassNames);
@@ -872,7 +905,7 @@ public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
         //
         // The second part of the rule is incorrect: Classes in excluded regions are not to
         // be processed. Classes in external regions are to be processed. 
-        
+
         WebAnnotations webAnnotations = configurator.getWebAnnotations();
 
         // Be careful about retrieving the class categorization; we need to know if a
@@ -2669,6 +2702,10 @@ public class WebAppConfiguratorHelper implements ServletConfiguratorHelper {
                                                                                  new Object[] { urlText, servletName, existingName }, 
                                                                                  "servlet-mapping value matches multiple servlets: " + urlText));
                     }
+                }
+
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, methodName + ": Map servlet [ " + servletName + " ] to URL [ " + urlText + " ]");
                 }
                 webAppConfiguration.addServletMapping(servletName, urlText);
             }

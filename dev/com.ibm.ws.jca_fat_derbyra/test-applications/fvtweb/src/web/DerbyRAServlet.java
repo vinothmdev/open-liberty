@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017,2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -9,6 +9,10 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 package web;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
@@ -27,16 +31,20 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import javax.ejb.EJBContext;
 import javax.management.MBeanServer;
 import javax.management.ObjectInstance;
 import javax.management.ObjectName;
 import javax.naming.InitialContext;
+import javax.naming.NamingException;
 import javax.resource.spi.BootstrapContext;
 import javax.resource.spi.XATerminator;
 import javax.resource.spi.work.ExecutionContext;
 import javax.resource.spi.work.TransactionContext;
 import javax.resource.spi.work.WorkManager;
+import javax.servlet.ServletException;
 import javax.sql.DataSource;
 import javax.transaction.UserTransaction;
 import javax.transaction.xa.XAResource;
@@ -48,11 +56,23 @@ public class DerbyRAServlet extends FATServlet {
     private static final long serialVersionUID = 7709282314904580334L;
 
     public static MBeanServer mbeanServer = ManagementFactory.getPlatformMBeanServer();
+    private static final AtomicReference<Connection> nonDissociatableSharableHandleRef = new AtomicReference<Connection>();
 
     /**
      * Maximum number of milliseconds a test should wait for something to happen
      */
     private static final long TIMEOUT = 5000;
+
+    public void initDatabaseTables() throws ServletException {
+        try {
+            DataSource ds = (DataSource) InitialContext.doLookup("java:module/env/eis/ds5ref-unshareable");
+            try (Connection con = ds.getConnection()) {
+                con.createStatement().execute("CREATE TABLE TESTTBL(NAME VARCHAR(80) NOT NULL PRIMARY KEY, VAL INT NOT NULL)");
+            }
+        } catch (NamingException | SQLException x) {
+            throw new ServletException(x);
+        }
+    }
 
     /**
      * Verify that an admin object can be looked up directly as java.util.Map.
@@ -334,11 +354,99 @@ public class DerbyRAServlet extends FATServlet {
                 throw new Exception("User name doesn't match configured value on containerAuthData. Instead: " + userName);
 
             if (con.toString().contains("WSPrincipal:") == false) {
-                throw new Exception("The subject does not contain a principal.");
+                throw new Exception("The subject does not contain a principal. " + con.toString());
             }
         } finally {
             con.close();
         }
+    }
+
+    /**
+     * When HandleList is enabled, it automatically closes shareable parked connection handles that are
+     * leaked across transaction scopes.
+     */
+    public void testNonDissociatableHandlesCannotBeParkedAcrossTransactionScopes() throws Exception {
+        DerbyRABean bean = InitialContext.doLookup("java:global/derbyRAApp/fvtweb/DerbyRABean!web.DerbyRABean");
+
+        Connection con = bean.runInNewGlobalTran(() -> {
+            DataSource ds = (DataSource) InitialContext.doLookup("eis/ds5"); // shareable
+            Connection c = ds.getConnection();
+            Statement st = c.createStatement();
+            st.executeUpdate("INSERT INTO TESTTBL VALUES('park-handle-across-transaction', 3000)");
+            st.close();
+            return c;
+        });
+
+        assertTrue(con.isClosed());
+    }
+
+    /**
+     * When HandleList is enabled, shareable connection handles are parked across EJB methods within a transaction
+     * if the resource adapter does not support DissociatableManagedConnection. The connection handle continues to be
+     * usable in subsequent EJB methods within the transaction, remaining open until the EJB is destroyed, at which
+     * point the HandleList closes connection handles that remain open and would otherwise be leaked.
+     */
+    public void testNonDissociatableHandlesParkedAcrossEJBMethods() throws Exception {
+        DerbyConnectionCachingBean bean = InitialContext.doLookup("java:global/derbyRAApp/fvtweb/DerbyConnectionCachingBean!web.DerbyConnectionCachingBean");
+        UserTransaction tx = InitialContext.doLookup("java:comp/UserTransaction");
+        tx.begin();
+        try {
+            bean.connect();
+
+            bean.insert("park-handle-across-EJB-methods-1", 1000);
+            bean.insert("park-handle-across-EJB-methods-2", 2000);
+            assertEquals(Integer.valueOf(1000), bean.find("park-handle-across-EJB-methods-1"));
+            assertEquals(Integer.valueOf(2000), bean.find("park-handle-across-EJB-methods-2"));
+
+            Connection cachedConnection = bean.getCachedConnection();
+            assertFalse(cachedConnection.isClosed());
+
+            bean.removeEJB();
+            assertTrue(cachedConnection.isClosed());
+        } finally {
+            tx.commit();
+        }
+
+        // access the same data from another transaction:
+
+        bean = InitialContext.doLookup("java:global/derbyRAApp/fvtweb/DerbyConnectionCachingBean!web.DerbyConnectionCachingBean");
+        tx.begin();
+        try {
+            bean.connect();
+            assertEquals(Integer.valueOf(1000), bean.find("park-handle-across-EJB-methods-1"));
+            assertEquals(Integer.valueOf(2000), bean.find("park-handle-across-EJB-methods-2"));
+
+            Connection cachedConnection = bean.getCachedConnection();
+            assertFalse(cachedConnection.isClosed());
+
+            bean.removeEJB();
+            assertTrue(cachedConnection.isClosed());
+        } finally {
+            tx.commit();
+        }
+    }
+
+    /**
+     * Verifies that a non-dissociatable sharable connection handle that was left open by another servlet request
+     * is closed now.
+     *
+     * Prerequisite - must run testNonDissociatableSharableHandleLeftOpenAfterServletMethod prior to this test
+     */
+    public void testNonDissociatableSharableHandleIsClosed() throws Exception {
+        Connection con = nonDissociatableSharableHandleRef.getAndSet(null);
+        assertTrue(con.isClosed());
+    }
+
+    /**
+     * Intentionally leave a non-dissociatable, sharable handle open across the end of a servlet method.
+     * The invoker must run testNonDissociatableSharableHandleIsClosed after this to complete the test.
+     */
+    public void testNonDissociatableSharableHandleLeftOpenAfterServletMethod() throws Exception {
+        DataSource ds = (DataSource) InitialContext.doLookup("eis/ds5");
+        Connection con = ds.getConnection();
+        assertFalse(con.isClosed());
+        assertTrue(nonDissociatableSharableHandleRef.compareAndSet(null, con));
+        // intentionally leave the connection open across the end of the servlet request
     }
 
     /**
@@ -400,6 +508,54 @@ public class DerbyRAServlet extends FATServlet {
             }
         } finally {
             con.close();
+        }
+    }
+
+    /**
+     * Use an unshared connection within two EJB methods that run under different transactions, one of which rolls back
+     * and the other of which commits.
+     */
+    public void testUnsharableConnectionAcrossEJBGlobalTran() throws Exception {
+        DerbyRABean bean = InitialContext.doLookup("java:global/derbyRAApp/fvtweb/DerbyRABean!web.DerbyRABean");
+        final DataSource ds = (DataSource) InitialContext.doLookup("java:module/env/eis/ds5ref-unshareable");
+        final Connection[] c = new Connection[1];
+        c[0] = ds.getConnection();
+        try {
+            c[0].createStatement().execute("create table testUnsharableConEJBTable (name varchar(40) not null primary key, val int not null)");
+            c[0].close();
+
+            bean.runInNewGlobalTran(new Callable<Void>() {
+                @Override
+                public Void call() throws Exception {
+                    c[0] = ds.getConnection();
+                    c[0].createStatement().executeUpdate("insert into testUnsharableConEJBTable values ('first', 1)");
+
+                    DerbyRABean bean = InitialContext.doLookup("java:global/derbyRAApp/fvtweb/DerbyRABean!web.DerbyRABean");
+                    bean.runInNewGlobalTran(new Callable<Integer>() {
+                        @Override
+                        public Integer call() throws Exception {
+                            return c[0].createStatement().executeUpdate("insert into testUnsharableConEJBTable values ('second', 2)");
+                        }
+                    });
+
+                    EJBContext ejbContext = InitialContext.doLookup("java:comp/EJBContext");
+                    ejbContext.setRollbackOnly();
+                    return null;
+                }
+            });
+
+            int updateCount;
+            updateCount = c[0].createStatement().executeUpdate("delete from testUnsharableConEJBTable where name='second'");
+            // TODO connection is not enlisting in the transaction of the second EJB method.
+            //if (updateCount != 1)
+            //    throw new Exception("Did not find the entry that should have been committed under the EJB transaction.");
+
+            updateCount = c[0].createStatement().executeUpdate("delete from testUnsharableConEJBTable where name='first'");
+            if (updateCount != 0)
+                throw new Exception("Found an entry that should have been rolled back under the Servlet's global transaction.");
+
+        } finally {
+            c[0].close();
         }
     }
 

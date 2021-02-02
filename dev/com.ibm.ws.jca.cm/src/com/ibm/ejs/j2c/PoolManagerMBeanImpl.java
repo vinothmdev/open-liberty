@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013 IBM Corporation and others.
+ * Copyright (c) 2013, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -35,6 +35,7 @@ import com.ibm.ws.jca.cm.mbean.ConnectionManagerMBean;
 
 public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionManagerMBean {
     private static final TraceComponent tc = Tr.register(PoolManagerMBeanImpl.class, J2CConstants.traceSpec, J2CConstants.messageFile);
+    private static final TraceComponent ConnLeakLogic = Tr.register(ConnectionManager.class, "ConnLeakLogic", J2CConstants.messageFile);
 
     private transient PoolManager _pm = null;
     private transient Version jdbcRuntimeVersion;
@@ -104,20 +105,52 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
     @Override
     public Object invoke(String actionName, Object[] params, String[] signature) throws MBeanException, ReflectionException {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
-            Tr.entry(this, tc, "invoke");
+            Tr.entry(this, tc, "invoke", params, signature);
 
         Object o = null;
 
         if ("showPoolContents".equalsIgnoreCase(actionName)) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Displaying the connection pool");
+            }
             o = showPoolContents();
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Connection pool contents", o);
+            }
         } else if ("purgePoolContents".equalsIgnoreCase(actionName)) {
             if (params == null) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Normal purge of the connection pool");
+                }
                 purgePoolContents("normal");
             } else if (params.length == 1 && params[0] instanceof java.lang.String) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Purging the connection pool using option", (String) params[0]);
+                }
                 purgePoolContents((String) params[0]);
             } else {
                 throw new MBeanException(new IllegalArgumentException(Arrays.toString(params)), Tr.formatMessage(tc, "INVALID_MBEAN_INVOKE_PARAM_J2CA8060", Arrays.toString(params),
                                                                                                                  actionName));
+            }
+        } else if ("getJndiName".equalsIgnoreCase(actionName)) {
+            o = getJndiName();
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "JNDI Name", o);
+            }
+        } else if ("getMaxSize".equalsIgnoreCase(actionName)) {
+            o = getMaxSize();
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Max size", o);
+            }
+        } else if ("getSize".equalsIgnoreCase(actionName)) {
+            o = getSize();
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Size", o);
+            }
+        } else if ("getAvailable".equalsIgnoreCase(actionName)) {
+            o = getAvailable();
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Available size", o);
             }
         } else {
             throw new MBeanException(new IllegalArgumentException(actionName), Tr.formatMessage(tc, "INVALID_MBEAN_INVOKE_ACTION_J2CA8061", actionName, "ConnectionManager"));
@@ -166,20 +199,71 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
     }
 
     @Override
-    public Object getAttribute(String attribute) throws AttributeNotFoundException, MBeanException, ReflectionException {
-        String returnValue = null;
+    public Object getAttribute(String attribute) throws AttributeNotFoundException {
         if (attribute.equals("size")) {
-            returnValue = _pm.getTotalConnectionCount().toString();
+            // We need to keep the case for 'size' (lowercase s) because it was originally written this way
+            // and changing it to the proper return type of long would be a breaking change.
+            // Instead, we take advantage of the fact that when the MBean is used through JMX proxy the 'attribute'
+            // param comes in as 'Size' (uppercase S) so we can give the proper return type of long
+            return Long.valueOf(getSize()).toString();
+        } else if (attribute.equals("Size")) {
+            return getSize();
+        } else if (attribute.equalsIgnoreCase("maxSize")) {
+            return getMaxSize();
+        } else if (attribute.equalsIgnoreCase("available")) {
+            return getAvailable();
+        } else if (attribute.equalsIgnoreCase("jndiName")) {
+            return getJndiName();
         } else {
             throw new AttributeNotFoundException(attribute);
         }
-        return returnValue;
     }
 
     /** {@inheritDoc} */
     @Override
     public String toString() {
         return new StringBuffer("ConnectionManagerMBean@").append(Integer.toHexString(hashCode())).append(' ').append(obn.toString()).toString();
+    }
+
+    @Override
+    public String getJndiName() {
+        if (_pm.gConfigProps == null || _pm.gConfigProps.getJNDIName() == null) {
+            return ("none");
+        } else {
+            return (_pm.gConfigProps.getJNDIName());
+        }
+    }
+
+    @Override
+    public long getMaxSize() {
+        return _pm.maxConnections;
+    }
+
+    @Override
+    public long getSize() {
+        return _pm.totalConnectionCount.get();
+    }
+
+    @Override
+    public long getAvailable() {
+        long numFreeConnections = 0;
+        _pm.mcToMCWMapWrite.lock();
+        try {
+            int mcToMCWSize = _pm.mcToMCWMap.size();
+            if (mcToMCWSize > 0) {
+                Object[] tempObject = _pm.mcToMCWMap.values().toArray();
+                com.ibm.ejs.j2c.MCWrapper mcw = null;
+                for (int ti = 0; ti < mcToMCWSize; ++ti) {
+                    mcw = (com.ibm.ejs.j2c.MCWrapper) tempObject[ti];
+                    if (mcw.getPoolState() == 1) {
+                        ++numFreeConnections;
+                    }
+                }
+            }
+        } finally {
+            _pm.mcToMCWMapWrite.unlock();
+        }
+        return numFreeConnections;
     }
 
     /**
@@ -215,19 +299,15 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
         buf.append(obn.toString());
         buf.append(nl);
         buf.append("jndiName=");
-        if (_pm.gConfigProps == null || _pm.gConfigProps.getJNDIName() == null) {
-            buf.append("none");
-        } else {
-            buf.append(_pm.gConfigProps.getJNDIName());
-        }
+        buf.append(getJndiName());
         buf.append(nl);
         buf.append("maxPoolSize=");
-        buf.append(_pm.maxConnections);
+        buf.append(getMaxSize());
         buf.append(nl);
         buf.append("size=");
-        buf.append(_pm.totalConnectionCount.get());
+        buf.append(getSize());
         buf.append(nl);
-        int numUnsharedConnections = 0, numSharedConnections = 0, numFreeConnections = 0, numWaitingConnections = 0;
+        int numUnsharedConnections = 0, numSharedConnections = 0, numFreeConnections = 0;
         _pm.mcToMCWMapWrite.lock();
         try {
             int mcToMCWSize = _pm.mcToMCWMap.size();
@@ -283,9 +363,6 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
                             unsharedBuf.append(mcw.getThreadID());
                             unsharedBuf.append(nl);
                             break;
-                        case 4: // In waiter pool
-                            ++numWaitingConnections;
-                            break;
                         default:
                             break;
                     }
@@ -295,8 +372,7 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
             _pm.mcToMCWMapWrite.unlock();
         }
         // Waiting info
-        buf.append("waiting=");
-        buf.append(numWaitingConnections);
+        buf.append("waiting=" + _pm.waiterCount);
         buf.append(nl);
         // Unshared info
         buf.append("unshared=");
@@ -368,6 +444,14 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
 
     @Override
     public String showPoolContents() {
-        return toStringExternal();
+        StringBuffer buf = new StringBuffer();
+        buf.append(toStringExternal());
+        if (TraceComponent.isAnyTracingEnabled() && ConnLeakLogic.isEntryEnabled()) {
+            buf.append(nl);
+            buf.append("Extended ConnLeakLogic information");
+            buf.append(nl);
+            buf.append(_pm.toString());
+        }
+        return buf.toString();
     }
 }

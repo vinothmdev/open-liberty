@@ -62,14 +62,11 @@ public class BurstDateFormat {
     private final FieldPosition position = new FieldPosition(Field.MILLISECOND);
 
     /**
-     * Forces a re-format
-     */
-    private boolean reset = false;
-
-    /**
      * Tracks whether the format is not valid. If true, the underlying SimpleDateFormat is used
      */
-    protected boolean invalidFormat = false;
+    boolean invalidFormat = false;
+
+    private StringBuffer sb;
 
     /**
      * Constructs a BurstDateFormat
@@ -77,28 +74,23 @@ public class BurstDateFormat {
      * @param formatter
      */
     public BurstDateFormat(SimpleDateFormat formatter) {
-        this.formatter = formatter;
-        setup();
+        this(formatter, isFormatInvalid(formatter));
     }
 
-    /**
-     * Apply a pattern to the formatter (only new formats are applied)
-     *
-     * @param pattern
-     */
-    public void applyPattern(String pattern) {
-        if (!formatter.toPattern().equals(pattern)) {
-            formatter.applyPattern(pattern);
-            reset = true;
-            invalidFormat = false;
-            setup();
+    public BurstDateFormat(SimpleDateFormat formatter, boolean isInvalid) {
+        this.formatter = formatter;
+        this.invalidFormat = isInvalid;
+        if (!invalidFormat) {
+            sb = new StringBuffer();
         }
     }
 
-    /**
-     * Setup the date formatter, determine if the format is valid
-     */
-    protected void setup() {
+    static boolean isFormatInvalid(SimpleDateFormat formatter) {
+        /**
+         * Setup the date formatter, determine if the format is valid
+         */
+        FieldPosition position = new FieldPosition(Field.MILLISECOND);
+        boolean invalidFormat = false;
         try {
             StringBuffer refTime = new StringBuffer();
 
@@ -117,7 +109,8 @@ public class BurstDateFormat {
             String str = refTime.substring(position.getBeginIndex(), position.getEndIndex());
 
             // Make sure we are using ascii digits (The loop could be unwrapped)
-            for (char a : str.toCharArray()) {
+            for (int i = str.length() - 1; i >= 0; --i) {
+                char a = str.charAt(i);
                 if (a < 48 || a > 57) {
                     invalidFormat = true;
                     break;
@@ -126,6 +119,7 @@ public class BurstDateFormat {
         } catch (Exception e) {
             invalidFormat = true;
         }
+        return invalidFormat;
     }
 
     /**
@@ -143,24 +137,22 @@ public class BurstDateFormat {
 
         try {
             long delta = timestamp - refTimestamp;
+            sb.setLength(0);
 
             // If we need to reformat
-            if (delta >= pdiff || delta < ndiff || reset) {
-                reset = false;
-                StringBuffer refTime = new StringBuffer();
+            if (delta >= pdiff || delta < ndiff) {
                 refTimestamp = timestamp;
-                formatter.format(timestamp, refTime, position);
+                formatter.format(timestamp, sb, position);
 
-                refMilli = Long.parseLong(refTime.substring(position.getBeginIndex(), position.getEndIndex()));
+                refMilli = Long.parseLong(sb.substring(position.getBeginIndex(), position.getEndIndex()));
 
-                refBeginning = refTime.substring(0, position.getBeginIndex());
-                refEnding = refTime.substring(position.getEndIndex());
+                refBeginning = sb.substring(0, position.getBeginIndex());
+                refEnding = sb.substring(position.getEndIndex());
 
                 pdiff = 1000 - refMilli;
                 ndiff = -refMilli;
-                return refTime.toString();
+                return sb.toString();
             } else {
-                StringBuffer sb = new StringBuffer();
                 long newMilli = delta + refMilli;
                 if (newMilli >= 100)
                     sb.append(refBeginning).append(newMilli).append(refEnding);
@@ -175,6 +167,7 @@ public class BurstDateFormat {
             // Throw FFDC in case anything goes wrong
             // Still generate the date via the SimpleDateFormat
             invalidFormat = true;
+            sb = null;
             return formatter.format(timestamp);
         }
     }

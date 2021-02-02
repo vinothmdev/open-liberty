@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,7 +11,6 @@
 package com.ibm.ws.jaxrs20.endpoint;
 
 import java.io.IOException;
-import java.net.URI;
 import java.util.Map;
 import java.util.Map.Entry;
 
@@ -20,11 +19,14 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.cxf.jaxrs.utils.HttpUtils;
 import org.apache.cxf.transport.http.AbstractHTTPDestination;
 import org.apache.cxf.transport.servlet.BaseUrlHelper;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.cxf.exceptions.InvalidCharsetException;
+import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.jaxrs20.JaxRsRuntimeException;
 import com.ibm.ws.jaxrs20.api.JaxRsProviderFactoryService;
 import com.ibm.ws.jaxrs20.metadata.EndpointInfo;
@@ -123,6 +125,7 @@ public abstract class AbstractJaxRsWebEndpoint implements JaxRsWebEndpoint {
      * {@inheritDoc}
      */
     @Override
+    @FFDCIgnore(InvalidCharsetException.class)
     public void invoke(HttpServletRequest request, HttpServletResponse response) throws ServletException {
         if (destination == null)
         {
@@ -132,6 +135,8 @@ public abstract class AbstractJaxRsWebEndpoint implements JaxRsWebEndpoint {
         try {
             updateDestination(request);
             destination.invoke(servletConfig, servletConfig.getServletContext(), request, response);
+        } catch (InvalidCharsetException e) {
+            response.setStatus(HttpServletResponse.SC_UNSUPPORTED_MEDIA_TYPE);
         } catch (IOException e) {
             throw new ServletException(e);
         } catch (JaxRsRuntimeException ex) {
@@ -233,7 +238,13 @@ public abstract class AbstractJaxRsWebEndpoint implements JaxRsWebEndpoint {
 //        }
 
         String reqPrefix = request.getRequestURL().toString();
-        String pathInfo = request.getPathInfo() == null ? "" : request.getPathInfo();
+        //Liberty code change start
+        String pathInfo = request.getPathInfo();
+        if (pathInfo == null) {
+            pathInfo = "";
+        }
+        //Liberty code change end
+
         //fix for CXF-898
         if (!"/".equals(pathInfo) || reqPrefix.endsWith("/")) {
             StringBuilder sb = new StringBuilder();
@@ -242,8 +253,13 @@ public abstract class AbstractJaxRsWebEndpoint implements JaxRsWebEndpoint {
             // return the actual name used in request URI as opposed to localhost
             // consistently across the Servlet stacks
 
-            URI uri = URI.create(reqPrefix);
-            sb.append(uri.getScheme()).append("://").append(uri.getRawAuthority());
+            //Liberty code change start
+            String[] uri = HttpUtils.parseURI(reqPrefix, true);
+            if (uri == null) {
+                throw new IllegalArgumentException(reqPrefix + " contains illegal arguments");
+            }
+            sb.append(uri[0]).append("://").append(uri[1]);
+            //Liberty code change end
 
             //No servletPath will be appended, as in Liberty, each endpoint will be served by one servlet instance
             sb.append(request.getContextPath());

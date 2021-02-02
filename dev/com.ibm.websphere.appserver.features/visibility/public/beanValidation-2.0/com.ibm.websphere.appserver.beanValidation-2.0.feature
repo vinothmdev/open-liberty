@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.beanValidation-2.0
+WLP-DisableAllFeatures-OnConflict: false
 visibility=public
 singleton=true
 IBM-ShortName: beanValidation-2.0
@@ -19,8 +20,8 @@ IBM-API-Package: \
 -features=\
   com.ibm.websphere.appserver.beanValidationCore-1.0, \
   com.ibm.websphere.appserver.el-3.0, \
-  com.ibm.websphere.appserver.internal.optional.jaxb-2.2,\
-  com.ibm.websphere.appserver.javaeeCompatible-8.0,\
+  com.ibm.websphere.appserver.internal.optional.jaxb-2.2; ibm.tolerates:=2.3, \
+  com.ibm.websphere.appserver.eeCompatible-8.0,\
   com.ibm.websphere.appserver.javax.cdi-2.0, \
   com.ibm.websphere.appserver.javax.interceptor-1.2, \
   com.ibm.websphere.appserver.javax.validation-2.0, \
@@ -32,3 +33,4 @@ IBM-API-Package: \
   com.ibm.ws.com.fasterxml.classmate
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015, 2016 IBM Corporation and others.
+ * Copyright (c) 2015, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,7 +13,9 @@ package com.ibm.ws.cdi.liberty;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -39,6 +41,7 @@ import com.ibm.ws.cdi.CDIException;
 import com.ibm.ws.cdi.CDIService;
 import com.ibm.ws.cdi.extension.WebSphereCDIExtension;
 import com.ibm.ws.cdi.impl.AbstractCDIRuntime;
+import com.ibm.ws.cdi.impl.CDIContainerImpl;
 import com.ibm.ws.cdi.internal.archive.liberty.CDILibertyRuntime;
 import com.ibm.ws.cdi.internal.archive.liberty.RuntimeFactory;
 import com.ibm.ws.cdi.internal.interfaces.Application;
@@ -69,10 +72,12 @@ import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.ConcurrentServiceReferenceSet;
 import com.ibm.wsspi.kernel.service.utils.ServiceAndServiceReferencePair;
 
+import io.openliberty.cdi.spi.CDIExtensionMetadata;
+
 /**
  * This class is to get hold all necessary services.
  */
-@Component(name = "com.ibm.ws.cdi.liberty.CDIRuntimeImpl", service = { ApplicationStateListener.class, CDIService.class }, property = { "service.vendor=IBM" })
+@Component(name = "com.ibm.ws.cdi.liberty.CDIRuntimeImpl", service = { ApplicationStateListener.class, CDIService.class, CDIProvider.class }, property = { "service.vendor=IBM" })
 public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationStateListener, CDIService, CDILibertyRuntime, CDIProvider {
     private static final TraceComponent tc = Tr.register(CDIRuntimeImpl.class);
 
@@ -88,6 +93,9 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
 
     /** Reference for all portal extensions **/
     private final ConcurrentServiceReferenceSet<WebSphereCDIExtension> extensionsSR = new ConcurrentServiceReferenceSet<WebSphereCDIExtension>("extensionService");
+
+    /** Reference for extensions added via SPI **/
+    private final ConcurrentServiceReferenceSet<CDIExtensionMetadata> spiExtensionsSR = new ConcurrentServiceReferenceSet<CDIExtensionMetadata>("spiExtensionService");
 
     private final AtomicServiceReference<ArtifactContainerFactory> containerFactorySRRef = new AtomicServiceReference<ArtifactContainerFactory>("containerFactory");
     private final AtomicServiceReference<AdaptableModuleFactory> adaptableModuleFactorySRRef = new AtomicServiceReference<AdaptableModuleFactory>("adaptableModuleFactory");
@@ -105,6 +113,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
     private boolean isClientProcess;
     private RuntimeFactory runtimeFactory;
     private ProxyServicesImpl proxyServices;
+    private final Map<String, ClassLoader> appTccls = new ConcurrentHashMap<>();
 
     public void activate(ComponentContext cc) {
         containerConfigRef.activate(cc);
@@ -112,6 +121,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
         ejbEndpointServiceSR.activate(cc);
         classLoadingSRRef.activate(cc);
         extensionsSR.activate(cc);
+        spiExtensionsSR.activate(cc);
         applicationSlot = metaDataSlotServiceSR.getServiceWithException().reserveMetaDataSlot(ApplicationMetaData.class);
         ejbServices.activate(cc);
         securityServices.activate(cc);
@@ -143,6 +153,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
         securityServices.deactivate(cc);
         transactionService.deactivate(cc);
         extensionsSR.deactivate(cc);
+        spiExtensionsSR.deactivate(cc);
         containerFactorySRRef.deactivate(cc);
         scheduledExecutorServiceRef.deactivate(cc);
         executorServiceRef.deactivate(cc);
@@ -163,7 +174,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
         containerConfigRef.unsetReference(ref);
     }
 
-    @Reference(name = "cdiDeferredMetaDataFactoryImpl", service = DeferredMetaDataFactory.class, target = "(deferredMetaData=CDI)") 
+    @Reference(name = "cdiDeferredMetaDataFactoryImpl", service = DeferredMetaDataFactory.class, target = "(deferredMetaData=CDI)")
     protected void setCDIDeferredMetaDataFactoryImpl(ServiceReference<DeferredMetaDataFactory> ref) {
         deferredMetaDataFactoryRef.setReference(ref);
     }
@@ -171,7 +182,6 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
     protected void unsetCDIDeferredMetaDataFactoryImpl(ServiceReference<DeferredMetaDataFactory> ref) {
         deferredMetaDataFactoryRef.unsetReference(ref);
     }
-
 
     @Reference(name = "executorService", service = ExecutorService.class)
     protected void setExecutorService(ServiceReference<ExecutorService> ref) {
@@ -182,7 +192,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
         executorServiceRef.unsetReference(ref);
     }
 
-    @Reference(name = "managedExecutorService", service = ExecutorService.class, target="(id=DefaultManagedExecutorService)", policyOption = ReferencePolicyOption.GREEDY, cardinality = ReferenceCardinality.OPTIONAL)
+    @Reference(name = "managedExecutorService", service = ExecutorService.class, target = "(id=DefaultManagedExecutorService)", policyOption = ReferencePolicyOption.GREEDY, cardinality = ReferenceCardinality.OPTIONAL)
     protected void setManagedExecutorService(ServiceReference<ExecutorService> ref) {
         managedExecutorServiceRef.setReference(ref);
     }
@@ -225,6 +235,25 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
 
     protected void unsetExtensionService(ServiceReference<WebSphereCDIExtension> reference) {
         extensionsSR.removeReference(reference);
+        //the cdi container has a cache of ExtensionArchives ... remove this extension from that cache
+        CDIContainerImpl cdiContainer = getCDIContainer();
+        if (cdiContainer != null) {
+            cdiContainer.removeRuntimeExtensionArchive(reference);
+        }
+    }
+
+    @Reference(name = "spiExtensionService", service = CDIExtensionMetadata.class, policy = ReferencePolicy.DYNAMIC, cardinality = ReferenceCardinality.MULTIPLE)
+    protected void setSPIExtensionService(ServiceReference<CDIExtensionMetadata> reference) {
+        spiExtensionsSR.addReference(reference);
+    }
+
+    protected void unsetSPIExtensionService(ServiceReference<CDIExtensionMetadata> reference) {
+        spiExtensionsSR.removeReference(reference);
+        //the cdi container has a cache of ExtensionArchives ... remove this extension from that cache
+        CDIContainerImpl cdiContainer = getCDIContainer();
+        if (cdiContainer != null) {
+            cdiContainer.removeRuntimeExtensionArchiveMetaData(reference);
+        }
     }
 
     @Reference(name = "transactionService", service = TransactionService.class)
@@ -342,6 +371,11 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
     }
 
     @Override
+    public Iterator<ServiceAndServiceReferencePair<CDIExtensionMetadata>> getSPIExtensionServices() {
+        return spiExtensionsSR.getServicesWithReferences();
+    }
+
+    @Override
     public ArtifactContainerFactory getArtifactContainerFactory() {
         return containerFactorySRRef.getService();
     }
@@ -373,7 +407,7 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
 
     @Override
     public ExecutorService getExecutorService() {
-        ExecutorService managedExecutorService = managedExecutorServiceRef.getService(); 
+        ExecutorService managedExecutorService = managedExecutorServiceRef.getService();
         if (managedExecutorService != null) {
             return managedExecutorService;
         } else {
@@ -411,21 +445,28 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
 
         try {
             Application application = this.runtimeFactory.newApplication(appInfo);
-            newCL = getRealAppClassLoader(application);
+            /* if there is no app classes info then the app manager is not in control of this app */
+            if (!application.hasModules()) {
+                this.runtimeFactory.removeApplication(appInfo);
+                return;
+            }
 
-            if (newCL != null) {
+            ClassLoader appCL = getRealAppClassLoader(application);
+            if (appCL != null) {
+                newCL = classLoadingSRRef.getServiceWithException().createThreadContextClassLoader(appCL);
+                appTccls.put(appInfo.getName(), newCL);
                 oldCl = CDIUtils.getAndSetLoader(newCL);
             }
 
             //Because weld fires observes in all modules when endInitialization() is called
             //We can only set the jndi context once. This is sufficent for the java:app namespace
-            //but not for the java module namespace. 
-            	
-            //Origonally I tried to setup JNDI so only application metadata was on the thread but
-            //that didn't work so I use give classic utils one of the module archives.  
+            //but not for the java module namespace.
 
-            if (application.getModuleArchives().size() > 0 && 
-                    application.getApplicationMetaData() != null) {
+            //Origonally I tried to setup JNDI so only application metadata was on the thread but
+            //that didn't work so I use give classic utils one of the module archives.
+
+            if (application.getModuleArchives().size() > 0 &&
+                application.getApplicationMetaData() != null) {
                 CDIArchive archive = application.getModuleArchives().iterator().next();
                 beginContext(archive);
                 setContext = true;
@@ -436,8 +477,8 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
             }
 
             WebSphereCDIDeployment webSphereCDIDeployment = getCDIContainer().startInitialization(application);
-            if (webSphereCDIDeployment != null) { 
-                getCDIContainer().endInitialization(webSphereCDIDeployment);//This split is just to keep the CDIContainerImpl code conistant across liberty & websphere. 
+            if (webSphereCDIDeployment != null) {
+                getCDIContainer().endInitialization(webSphereCDIDeployment);//This split is just to keep the CDIContainerImpl code conistant across liberty & websphere.
             }
         } catch (CDIException e) {
             throw new StateChangeException(e);
@@ -459,11 +500,15 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
     @Override
     public void applicationStopped(ApplicationInfo appInfo) {
         Application application = this.runtimeFactory.removeApplication(appInfo);
+        /* ignore apps not controlled by the app manager */
+        if (application == null) {
+            return;
+        }
         try {
             getCDIContainer().applicationStopped(application);
         } catch (CDIException e) {
             //FFDC and carry on
-        } finally { 
+        } finally {
             try {
                 for (CDIArchive archive : application.getModuleArchives()) {
                     DeferredMetaDataFactory metaDataFactory = deferredMetaDataFactoryRef.getService();
@@ -472,6 +517,14 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
                 }
             } catch (CDIException e) {
                 //FFDC and carry on
+            } finally {
+                // Clean up the application TCCL created for startup
+                // Must do this at shutdown since it's possible for the app to hold onto it and use it after startup
+                ClassLoader tccl = appTccls.get(appInfo.getName());
+                if (tccl != null) {
+                    classLoadingSRRef.getServiceWithException().destroyThreadContextClassLoader(tccl);
+                    appTccls.remove(appInfo.getName());
+                }
             }
         }
     }
@@ -504,9 +557,11 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
                                                          Set<String> extraClasses,
                                                          Set<String> extraAnnotations,
                                                          boolean applicationBDAsVisible,
-                                                         boolean extClassesOnly) throws CDIException {
+                                                         boolean extClassesOnly,
+                                                         Set<String> spiExtensionClasses) throws CDIException {
 
-        ExtensionArchive extensionArchive = runtimeFactory.getExtensionArchiveForBundle(bundle, extraClasses, extraAnnotations, applicationBDAsVisible, extClassesOnly);
+        ExtensionArchive extensionArchive = runtimeFactory.getExtensionArchiveForBundle(bundle, extraClasses, extraAnnotations, applicationBDAsVisible, extClassesOnly,
+                                                                                        spiExtensionClasses);
 
         return extensionArchive;
     }
@@ -555,9 +610,9 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
 
         //To ensure even delayed async calls can find this, this gets cleaned up in ApplicationStopped, not endContext().
         //However which factory is uesd is controlled by ComponentMetaDataAccessorImpl, if a JndiHelperComponentMetaData
-        //is on the thread CDIDeferredMetaDataFactoryImpl will be used, otherwise something else will. 
+        //is on the thread CDIDeferredMetaDataFactoryImpl will be used, otherwise something else will.
         //So leaving the data inside CDIDeferredMetaDataFactoryImpl is just a precaution encase a very long lived thread
-        //holds onto a JndiHelperComponentMetaData beyond application startup. 
+        //holds onto a JndiHelperComponentMetaData beyond application startup.
         cdiMetaDataFactory.registerComponentMetaData(archive, cmd);
     }
 
@@ -584,6 +639,16 @@ public class CDIRuntimeImpl extends AbstractCDIRuntime implements ApplicationSta
         } catch (CDIException e) {
             return null;
         }
+    }
+
+    @Override
+    public boolean isWeldProxy(Class clazz) {
+        return CDIUtils.isWeldProxy(clazz);
+    }
+
+    @Override
+    public boolean isWeldProxy(Object obj) {
+        return CDIUtils.isWeldProxy(obj);
     }
 
 }

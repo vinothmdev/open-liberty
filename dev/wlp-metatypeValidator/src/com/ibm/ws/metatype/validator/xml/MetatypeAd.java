@@ -1,14 +1,13 @@
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2013,2014 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * WLP Copyright IBM Corp. 2013, 2014
- *
- * The source code for this program is not published or otherwise divested
- * of its trade secrets, irrespective of what has been deposited with the
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.metatype.validator.xml;
 
 import java.util.Arrays;
@@ -112,6 +111,8 @@ public class MetatypeAd extends MetatypeBase {
     private final List<MetatypeAdOption> options = new LinkedList<MetatypeAdOption>();
     @XmlAttribute(name = "beta", namespace = IBM_NAMESPACE)
     private boolean beta;
+    @XmlAttribute(name = "obscure", namespace = IBM_NAMESPACE)
+    private boolean obscure;
 
     private MetatypeOcd parent;
     boolean isTypeValid = false;
@@ -184,6 +185,7 @@ public class MetatypeAd extends MetatypeBase {
         validateIbmCopyOf();
         validateIbmRename();
         validateRequiresTF();
+        validateFinal();
         if (validateRefs) {
             validateIbmReference();
             validateIbmService();
@@ -218,6 +220,17 @@ public class MetatypeAd extends MetatypeBase {
             option.setParentAd(this);
             option.validate(validateRefs);
             setValidityState(option.getValidityState());
+        }
+    }
+
+    private void validateFinal() {
+        if (ibmFinal != null) {
+            String trimmed = ibmFinal.trim();
+
+            if (Boolean.valueOf(trimmed)) {
+                if (defaultValue == null)
+                    logMsgWithContext(MessageType.Error, "ibm:final", "default.value.missing");
+            }
         }
     }
 

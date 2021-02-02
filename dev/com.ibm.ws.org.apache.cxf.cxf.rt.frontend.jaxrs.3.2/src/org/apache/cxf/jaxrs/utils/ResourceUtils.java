@@ -20,6 +20,7 @@
 package org.apache.cxf.jaxrs.utils;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.annotation.Annotation;
@@ -70,16 +71,12 @@ import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.ext.MessageBodyWriter;
 import javax.ws.rs.ext.Provider;
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBElement;
-import javax.xml.bind.JAXBException;
 import javax.xml.namespace.QName;
 
 import org.apache.cxf.Bus;
 import org.apache.cxf.BusFactory;
 import org.apache.cxf.common.classloader.ClassLoaderUtils;
 import org.apache.cxf.common.i18n.BundleUtils;
-import org.apache.cxf.common.jaxb.JAXBUtils;
 import org.apache.cxf.common.logging.LogUtils;
 import org.apache.cxf.common.util.ReflectionUtil;
 import org.apache.cxf.common.util.StringUtils;
@@ -303,7 +300,21 @@ public final class ResourceUtils {
                                                             boolean root,
                                                             boolean enableStatic,
                                                             Bus bus) {
-        ClassResourceInfo cri = new ClassResourceInfo(rClass, sClass, root, enableStatic, bus);
+        return createClassResourceInfo(rClass, sClass, parent, root, enableStatic, bus, null, null);
+    }
+
+     //CHECKSTYLE:OFF
+    public static ClassResourceInfo createClassResourceInfo(final Class<?> rClass,
+                                                            final Class<?> sClass,
+                                                            ClassResourceInfo parent,
+                                                            boolean root,
+                                                            boolean enableStatic,
+                                                            Bus bus,
+                                                            List<MediaType> defaultConsumes,
+                                                            List<MediaType> defaultProduces) {
+    //CHECKSTYLE:ON
+        ClassResourceInfo cri = new ClassResourceInfo(rClass, sClass, root, enableStatic, bus,
+                                                      defaultConsumes, defaultProduces);
         cri.setParent(parent);
 
         if (root) {
@@ -399,7 +410,7 @@ public final class ResourceUtils {
     }
 
     public static Constructor<?> findResourceConstructor(Class<?> resourceClass, boolean perRequest) {
-        List<Constructor<?>> cs = new LinkedList<Constructor<?>>();
+        List<Constructor<?>> cs = new LinkedList<>();
         for (Constructor<?> c : resourceClass.getConstructors()) {
             // Liberty change start
             Annotation[] anna = c.getDeclaredAnnotations();
@@ -602,12 +613,12 @@ public final class ResourceUtils {
         return null;
     }
 
-    public static InputStream getResourceStream(String loc, Bus bus) throws Exception {
+    public static InputStream getResourceStream(String loc, Bus bus) throws IOException {
         URL url = getResourceURL(loc, bus);
         return url == null ? null : url.openStream();
     }
 
-    public static URL getResourceURL(final String loc, final Bus bus) throws Exception {
+    public static URL getResourceURL(final String loc, final Bus bus) throws IOException {
         URL url = null;
         if (loc.startsWith(CLASSPATH_PREFIX)) {
             String path = loc.substring(CLASSPATH_PREFIX.length());
@@ -635,7 +646,8 @@ public final class ResourceUtils {
                     }
                 });
             } catch (PrivilegedActionException pae) {
-                throw pae.getException();
+                Throwable t = pae.getException();
+                throw t instanceof IOException ? (IOException) t : new IOException(t);
             }
 
         }
@@ -665,7 +677,7 @@ public final class ResourceUtils {
         return null;
     }
 
-    public static Properties loadProperties(String propertiesLocation, Bus bus) throws Exception {
+    public static Properties loadProperties(String propertiesLocation, Bus bus) throws IOException {
         Properties props = new Properties();
         InputStream is = getResourceStream(propertiesLocation, bus);
         props.load(is);
@@ -722,6 +734,13 @@ public final class ResourceUtils {
                                                ResourceTypes types,
                                                boolean jaxbOnly,
                                                MessageBodyWriter<?> jaxbWriter) {
+        Class<?> jaxbElement = null;
+        try {
+            jaxbElement = ClassLoaderUtils.loadClass("javax.xml.bind.JAXBElement", ResourceUtils.class);
+        } catch (final ClassNotFoundException e) {
+            // no-op
+        }
+
         for (OperationResourceInfo ori : resource.getMethodDispatcher().getOperationResourceInfos()) {
             Method method = ori.getAnnotatedMethod() == null ? ori.getMethodToInvoke() : ori.getAnnotatedMethod();
             Class<?> realReturnType = method.getReturnType();
@@ -732,7 +751,7 @@ public final class ResourceUtils {
             Type type = method.getGenericReturnType();
             if (jaxbOnly) {
                 checkJaxbType(resource.getServiceClass(), cls, realReturnType == Response.class || ori.isAsync()
-                    ? cls : type, types, method.getAnnotations(), jaxbWriter);
+                    ? cls : type, types, method.getAnnotations(), jaxbWriter, jaxbElement);
             } else {
                 types.getAllTypes().put(cls, type);
             }
@@ -744,7 +763,7 @@ public final class ResourceUtils {
                         Type paramType = method.getGenericParameterTypes()[pm.getIndex()];
                         if (jaxbOnly) {
                             checkJaxbType(resource.getServiceClass(), inType, paramType, types,
-                                          method.getParameterAnnotations()[pm.getIndex()], jaxbWriter);
+                                          method.getParameterAnnotations()[pm.getIndex()], jaxbWriter, jaxbElement);
                         } else {
                             types.getAllTypes().put(inType, paramType);
                         }
@@ -776,7 +795,8 @@ public final class ResourceUtils {
                                       Type genericType,
                                       ResourceTypes types,
                                       Annotation[] anns,
-                                      MessageBodyWriter<?> jaxbWriter) {
+                                      MessageBodyWriter<?> jaxbWriter,
+                                      Class<?> jaxbElement) {
         boolean isCollection = false;
         if (InjectionUtils.isSupportedCollectionOrArray(type)) {
             type = InjectionUtils.getActualType(genericType);
@@ -791,7 +811,7 @@ public final class ResourceUtils {
         }
         if (type == null
             || InjectionUtils.isPrimitive(type)
-            || JAXBElement.class.isAssignableFrom(type)
+            || (jaxbElement != null && jaxbElement.isAssignableFrom(type))
             || Response.class.isAssignableFrom(type)
             || type.isInterface()) {
             return;
@@ -799,7 +819,7 @@ public final class ResourceUtils {
 
         MessageBodyWriter<?> writer = jaxbWriter;
         if (writer == null) {
-            JAXBElementProvider<Object> defaultWriter = new JAXBElementProvider<Object>();
+            JAXBElementProvider<Object> defaultWriter = new JAXBElementProvider<>();
             defaultWriter.setMarshallAsJaxbElement(true);
             defaultWriter.setXmlTypeAsJaxbElementOnly(true);
             writer = defaultWriter;
@@ -934,7 +954,7 @@ public final class ResourceUtils {
         Set<Object> singletons = app.getSingletons();
         verifySingletons(singletons);
 
-        List<Class<?>> resourceClasses = new ArrayList<Class<?>>();
+        List<Class<?>> resourceClasses = new ArrayList<>();
         List<Object> providers = new ArrayList<>();
         List<Feature> features = new ArrayList<>();
         Map<Class<?>, ResourceProvider> map = new HashMap<>();
@@ -989,7 +1009,7 @@ public final class ResourceUtils {
         bean.setStaticSubresourceResolution(staticSubresourceResolution);
         bean.setResourceClasses(resourceClasses);
         bean.setProviders(providers);
-        bean.setFeatures(features);
+        bean.getFeatures().addAll(features);
         for (Map.Entry<Class<?>, ResourceProvider> entry : map.entrySet()) {
             bean.setResourceProvider(entry.getKey(), entry.getValue());
         }
@@ -1085,24 +1105,4 @@ public final class ResourceUtils {
         }
         return true;
     }
-
-    //TODO : consider moving JAXBDataBinding.createContext to JAXBUtils
-    public static JAXBContext createJaxbContext(Set<Class<?>> classes, Class<?>[] extraClass,
-                                                Map<String, Object> contextProperties) {
-        if (classes == null || classes.isEmpty()) {
-            return null;
-        }
-        JAXBUtils.scanPackages(classes, extraClass, null);
-
-        JAXBContext ctx;
-        try {
-            ctx = JAXBContext.newInstance(classes.toArray(new Class[0]),
-                                          contextProperties);
-            return ctx;
-        } catch (JAXBException ex) {
-            LOG.log(Level.SEVERE, "No JAXB context can be created", ex);
-        }
-        return null;
-    }
-
 }

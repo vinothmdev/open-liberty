@@ -23,15 +23,11 @@ import org.junit.runners.Suite.SuiteClasses;
                 ProductExtensionsTest.class,
                 BadConfigTests.class,
                 MergedConfigTests.class,
-                VariableMergeTests.class,
-                MetatypeProviderTest.class,
                 WSConfigurationHelperTest.class,
-                SchemaGeneratorMBeanTest.class,
+                //SchemaGeneratorMBeanTest.class,
                 FeaturelistGeneratorMBeanTest.class,
                 ServerXMLConfigurationMBeanTest.class,
                 DropinsTest.class,
-                DelayedVariableTests.class,
-                CommandLineVarTests.class
 
 })
 public class FATSuite {

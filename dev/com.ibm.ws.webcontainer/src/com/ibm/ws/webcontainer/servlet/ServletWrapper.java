@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2008 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -39,7 +39,9 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import com.ibm.ejs.j2c.HandleList;
 import com.ibm.ejs.ras.TraceNLS;
+import com.ibm.websphere.csi.CSIException;
 import com.ibm.websphere.servlet.error.ServletErrorReport;
 import com.ibm.websphere.servlet.event.ServletErrorEvent;
 import com.ibm.websphere.servlet.event.ServletEvent;
@@ -196,8 +198,8 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
         collabHelper = context.getCollaboratorHelper();
         webAppNameSpaceCollab = collabHelper.getWebAppNameSpaceCollaborator();
         txCollab = collabHelper.getWebAppTransactionCollaborator();
-        connCollab = collabHelper.getWebAppConnectionCollaborator();
         platformHelper = WebContainer.getWebContainer().getPlatformHelper();
+        connCollab = collabHelper.getWebAppConnectionCollaborator();
     }
 
     public void setParent(IServletContext parent) {
@@ -224,12 +226,10 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
         
         Object secObject;
         TxCollaboratorConfig txConfig;
-        // IConnectionCollaboratorHelper connCollabHelper=
-        // collabHelper.createConnectionCollaboratorHelper();
         
         //These preInvokes are nested inside other collaborator preInvokes when you are
         //not an init-on-startup servlet. This may or may not be bad, but this is how we have always done it.
-// ALEX TODO        HandleList _connectionHandleList = new HandleList();  // Seems to just be a cookie across pre/postInvoke
+        HandleList _connectionHandleList = connCollab == null ? null : new HandleList();  // Seems to just be a cookie across pre/postInvoke
         try {
             webAppNameSpaceCollab.preInvoke(cmd);
             // 246216
@@ -244,7 +244,8 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
             // end LIDB549.21
             txConfig = txCollab.preInvoke(null, servlet23);
 
-//            connCollab.preInvoke(_connectionHandleList, true);
+            if (connCollab != null)
+                connCollab.preInvoke(_connectionHandleList, true);
         } catch (SecurityViolationException wse) {
             com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(wse, "com.ibm.ws.webcontainer.servlet.ServletWrapper.init", "227", this);
             logger.logp(Level.SEVERE, CLASS_NAME, "init", "uncaught.init.exception.thrown.by.servlet", new Object[] { getServletName(),
@@ -372,14 +373,15 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
 
                 ThreadContextHelper.setClassLoader(fOrigClassLoader);
             }
-/*            try {
-                connCollab.postInvoke(_connectionHandleList, true);
-            } catch (CSIException e) {
-                // It is already added to cache..do we need to throw the
-                // exception back
-                com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, "com.ibm.ws.webcontainer.webapp.WebAppServletManager.addServlet",
+            if (connCollab != null)
+                try {
+                    connCollab.postInvoke(_connectionHandleList, true);
+                } catch (CSIException e) {
+                    // It is already added to cache..do we need to throw the
+                    // exception back
+                    com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, "com.ibm.ws.webcontainer.servlet.WebAppServletManager.init",
                         "260", this);
-            }*/
+                }
             try {
                 txCollab.postInvoke(null, txConfig, servlet23);
             } catch (Exception e) {
@@ -990,9 +992,7 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
 
             Object secObject = null;
             TxCollaboratorConfig txConfig = null;
-            // IConnectionCollaboratorHelper connCollabHelper=
-            // collabHelper.createConnectionCollaboratorHelper();
-//            HandleList _connectionHandleList = new HandleList();
+            HandleList _connectionHandleList = connCollab == null ? null : new HandleList();
             try {
                 webAppNameSpaceCollab.preInvoke(cmd);
                 // 246216
@@ -1007,7 +1007,8 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
                 // end LIDB549.21
                 txConfig = txCollab.preInvoke(null, servlet23);
 
-//                connCollab.preInvoke(_connectionHandleList, true);
+                if (connCollab != null)
+                    connCollab.preInvoke(_connectionHandleList, true);
                 deregisterMBean();
 
                 ClassLoader origClassLoader = null;
@@ -1081,14 +1082,15 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
                 evtSource.onServletDestroyError(new ServletErrorEvent(this, getServletContext(), getServletName(), servletConfig.getClassName(), e));
                 context.log("Error occurred while destroying servlet", e);
             } finally {
-/*                try {
-                    connCollab.postInvoke(_connectionHandleList, true);
-                } catch (CSIException e) {
-                    // It is already added to cache..do we need to throw the
-                    // exception back
-                    com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, "com.ibm.ws.webcontainer.servlet.ServletWrapper.doDestroy",
+                if (connCollab != null)
+                    try {
+                        connCollab.postInvoke(_connectionHandleList, true);
+                    } catch (CSIException e) {
+                        // It is already added to cache..do we need to throw the
+                        // exception back
+                        com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, "com.ibm.ws.webcontainer.servlet.ServletWrapper.doDestroy",
                             "260", this);
-                }*/
+                    }
                 try {
                     txCollab.postInvoke(null, txConfig, servlet23);
                 } catch (Exception e) {
@@ -2041,16 +2043,18 @@ public abstract class ServletWrapper extends GenericServlet implements RequestPr
         if (servletConfig != null) {
             if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
                 logger.logp(Level.FINE, CLASS_NAME, "isDefaultServlet", " : mappings:" + servletConfig.getMappings());
-            ;
+            
             for (String curMapping:servletConfig.getMappings()){
-                if (curMapping.equals("/"))
-                    return true;
+                if (curMapping.equals("/")) {
+                    result = true;
+                    break;
+                }
             }
         }
         if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() & logger.isLoggable(Level.FINE))
             logger.logp(Level.FINE, CLASS_NAME, "isDefaultServlet", " result=" + result);
 
-        return false;
+        return result;
     }
 
     // PK80340 End

@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.optional.corba-1.5
+WLP-DisableAllFeatures-OnConflict: false
 visibility=private
 IBM-App-ForceRestart: uninstall, install
 IBM-Process-Types: client, server
@@ -64,3 +65,4 @@ IBM-API-Package: \
   com.ibm.ws.org.apache.yoko.osgi.1.5; require-java:="9"
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

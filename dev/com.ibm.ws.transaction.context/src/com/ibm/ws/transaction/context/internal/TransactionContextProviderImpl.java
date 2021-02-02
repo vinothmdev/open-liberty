@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2013 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -22,6 +22,8 @@ import javax.enterprise.concurrent.ManagedTask;
 import org.osgi.framework.ServiceReference;
 import org.osgi.service.component.ComponentContext;
 
+import com.ibm.ws.Transaction.UOWCurrent;
+import com.ibm.ws.tx.embeddable.EmbeddableWebSphereTransactionManager;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.threadcontext.ThreadContext;
 import com.ibm.wsspi.threadcontext.ThreadContextDeserializationInfo;
@@ -33,14 +35,26 @@ import com.ibm.wsspi.threadcontext.jca.JCAContextProvider;
  * Transaction context service provider.
  */
 public class TransactionContextProviderImpl implements JCAContextProvider, ThreadContextProvider {
+    // Constant for ManagedTask.TRANSACTION in whichever of Jakarta vs Java EE is NOT enabled
+    private static final String OTHER_SPEC_TRANSACTION_CONSTANT;
+    static {
+        int dot = ManagedTask.TRANSACTION.indexOf('.');
+        OTHER_SPEC_TRANSACTION_CONSTANT = new StringBuilder(46 - dot) //
+                        .append(dot == 5 ? "jakarta" : "javax") //
+                        .append(".enterprise.concurrent.TRANSACTION") //
+                        .toString();
+    }
+
     /**
      * Reference to the transaction inflow manager.
      */
     final AtomicServiceReference<Object> transactionInflowManagerRef = new AtomicServiceReference<Object>("transactionInflowManager");
 
+    private EmbeddableWebSphereTransactionManager transactionManager;
+
     /**
      * Called during service activation.
-     * 
+     *
      * @param context
      */
     protected void activate(ComponentContext context) {
@@ -49,7 +63,7 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
 
     /**
      * Called during service deactivation.
-     * 
+     *
      * @param context
      */
     protected void deactivate(ComponentContext context) {
@@ -59,13 +73,30 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
     /** {@inheritDoc} */
     @Override
     public ThreadContext captureThreadContext(Map<String, String> execProps, Map<String, ?> threadContextConfig) {
-        String value = execProps == null ? null : execProps.get(ManagedTask.TRANSACTION);
+        // Determine the value of the ManagedTask.TRANSACTION execution property, if present
+        String key, value;
+        if (execProps == null) {
+            key = null;
+            value = null;
+        } else { // prefer the enabled spec
+            value = execProps.get(key = ManagedTask.TRANSACTION);
+            if (value == null)
+                value = execProps.get(key = OTHER_SPEC_TRANSACTION_CONSTANT);
+        }
         if (value == null || ManagedTask.SUSPEND.equals(value))
             return new TransactionContextImpl(true);
         else if (ManagedTask.USE_TRANSACTION_OF_EXECUTION_THREAD.equals(value))
             return new TransactionContextImpl(false);
-        else
-            throw new IllegalArgumentException(ManagedTask.TRANSACTION + '=' + value);
+        else if ("PROPAGATE".equals(value)) {
+            UOWCurrent uowCurrent = (UOWCurrent) transactionManager;
+            if (uowCurrent.getUOWType() == UOWCurrent.UOW_GLOBAL) {
+                // Per spec, IllegalStateException could be raised here to reject all propagation of transactions
+                // However, we allow propagation as long as the transaction isn't used in parallel.
+                return new SerialTransactionContextImpl();
+            } else
+                return new TransactionContextImpl(true);
+        } else
+            throw new IllegalArgumentException(key + '=' + value);
     }
 
     /** {@inheritDoc} */
@@ -82,13 +113,23 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
         try {
             context = (TransactionContextImpl) in.readObject();
 
-            String value = info == null ? null : info.getExecutionProperty(ManagedTask.TRANSACTION);
+            // Determine the value of the ManagedTask.TRANSACTION execution property, if present
+            String key, value;
+            if (info == null) {
+                key = null;
+                value = null;
+            } else { // prefer the enabled spec
+                value = info.getExecutionProperty(key = ManagedTask.TRANSACTION);
+                if (value == null)
+                    value = info.getExecutionProperty(key = OTHER_SPEC_TRANSACTION_CONSTANT);
+            }
+
             if (value == null || ManagedTask.SUSPEND.equals(value))
                 context.suspendTranOfExecutionThread = true;
             else if (ManagedTask.USE_TRANSACTION_OF_EXECUTION_THREAD.equals(value))
                 context.suspendTranOfExecutionThread = false;
             else
-                throw new IllegalArgumentException(ManagedTask.TRANSACTION + '=' + value);
+                throw new IllegalArgumentException(key + '=' + value);
         } finally {
             in.close();
         }
@@ -100,9 +141,9 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
     public ThreadContext getInflowContext(Object workContext, Map<String, String> execProps) {
         // Construct TransactionInflowContext reflectively because it requires packages that are only be available when JCA is used
         try {
-            return (ThreadContext) getClass().getClassLoader()
-                            .loadClass("com.ibm.ws.transaction.context.internal.TransactionInflowContext")
-                            .getConstructor(Object.class, Object.class, String.class)
+            return (ThreadContext) getClass().getClassLoader() //
+                            .loadClass("com.ibm.ws.transaction.context.internal.TransactionInflowContext") //
+                            .getConstructor(Object.class, Object.class, String.class) //
                             .newInstance(transactionInflowManagerRef.getServiceWithException(), workContext, execProps.get(WSContextService.TASK_OWNER));
         } catch (Throwable x) {
             if (x instanceof InvocationTargetException)
@@ -126,7 +167,7 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
 
     /**
      * Declarative Services method for setting the TransactionInflowManager service
-     * 
+     *
      * @param ref reference to the service
      */
     protected void setTransactionInflowManager(ServiceReference<Object> ref) {
@@ -134,11 +175,25 @@ public class TransactionContextProviderImpl implements JCAContextProvider, Threa
     }
 
     /**
+     * Declarative Services method to set the transaction manager.
+     */
+    protected void setTransactionManager(EmbeddableWebSphereTransactionManager tm) {
+        transactionManager = tm;
+    }
+
+    /**
      * Declarative Services method for unsetting the TransactionInflowManager service
-     * 
+     *
      * @param ref reference to the service
      */
     protected void unsetTransactionInflowManager(ServiceReference<Object> ref) {
         transactionInflowManagerRef.unsetReference(ref);
+    }
+
+    /**
+     * Declarative Services method to unset the transaction manager.
+     */
+    protected void unsetTransactionManager(EmbeddableWebSphereTransactionManager tm) {
+        transactionManager = null;
     }
 }

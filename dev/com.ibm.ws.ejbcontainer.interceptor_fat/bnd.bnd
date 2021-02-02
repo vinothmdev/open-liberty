@@ -19,8 +19,6 @@ src: \
 	test-applications/AroundTimeoutXmlEJB.jar/src,\
 	test-applications/AroundTimeoutWeb.war/src
 
-javac.source: 1.8
-javac.target: 1.8
 
 fat.project: true
 
@@ -28,6 +26,7 @@ tested.features: \
 	servlet-4.0, ejbPersistentTimer-3.2, mdb-3.2
 
 -buildpath: \
+	com.ibm.websphere.javaee.annotation.1.1;version=latest,\
 	com.ibm.websphere.javaee.ejb.3.1;version=latest,\
 	com.ibm.websphere.javaee.interceptor.1.2;version=latest,\
 	com.ibm.websphere.javaee.jms.1.1;version=latest,\

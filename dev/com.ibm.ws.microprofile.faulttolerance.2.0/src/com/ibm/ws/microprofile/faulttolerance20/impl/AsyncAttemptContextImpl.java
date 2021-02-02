@@ -10,6 +10,8 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.faulttolerance20.impl;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import com.ibm.ws.microprofile.faulttolerance20.state.TimeoutState;
 
 /**
@@ -21,6 +23,8 @@ public class AsyncAttemptContextImpl<W> {
 
     private final AsyncExecutionContextImpl<W> executionContext;
     private TimeoutState timeoutState;
+    private boolean circuitBreakerPermittedExecution = false;
+    private final AtomicBoolean complete = new AtomicBoolean(false);
 
     public AsyncAttemptContextImpl(AsyncExecutionContextImpl<W> executionContext) {
         this.executionContext = executionContext;
@@ -36,5 +40,26 @@ public class AsyncAttemptContextImpl<W> {
 
     public void setTimeoutState(TimeoutState timeoutState) {
         this.timeoutState = timeoutState;
+    }
+
+    public boolean getCircuitBreakerPermittedExecution() {
+        return circuitBreakerPermittedExecution;
+    }
+
+    public void setCircuitBreakerPermittedExecution(boolean circuitBreakerPermittedExecution) {
+        this.circuitBreakerPermittedExecution = circuitBreakerPermittedExecution;
+    }
+
+    /**
+     * Mark that the attempt has ended
+     * <p>
+     * This method exists to ensure that any end-of-attempt logic is run exactly once.
+     * <p>
+     * The first time this method is called, it will return {@code true}, all subsequent calls will return false
+     *
+     * @return {@code true} if {@code end()} had not been called previously, {@code false} otherwise
+     */
+    public boolean end() {
+        return complete.compareAndSet(false, true);
     }
 }

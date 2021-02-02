@@ -16,6 +16,7 @@ Bundle-Name: common support (JSR109) for WebServices
 Bundle-Description: common support (JSR109) for WebServices, version ${bVersion}
 
 -dsannotations: com.ibm.ws.webservices.javaee.common.internal.WebservicesXMLEndpointInfoConfigurator
+-nouses: true
 
 Private-Package: \
  com.ibm.ws.webservices.javaee.common.internal, \
@@ -23,16 +24,13 @@ Private-Package: \
 
 Import-Package: \
  javax.xml.ws.*;version="[2.2,3)", \
+ com.ibm.ws.jaxws.* ;version="[2.0,3)", \
  *
 
 instrument.classesExcludes: com/ibm/ws/webservices/javaee/common/internal/resources/*.class
 
--buildpath.bootclasspath: \
-	com.ibm.websphere.javaee.jaxb.2.2;version=latest;boot=true,\
-	com.ibm.websphere.javaee.jaxws.2.2;version=latest;boot=true,\
-	${javac.bootclasspath.${javac.source}}
-
 -buildpath: \
+	com.ibm.websphere.javaee.jaxws.2.2;version=latest,\
 	com.ibm.websphere.appserver.spi.anno;version=latest,\
 	com.ibm.websphere.appserver.spi.logging;version=latest,\
 	com.ibm.wsspi.org.osgi.service.component.annotations;version=latest,\
@@ -42,3 +40,5 @@ instrument.classesExcludes: com/ibm/ws/webservices/javaee/common/internal/resour
 	com.ibm.ws.javaee.ddmodel.ws;version=latest,\
 	com.ibm.ws.jaxws.common;version=latest,\
 	com.ibm.ws.org.osgi.annotation.versioning;version=latest
+
+jakartaeeMe: true

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2007 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -22,20 +22,20 @@ import java.util.ArrayList;
  * interface. A single instance of this object is passed to the RLS during initial
  * service registration.
  * </p>
- * 
+ *
  * <p>
  * The RLS will invoke this object asynchronously (by calling
  * <code>RecoveryAgent.initiateRecovery</code>) to direct the client service to
  * handle units of recovery identified by Failure Scope.
  * </p>
- * 
+ *
  * <p>
  * The client service responds to these requests by performing recovery
  * processing through interaction with the RLS. Once this is done, the client
  * service invokes the <code>RecoveryDirector.recoveryComplete</code> method to
  * inform the RLS that the recovery processing is complete.
  * </p>
- * 
+ *
  * <p>
  * By calling recoveryComplete, the client service tells the RLS that it has
  * finished any processing for a given failure scope that has to be performed
@@ -44,10 +44,10 @@ import java.util.ArrayList;
  * recoveryAgent returns from the initiateRecovery() method. The RecoveryAgent
  * is free to perform additional recovery work after this point asynchronously.
  * </p>
- * 
+ *
  * <p>
  * The two likely models are:-
- * 
+ *
  * <ul>
  * <li>1. <code>RecoveryAgent.initiateRecovery</code> directs recovery of the
  * failure scope, and calls <code>RecoveryDirector.recoveryComplete</code>
@@ -64,19 +64,12 @@ import java.util.ArrayList;
  * </ul>
  * </p>
  */
-public interface RecoveryAgent
-{
-    //------------------------------------------------------------------------------
-    // Method: RecoveryAgent.prepareForRecovery
-    //------------------------------------------------------------------------------
-    /**
-     * Directs the client service to get ready to process recovery for the given
-     * FailureScope. The client service uses the RecoveryLogManager instance it
-     * obtained when it registered to 'getRecoveryLog' the corresponding recovery
-     * 
-     * @param failureScope The failure scope for which recovery may be about to start.
-     */
-    void prepareForRecovery(FailureScope failureScope);
+public interface RecoveryAgent {
+    boolean checkingLeases();
+
+    void setCheckingLeases(boolean b);
+
+    void terminateServer();
 
     //------------------------------------------------------------------------------
     // Method: RecoveryAgent.initiateRecovery
@@ -87,11 +80,12 @@ public interface RecoveryAgent
      * obtained when it registered to open the corresponding recovery logs and
      * perform any recovery processing it deems necessary. When this is complete
      * the client service should invoke RecoveryDirector.recoveryComplete()
-     * 
+     *
      * @param failureScope The failure scope for which recovery is starting
-     * 
+     *
      * @exception RecoveryFailedException Thrown by the client service if it is
-     *                unable to complete recovery processing
+     *                                        unable to complete recovery processing
+     * @throws LogPropertiesNotReadyException
      */
     void initiateRecovery(FailureScope failureScope) throws RecoveryFailedException;
 
@@ -101,11 +95,11 @@ public interface RecoveryAgent
     /**
      * Directs the client service to halt any recovery processing for the given
      * FailureScope.
-     * 
+     *
      * @param failureScope The failure scope for which recovery is terminating
-     * 
+     *
      * @exception TerminationFailedException Thrown by the client service if it is
-     *                unable to terminate recovery processing
+     *                                           unable to terminate recovery processing
      */
     void terminateRecovery(FailureScope failureScope) throws TerminationFailedException;
 
@@ -115,7 +109,7 @@ public interface RecoveryAgent
     /**
      * Returns the unique "Recovery Log Client Identifier" (RLCI). RLCI values are
      * owned by the RLS and stored inside com.ibm.ws.recoverylog.spi.ClientId
-     * 
+     *
      * @return int The client identifier.
      */
     int clientIdentifier();
@@ -126,7 +120,7 @@ public interface RecoveryAgent
     /**
      * Returns the unique "Recovery Log Client Name" (RLCN). RLCN values are
      * owned by the RLS and stored inside com.ibm.ws.recoverylog.spi.ClientId
-     * 
+     *
      * @return String The client name.
      */
     String clientName();
@@ -141,23 +135,10 @@ public interface RecoveryAgent
      * intended to addess changes to the nature of the information written by client
      * services rather than the format of the log itself. Clients should start at '1'
      * and only change this value if their recovery log content changes.
-     * 
+     *
      * @return int The client version number.
      */
     int clientVersion();
-
-    //------------------------------------------------------------------------------
-    // Method: RecoveryAgent.logDirectories
-    //------------------------------------------------------------------------------
-    /**
-     * Returns an array of strings such that each string is a fully qualified log
-     * directory that the client indends to use for logging.
-     * 
-     * @param failureScope The target failure scope
-     * 
-     * @return String[] The log directory set.
-     */
-    String[] logDirectories(FailureScope failureScope);
 
     //------------------------------------------------------------------------------
     // Method: RecoveryAgent.agentReportedFailure()
@@ -165,10 +146,10 @@ public interface RecoveryAgent
     /**
      * Informs the recovery agent that another recovery agent (identified by the client
      * id) has been upable to handle recovery processing for the given failure scope.
-     * 
-     * @param int The client id of the failing recovery agent.
+     *
+     * @param int          The client id of the failing recovery agent.
      * @param failureScope The target failure scope.
-     * 
+     *
      * @return String[] The log directory set.
      */
     void agentReportedFailure(int clientId, FailureScope failureScope);
@@ -182,26 +163,12 @@ public interface RecoveryAgent
      * has the WCCM basis to make this chocie for itself. If any client returns TRUE
      * then file locking will be DISABLED, however currently only the transaction service
      * recovery agent is actually checked.
-     * 
+     *
      * by default, file locking is ENABLED.
-     * 
+     *
      * @return boolean
      */
     boolean disableFileLocking();
-
-    /**
-     * Returns a flag to indicate if the client wants RLS to prepare the recovery logs
-     * for a system snapshot in a safe fashion - i.e. the data in the recovery log files
-     * provide a consistent state in the event of disaster recovery.
-     * 
-     * To make the RLS snapshot safe will have a impact on recovery log (and therefore it's
-     * client services, such as Transaction).
-     * 
-     * By default, isSnapshotSafe is FALSE.
-     * 
-     * @return boolean
-     */
-    boolean isSnapshotSafe();
 
     //------------------------------------------------------------------------------
     // Method: RecoveryAgent.logFileWarning()
@@ -209,9 +176,9 @@ public interface RecoveryAgent
     /**
      * Notify RecoveryAgent of logfile space running out.
      * Called when the log file first crosses the 75% full threshold.
-     * 
-     * @param logname The name provided by the client service on the FileLogProperties
-     *            used to create this logfile
+     *
+     * @param logname    The name provided by the client service on the FileLogProperties
+     *                       used to create this logfile
      * @param bytesInUse The space required for current log data
      * @param bytesTotal The total space available for data
      */
@@ -227,4 +194,32 @@ public interface RecoveryAgent
     ArrayList<String> processLeasesForPeers(String recoveryIdentity, String recoveryGroup);
 
     public boolean claimPeerLeaseForRecovery(String recoveryIdentityToRecover, String myRecoveryIdentity, LeaseInfo leaseInfo) throws Exception;
+
+    /**
+     * Returns a flag to indicate if the HADB peer server locking
+     * scheme is enabled.
+     *
+     * by default, HADB locking is DISABLED.
+     *
+     * @return boolean
+     */
+    public boolean isDBTXLogPeerLocking();
+
+    /**
+     * Retrieve reference to a Recovery Log that is stored in an
+     * RDBMS and supports heartbeating.
+     */
+    public HeartbeatLog getHeartbeatLog(FailureScope fs);
+
+    /**
+     * Allows the setting of a thread local to signify that replay/recovery is occurring on this thread
+     */
+    public void setReplayThread();
+
+    /**
+     * Queries whether a thread local has been set to signify that replay/recovery is occurring on this thread
+     *
+     * @return boolean
+     */
+    public boolean isReplayThread();
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -77,6 +77,7 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.adaptable.module.structure.StructureHelper;
 import com.ibm.ws.app.manager.module.DeployedAppInfo;
+import com.ibm.ws.app.manager.module.DeployedAppServices;
 import com.ibm.ws.app.manager.module.internal.DeployedAppInfoBase;
 import com.ibm.ws.app.manager.module.internal.ExtendedModuleInfoImpl;
 import com.ibm.ws.app.manager.module.internal.ModuleClassLoaderFactory;
@@ -124,23 +125,24 @@ import com.ibm.wsspi.kernel.service.utils.FrameworkState;
 
 public class SpringBootApplicationImpl extends DeployedAppInfoBase implements SpringBootConfigFactory, SpringBootApplication {
     private static final TraceComponent tc = Tr.register(SpringBootApplicationImpl.class);
-    final CountDownLatch applicationReadyLatch = new CountDownLatch(1);
+    final CountDownLatch applicationReadyLatch = new CountDownLatch(2);
 
     final class SpringModuleContainerInfo extends ModuleContainerInfoBase {
         public SpringModuleContainerInfo(List<Container> springBootSupport, ModuleHandler moduleHandler, List<ModuleMetaDataExtender> moduleMetaDataExtenders,
                                          List<NestedModuleMetaDataFactory> nestedModuleMetaDataFactories,
                                          Container moduleContainer, Entry altDDEntry,
-                                         String moduleURI, ModuleClassesInfoProvider moduleClassesInfo,
+                                         String moduleURI,
+                                         ModuleClassLoaderFactory moduleClassLoaderFactory,
+                                         ModuleClassesInfoProvider moduleClassesInfo,
                                          List<ContainerInfo> containerInfos) throws UnableToAdaptException {
-            super(moduleHandler, moduleMetaDataExtenders, nestedModuleMetaDataFactories, moduleContainer, altDDEntry, moduleURI, ContainerInfo.Type.WEB_MODULE, moduleClassesInfo, WebApp.class);
+            super(moduleHandler, moduleMetaDataExtenders, nestedModuleMetaDataFactories, moduleContainer, altDDEntry, moduleURI, ContainerInfo.Type.WEB_MODULE, moduleClassLoaderFactory, moduleClassesInfo, WebApp.class);
             this.classesContainerInfo.addAll(containerInfos);
         }
 
         @Override
-        public ExtendedModuleInfoImpl createModuleInfoImpl(ApplicationInfo appInfo,
-                                                           ModuleClassLoaderFactory moduleClassLoaderFactory) throws MetaDataException {
+        public ExtendedModuleInfoImpl createModuleInfoImpl(ApplicationInfo appInfo, ModuleClassLoaderFactory classLoaderFactory) throws MetaDataException {
             try {
-                SpringBootModuleInfo springModuleInfo = new SpringBootModuleInfo(appInfo, moduleName, name, container, altDDEntry, classesContainerInfo, moduleClassLoaderFactory, getSpringBootApplication());
+                SpringBootModuleInfo springModuleInfo = new SpringBootModuleInfo(appInfo, moduleName, name, container, altDDEntry, classesContainerInfo, classLoaderFactory, getSpringBootApplication());
                 return springModuleInfo;
             } catch (UnableToAdaptException e) {
                 FFDCFilter.processException(e, getClass().getName(), "createModuleInfo", this);
@@ -274,9 +276,16 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
             if (instance == null) {
                 throw new IllegalStateException("No Config instance set.");
             }
+
             checkExistingConfig(config);
-            if (!config.getVirtualHosts().isEmpty()) {
-                // only install a virtual host config if we are not using the default-host
+
+            if (config.getVirtualHosts().isEmpty()) {
+                if (!instance.isEndpointConfigured()) {
+                    //use app configured port with default_host
+                    virtualHostConfig.updateAndGet((b) -> installVirtualHostBundle(b, config));
+                }
+            } else {
+                //use app configured port with custom virtual host
                 virtualHostConfig.updateAndGet((b) -> installVirtualHostBundle(b, config));
             }
             instance.start();
@@ -344,21 +353,20 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
         }
 
         private void checkExistingConfig(ServerConfiguration libertyConfig) {
-            List<VirtualHost> hosts = libertyConfig.getVirtualHosts();
-            if (hosts.isEmpty()) {
-                return;
-            }
-            String requestedPort = hosts.get(0).getId().substring(ID_VIRTUAL_HOST.length());
+            String requestedPort = libertyConfig.getHttpEndpoints().get(0).getId().substring(ID_HTTP_ENDPOINT.length());
 
             // Checks ConfigurationAdmin to see if the ID for the following
             // exist.  This is done in priority order because if a higher
             // priority configuration is found then we remove all the lower
             // priority elements as well as the element with the matching ID
             // 1. <virtualHost/> - highest priority
-            if (checkVirtualHost(libertyConfig, requestedPort)) {
-                // found matching ID for <virtualHost/> return because we cleared out the rest
-                return;
+            if (!libertyConfig.getVirtualHosts().isEmpty()) {
+                if (checkVirtualHost(libertyConfig, requestedPort)) {
+                    // found matching ID for <virtualHost/> return because we cleared out the rest
+                    return;
+                }
             }
+
             // 2. <httpEndpoint/> - second priority
             if (checkHttpEndpoint(libertyConfig, requestedPort)) {
                 // found matching ID for <httpEndpoint/> return because we cleared out the other
@@ -377,27 +385,27 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
 
         private boolean checkVirtualHost(ServerConfiguration sc, String requestedPort) {
             String virtualHostFilter = createFilter("com.ibm.ws.http.virtualhost", ID_VIRTUAL_HOST + requestedPort);
-            return checkConfigElement(sc, virtualHostFilter, sc.getVirtualHosts(), sc.getHttpEndpoints(), sc.getSsls(), sc.getKeyStores());
+            return checkConfigElement(virtualHostFilter, sc.getVirtualHosts(), sc.getHttpEndpoints(), sc.getSsls(), sc.getKeyStores());
         }
 
         private boolean checkHttpEndpoint(ServerConfiguration sc, String requestedPort) {
             String endpointFilter = createFilter("com.ibm.ws.http", ID_HTTP_ENDPOINT + requestedPort);
-            return checkConfigElement(sc, endpointFilter, sc.getHttpEndpoints(), sc.getSsls(), sc.getKeyStores());
+            return checkConfigElement(endpointFilter, sc.getHttpEndpoints(), sc.getSsls(), sc.getKeyStores());
         }
 
         private boolean checkSsl(ServerConfiguration sc, String requestedPort) {
             String sslFilter = createFilter("com.ibm.ws.ssl.repertoire", ID_SSL + requestedPort);
-            return checkConfigElement(sc, sslFilter, sc.getSsls(), sc.getKeyStores());
+            return checkConfigElement(sslFilter, sc.getSsls(), sc.getKeyStores());
         }
 
-        private boolean checkConfigElement(ServerConfiguration libertyConfig, String filter, List<? extends ConfigElement> toCheck,
+        private boolean checkConfigElement(String filter, List<? extends ConfigElement> toCheck,
                                            @SuppressWarnings("rawtypes") List... lowerPriority) {
             boolean result = false;
             try {
                 if (toCheck.isEmpty()) {
                     return result = true;
                 }
-                Configuration[] existing = factory.getConfigurationAdmin().listConfigurations(filter);
+                Configuration[] existing = deployedAppServices.getConfigurationAdmin().listConfigurations(filter);
                 return result = existing != null && existing.length > 0;
             } catch (IOException | InvalidSyntaxException e) {
                 // Auto FFDC here, this will happen because of a defect
@@ -443,7 +451,7 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
         private boolean checkKeyStore(KeyStore keyStore) {
             try {
                 String filter = createFilter("com.ibm.ws.ssl.keystore", keyStore.getId());
-                Configuration[] existing = factory.getConfigurationAdmin().listConfigurations(filter);
+                Configuration[] existing = deployedAppServices.getConfigurationAdmin().listConfigurations(filter);
                 return existing != null && existing.length > 0;
             } catch (IOException | InvalidSyntaxException e) {
                 // Auto FFDC here, this will happen because of a defect
@@ -490,6 +498,7 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
     private final ArtifactContainer rawContainer;
     private final SpringBootManifest springBootManifest;
     private final SpringBootApplicationFactory factory;
+    private final DeployedAppServices deployedAppServices;
     private final Throwable initError;
     private final SpringModuleContainerInfo springContainerModuleInfo;
     private final AtomicReference<ServiceRegistration<SpringBootConfigFactory>> springBootConfigReg = new AtomicReference<>();
@@ -500,10 +509,13 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
     private final List<String> appArgs;
     private volatile AtomicReference<String> applicationActivated;
 
-    public SpringBootApplicationImpl(ApplicationInformation<DeployedAppInfo> applicationInformation, SpringBootApplicationFactory factory, int id) throws UnableToAdaptException {
-        super(applicationInformation, factory);
+    public SpringBootApplicationImpl(ApplicationInformation<DeployedAppInfo> applicationInformation,
+                                     SpringBootApplicationFactory factory,
+                                     DeployedAppServices deployedAppServices, int id) throws UnableToAdaptException {
+        super(applicationInformation, deployedAppServices);
         this.id = id;
         this.factory = factory;
+        this.deployedAppServices = deployedAppServices;
         this.applicationInformation = applicationInformation;
         SpringBootManifest manifest = null;
         ArtifactContainer newContainer = null;
@@ -512,11 +524,11 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
         Throwable error = null;
 
         try {
-            newContainer = storeLibs(applicationInformation, getRawContainer(applicationInformation), manifest, factory);
+            newContainer = storeLibs(applicationInformation, getRawContainer(applicationInformation), manifest, factory, deployedAppServices);
             manifest = getSpringBootManifest(applicationInformation);
             infos = getContainerInfos(applicationInformation.getContainer(), factory, manifest);
             String moduleURI = ModuleInfoUtils.getModuleURIFromLocation(applicationInformation.getLocation());
-            mci = new SpringModuleContainerInfo(factory.getSpringBootSupport(), factory.getModuleHandler(), factory.getModuleMetaDataExtenders().get("web"), factory.getNestedModuleMetaDataFactories().get("web"), applicationInformation.getContainer(), null, moduleURI, moduleClassesInfo, infos);
+            mci = new SpringModuleContainerInfo(factory.getSpringBootSupport(), factory.getModuleHandler(), deployedAppServices.getModuleMetaDataExtenders("web"), deployedAppServices.getNestedModuleMetaDataFactories("web"), applicationInformation.getContainer(), null, moduleURI, this, moduleClassesInfo, infos);
             moduleContainerInfos.add(mci);
         } catch (UnableToAdaptException e) {
             error = e;
@@ -573,7 +585,8 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
 
     private static ArtifactContainer storeLibs(ApplicationInformation<DeployedAppInfo> applicationInformation, ArtifactContainer rawContainer,
                                                SpringBootManifest springBootManifest,
-                                               SpringBootApplicationFactory factory) {
+                                               SpringBootApplicationFactory factory,
+                                               DeployedAppServices deployedAppServices) {
         String location = applicationInformation.getLocation();
         if (location.toLowerCase().endsWith(".xml")) {
             // don't do this for loose applications
@@ -595,10 +608,10 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
         }
 
         // Make sure the spring thin apps directory is available
-        WsResource thinAppsDir = factory.getLocationAdmin().resolveResource(SPRING_THIN_APPS_DIR);
+        WsResource thinAppsDir = deployedAppServices.getLocationAdmin().resolveResource(SPRING_THIN_APPS_DIR);
         thinAppsDir.create();
 
-        WsResource thinSpringAppResource = factory.getLocationAdmin().resolveResource(SPRING_THIN_APPS_DIR + applicationInformation.getName() + "." + SPRING_APP_TYPE);
+        WsResource thinSpringAppResource = deployedAppServices.getLocationAdmin().resolveResource(SPRING_THIN_APPS_DIR + applicationInformation.getName() + "." + SPRING_APP_TYPE);
         File thinSpringAppFile = thinSpringAppResource.asFile();
         try {
             if (thinSpringAppFile.exists()) {
@@ -611,8 +624,8 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
             }
 
             // Set up the new container pointing to the thin spring app file
-            ArtifactContainer artifactContainer = setupArtifactContainer(thinSpringAppFile, factory);
-            container = setupContainer(applicationInformation.getPid(), artifactContainer, factory);
+            ArtifactContainer artifactContainer = setupArtifactContainer(thinSpringAppFile, factory, deployedAppServices);
+            container = setupContainer(applicationInformation.getPid(), artifactContainer, factory, deployedAppServices);
             applicationInformation.setContainer(container);
             return artifactContainer;
         } catch (NoSuchAlgorithmException | IOException e) {
@@ -622,24 +635,33 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
         return rawContainer;
     }
 
+    private static final Object thinUtilLock = new Object() {
+    };
+
     private static void thinSpringApp(LibIndexCache libIndexCache, File springAppFile, File thinSpringAppFile, long lastModified) throws IOException, NoSuchAlgorithmException {
         File parent = libIndexCache.getLibIndexParent();
         File workarea = libIndexCache.getLibIndexWorkarea();
         try (SpringBootThinUtil springBootThinUtil = new SpringBootThinUtil(springAppFile, thinSpringAppFile, workarea, parent)) {
-            springBootThinUtil.execute();
+            // to avoid any collisions while thinning we only allow a single thread to
+            // execute the thin utility
+            synchronized (thinUtilLock) {
+                springBootThinUtil.execute();
+            }
         }
         thinSpringAppFile.setLastModified(lastModified);
     }
 
-    private static ArtifactContainer setupArtifactContainer(File f, SpringBootApplicationFactory factory) throws IOException {
+    private static ArtifactContainer setupArtifactContainer(File f, SpringBootApplicationFactory factory,
+                                                            DeployedAppServices deployedAppServices) throws IOException {
         File cacheDir = factory.getDataDir("cache");
-        return factory.getArtifactFactory().getContainer(cacheDir, f);
+        return deployedAppServices.getArtifactFactory().getContainer(cacheDir, f);
     }
 
-    private static Container setupContainer(String pid, ArtifactContainer artifactContainer, SpringBootApplicationFactory factory) throws IOException {
+    private static Container setupContainer(String pid, ArtifactContainer artifactContainer, SpringBootApplicationFactory factory,
+                                            DeployedAppServices deployedAppServices) throws IOException {
         File cacheAdapt = factory.getDataDir("cacheAdapt");
         File cacheOverlay = factory.getDataDir("cacheOverlay");
-        return factory.getModuleFactory().getContainer(cacheAdapt, cacheOverlay, artifactContainer);
+        return deployedAppServices.getModuleFactory().getContainer(cacheAdapt, cacheOverlay, artifactContainer);
     }
 
     Throwable getError() {
@@ -656,7 +678,7 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
 
     @Override
     public Container createContainerFor(String id) throws IOException, UnableToAdaptException {
-        Container container = setupContainer(applicationInformation.getPid(), rawContainer, factory);
+        Container container = setupContainer(applicationInformation.getPid(), rawContainer, factory, deployedAppServices);
         AddEntryToOverlay virtualHostBnd = container.adapt(AddEntryToOverlay.class);
 
         // Add both XML and XMI here incase an old web.xml file is used;
@@ -678,7 +700,7 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
 
     @Override
     public ExtendedApplicationInfo createApplicationInfo(String id, Container appContainer) {
-        ExtendedApplicationInfo appInfo = appInfoFactory.createApplicationInfo(getName() + "." + id,
+        ExtendedApplicationInfo appInfo = appInfoFactory.createApplicationInfo(getName(),
                                                                                springContainerModuleInfo.moduleName + "." + id,
                                                                                appContainer,
                                                                                null,
@@ -948,7 +970,7 @@ public class SpringBootApplicationImpl extends DeployedAppInfoBase implements Sp
      */
     @Override
     public File getServerDir() {
-        return factory.getLocationAdmin().resolveResource(WsLocationConstants.SYMBOL_SERVER_CONFIG_DIR).asFile();
+        return deployedAppServices.getLocationAdmin().resolveResource(WsLocationConstants.SYMBOL_SERVER_CONFIG_DIR).asFile();
     }
 
     void setApplicationActivated(AtomicReference<String> applicationActivated) {

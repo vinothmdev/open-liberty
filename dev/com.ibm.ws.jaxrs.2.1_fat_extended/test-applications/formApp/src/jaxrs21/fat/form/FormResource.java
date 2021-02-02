@@ -13,16 +13,21 @@ package jaxrs21.fat.form;
 
 import java.util.logging.Logger;
 
+import javax.enterprise.context.ApplicationScoped;
 import javax.ws.rs.ApplicationPath;
+import javax.ws.rs.Consumes;
 import javax.ws.rs.FormParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
+import javax.ws.rs.Produces;
 import javax.ws.rs.core.Application;
 import javax.ws.rs.core.Form;
+import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 @ApplicationPath("/")
 @Path("/form")
+@ApplicationScoped
 public class FormResource extends Application {
     private static final Logger LOG = Logger.getLogger(FormResource.class.getName());
 
@@ -36,5 +41,17 @@ public class FormResource extends Application {
                         .header("FromForm", fromForm)
                         .build();
       }
+
+    @POST
+    @Path("/crlf")
+    @Consumes(MediaType.TEXT_PLAIN + "; charset=utf-8")
+    @Produces(MediaType.TEXT_PLAIN + "; charset=utf-8")
+    public Response testCRLFsArePreserved(String body) {
+        LOG.info("body: " + body);
+        if (body.indexOf('\n') < 0) {
+            return Response.status(575).build();
+        }
+        return Response.ok().build();
+    }
 }
 

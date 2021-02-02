@@ -18,17 +18,18 @@ import org.junit.runners.Suite.SuiteClasses;
 import com.ibm.ws.jaxrs20.client.fat.test.BasicClientTest;
 import com.ibm.ws.jaxrs20.client.fat.test.ClientContextInjectionTest;
 import com.ibm.ws.jaxrs20.client.fat.test.ComplexClientTest;
+import com.ibm.ws.jaxrs20.client.fat.test.HandleResponsesTest;
 import com.ibm.ws.jaxrs20.client.fat.test.IBMJson4JProvidersTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRS20ClientAsyncInvokerTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRS20ClientInvocationTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRS20ClientSyncInvokerTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRS20WithClientFeatureEnabledTest;
+import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClient100ContinueTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientCallbackTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientLtpaTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLDefaultTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLFiltersTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLProxyAuthTest;
-import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLTest;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLTestNoLibertySSLCfg;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientSSLTestNoLibertySSLFeature;
 import com.ibm.ws.jaxrs20.client.fat.test.JAXRSClientStandaloneTest;
@@ -41,15 +42,17 @@ import com.ibm.ws.jaxrs20.client.fat.test.TimeoutClientTest;
 
 import componenttest.custom.junit.runner.AlwaysPassesTest;
 import componenttest.rules.repeater.FeatureReplacementAction;
+import componenttest.rules.repeater.JakartaEE9Action;
 import componenttest.rules.repeater.RepeatTests;
 
 @RunWith(Suite.class)
 @SuiteClasses({
                 AlwaysPassesTest.class,
                 BasicClientTest.class,
+                HandleResponsesTest.class,
                 JAXRSClientStandaloneTest.class,
                 JAXRS20WithClientFeatureEnabledTest.class,
-                JAXRSClientSSLTest.class,
+                //JAXRSClientSSLTest.class,
                 JAXRSClientSSLDefaultTest.class,
                 JAXRSClientSSLFiltersTest.class,
                 JAXRSClientSSLTestNoLibertySSLCfg.class,
@@ -68,10 +71,12 @@ import componenttest.rules.repeater.RepeatTests;
                 JAXRSClientLtpaTest.class,
                 JAXRSClientCallbackTest.class,
                 ClientContextInjectionTest.class,
-                JAXRSClientSSLProxyAuthTest.class
+                JAXRSClientSSLProxyAuthTest.class,
+                JAXRSClient100ContinueTest.class
 })
 public class FATSuite {
     @ClassRule
     public static RepeatTests r = RepeatTests.withoutModification()
-                    .andWith(FeatureReplacementAction.EE8_FEATURES().withID("JAXRS-2.1"));
+    .andWith(FeatureReplacementAction.EE8_FEATURES().withID("JAXRS-2.1"))
+    .andWith(new JakartaEE9Action().alwaysAddFeature("jsonb-2.0"));
 }

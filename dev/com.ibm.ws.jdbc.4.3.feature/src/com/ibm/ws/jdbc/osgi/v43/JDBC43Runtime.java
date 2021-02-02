@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018,2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,6 +10,9 @@
  *******************************************************************************/
 package com.ibm.ws.jdbc.osgi.v43;
 
+import java.security.AccessController;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 import java.sql.BatchUpdateException;
 import java.sql.CallableStatement;
 import java.sql.Connection;
@@ -21,12 +24,8 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.ShardingKey;
 import java.sql.Statement;
-import java.text.MessageFormat;
-import java.util.Locale;
-import java.util.ResourceBundle;
 import java.util.concurrent.Executor;
 
-import javax.resource.spi.ConnectionManager;
 import javax.sql.ConnectionPoolDataSource;
 import javax.sql.DataSource;
 import javax.sql.PooledConnection;
@@ -36,15 +35,11 @@ import javax.sql.XAConnectionBuilder;
 import javax.sql.XADataSource;
 
 import org.osgi.framework.Version;
-import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 
-import com.ibm.websphere.ras.Tr;
-import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.jca.adapter.WSConnectionManager;
 import com.ibm.ws.jdbc.osgi.JDBCRuntimeVersion;
-import com.ibm.ws.kernel.feature.FeatureProvisioner;
-import com.ibm.ws.kernel.service.util.JavaInfo;
 import com.ibm.ws.rsadapter.impl.StatementCacheKey;
 import com.ibm.ws.rsadapter.impl.WSConnectionRequestInfoImpl;
 import com.ibm.ws.rsadapter.impl.WSManagedConnectionFactoryImpl;
@@ -69,22 +64,6 @@ import com.ibm.ws.rsadapter.jdbc.v43.WSJdbc43Statement;
 @Component(property = { "version=4.3", "service.ranking:Integer=43" })
 public class JDBC43Runtime implements JDBCRuntimeVersion {
 
-    private static final TraceComponent tc = Tr.register(JDBC43Runtime.class);
-
-    @Activate
-    protected void activate() {
-        // TODO: This is a temporary workaround for making the jdbc-4.3 feature require a minimum java level of Java 11
-        if (JavaInfo.majorVersion() < 11) {
-            ResourceBundle kernelResourceBundle = ResourceBundle.getBundle("com.ibm.ws.kernel.feature.internal.resources.ProvisionerMessages",
-                                                                           Locale.getDefault(),
-                                                                           FeatureProvisioner.class.getClassLoader());
-            String message = kernelResourceBundle.getString("FEATURE_JAVA_LEVEL_NOT_MET_ERROR");
-            message = MessageFormat.format(message, "jdbc-4.3", "JavaSE 11");
-            Tr.error(tc, message);
-            throw new IllegalStateException(message);
-        }
-    }
-
     @Override
     public Version getVersion() {
         return VERSION_4_3;
@@ -102,7 +81,7 @@ public class JDBC43Runtime implements JDBCRuntimeVersion {
     }
 
     @Override
-    public WSJdbcDataSource newDataSource(WSManagedConnectionFactoryImpl mcf, ConnectionManager connMgr) {
+    public WSJdbcDataSource newDataSource(WSManagedConnectionFactoryImpl mcf, WSConnectionManager connMgr) {
         return new WSJdbc43DataSource(mcf, connMgr);
     }
 
@@ -166,9 +145,17 @@ public class JDBC43Runtime implements JDBCRuntimeVersion {
     }
 
     @Override
-    public void doAbort(Connection sqlConn, Executor ex) throws SQLException {
+    public void doAbort(final Connection sqlConn, final Executor ex) throws SQLException {
         try {
-            sqlConn.abort(ex);
+            AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
+                @Override
+                public Void run() throws SQLException {
+                    sqlConn.abort(ex);
+                    return null;
+                }
+            });
+        } catch (PrivilegedActionException x) {
+            throw (SQLException) x.getCause();
         } catch (IncompatibleClassChangeError e) { // pre-4.1 driver
             throw new SQLFeatureNotSupportedException(e);
         }

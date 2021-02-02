@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2017 IBM Corporation and others.
+# Copyright (c) 2017, 2020 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -133,8 +133,8 @@ JWT_NOT_FOUND_IN_REQUEST=CWWKS5522E: The MicroProfile JWT feature cannot perform
 JWT_NOT_FOUND_IN_REQUEST.explanation=To perform authentication, a MicroProfile JWT must be included in either the Authorization header using the Bearer authorization scheme or as a POST parameter. The Authorization header is missing, the authorization scheme of the Authorization header is not set to Bearer, the request is not a POST request, or a MicroProfile JWT is not included as a parameter.
 JWT_NOT_FOUND_IN_REQUEST.useraction=Ensure that a MicroProfile JWT is included in the Authorization header or as a POST parameter of the request.
 
-# 0=Exception message
-ERROR_CREATING_JWT_USING_TOKEN_IN_REQ=CWWKS5523E: The MicroProfile JWT feature cannot authenticate the request because a valid JWT cannot be created from the token included in the request. {0}
+# 0=Exception message                       
+ERROR_CREATING_JWT_USING_TOKEN_IN_REQ=CWWKS5523E: The MicroProfile JWT feature cannot authenticate the request because the token that is included in the request cannot be validated. {0}
 ERROR_CREATING_JWT_USING_TOKEN_IN_REQ.explanation=The MicroProfile JWT feature encountered an error while creating a JWT from the provided token string. Either a JWT consumer cannot be created or the JWT consumer encountered an error while parsing and validating the token string.
 ERROR_CREATING_JWT_USING_TOKEN_IN_REQ.useraction=See the user action for the error that is displayed in the message. Check the server logs for any additional error messages.
 
@@ -150,3 +150,13 @@ MP_JWT_FRONT_END_ERROR.useraction=Contact the system administrator to resolve th
 MPJWT_NOT_FOUND_IN_APPLICATION=CWWKS5526W: The MicroProfile JWT feature cannot perform authentication because it is expecting [{0}] authentication type in the application, but found [{1}]. The [{2}] attribute is set to [{3}]. 
 MPJWT_NOT_FOUND_IN_APPLICATION.explanation=To perform authentication successfully, do one of the following. a) Make sure that the ignoreApplicationAuthMethod attribute is "true" b) loginConfig annotation is set to MP-JWT in the application.
 MPJWT_NOT_FOUND_IN_APPLICATION.useraction=Ensure that the server or application configuration is updated.
+
+# do not translate HttpServletRequest.logout
+JWT_PREVIOUSLY_LOGGED_OUT=CWWKS5527E: The MicroProfile JWT feature cannot perform authentication because the JWT in the request was previously logged out.
+JWT_PREVIOUSLY_LOGGED_OUT.explanation=A previous HttpServletRequest.logout() call was made for a subject that was authenticated with this JWT.  
+JWT_PREVIOUSLY_LOGGED_OUT.useraction=Resubmit the request with a different JWT.
+
+# 0=MP Config property value, 1=MP Config property name (e.g. "mp.jwt.token.header"), 2=List of supported values for the property, 3=Default value that will be used
+MP_CONFIG_VALUE_NOT_SUPPORTED=CWWKS5528W: The [{0}] {1} MicroProfile Config value is not supported. The only supported values are {2}. The {3} value is used by default.
+MP_CONFIG_VALUE_NOT_SUPPORTED.explanation=The MicroProfile Config property that is specified in the message has a predefined set of values that are supported. Other values are ignored, and the default value is used instead.
+MP_CONFIG_VALUE_NOT_SUPPORTED.useraction=Specify one of the supported values for the property that is indicated in the message.

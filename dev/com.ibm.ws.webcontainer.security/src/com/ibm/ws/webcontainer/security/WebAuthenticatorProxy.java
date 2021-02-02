@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2016 IBM Corporation and others.
+ * Copyright (c) 2012, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,11 +12,13 @@ package com.ibm.ws.webcontainer.security;
 
 import java.util.HashMap;
 
+import javax.security.auth.Subject;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.security.audit.AuditEvent;
 import com.ibm.ws.security.SecurityService;
 import com.ibm.ws.security.audit.Audit;
 import com.ibm.ws.security.audit.utils.AuditConstants;
@@ -31,6 +33,7 @@ import com.ibm.ws.webcontainer.security.internal.SRTServletRequestUtils;
 import com.ibm.ws.webcontainer.security.internal.WebReply;
 import com.ibm.ws.webcontainer.security.metadata.LoginConfiguration;
 import com.ibm.ws.webcontainer.security.metadata.SecurityMetadata;
+import com.ibm.ws.webcontainer.security.openidconnect.OidcServer;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 
 /**
@@ -39,6 +42,7 @@ import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 public class WebAuthenticatorProxy implements WebAuthenticator {
 
     private static final TraceComponent tc = Tr.register(WebAuthenticatorProxy.class);
+    public AtomicServiceReference<OidcServer> oidcServerRef = null;
     private static final String AUTH_TYPE = "AUTH_TYPE";
     protected final AtomicServiceReference<SecurityService> securityServiceRef;
     protected volatile WebAppSecurityConfig webAppSecurityConfig;
@@ -49,11 +53,13 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
     public WebAuthenticatorProxy(WebAppSecurityConfig webAppSecurityConfig,
                                  PostParameterHelper postParameterHelper,
                                  AtomicServiceReference<SecurityService> securityServiceRef,
-                                 WebProviderAuthenticatorProxy providerAuthenticatorProxy) {
+                                 WebProviderAuthenticatorProxy providerAuthenticatorProxy,
+                                 AtomicServiceReference<OidcServer> oidcServerRef) {
         this.webAppSecurityConfig = webAppSecurityConfig;
         this.postParameterHelper = postParameterHelper;
         this.securityServiceRef = securityServiceRef;
         this.providerAuthenticatorProxy = providerAuthenticatorProxy;
+        this.oidcServerRef = oidcServerRef;
     }
 
     /** {@inheritDoc} */
@@ -63,7 +69,17 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
         authResult.setTargetRealm(authResult.realm);
         String authType = webRequest.getLoginConfig().getAuthenticationMethod();
 
-        if (authResult.getStatus() == AuthResult.CONTINUE) {
+        if ((authResult.getStatus() == AuthResult.CONTINUE)) {
+            // if target is unprotected, then check if TAI is enabled and invokeForUnprotectedURI is set as true.
+            // if these conditions are met, return SUCCESS.
+            if (webRequest.isPerformTAIForUnProtectedURI()) {
+                authResult = new AuthenticationResult(AuthResult.SUCCESS, (Subject) null, null, null, AuditEvent.OUTCOME_SUCCESS);
+                int statusCode = webRequest.getHttpServletResponse().getStatus();
+                Audit.audit(Audit.EventID.SECURITY_AUTHN_01, webRequest, authResult, statusCode);
+                Audit.audit(Audit.EventID.SECURITY_AUTHZ_01, webRequest, authResult, webRequest.getHttpServletRequest().getRequestURI(), statusCode);
+                // no need to set auth type, so return now.
+                return authResult;
+            }
             WebAuthenticator authenticator = getWebAuthenticator(webRequest);
             if (authenticator == null) {
                 return new AuthenticationResult(AuthResult.FAILURE, "Unable to get the appropriate WebAuthenticator. Unable to get the appropriate WebAuthenticator.");
@@ -187,8 +203,13 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
      */
     public WebAuthenticator getWebAuthenticator(WebRequest webRequest) {
         String authMech = webAppSecurityConfig.getOverrideHttpAuthMethod();
-        if (authMech != null && authMech.equals("CLIENT_CERT")) {
-            return createCertificateLoginAuthenticator();
+        if (authMech != null) {
+            if (authMech.equals("CLIENT_CERT"))
+                return createCertificateLoginAuthenticator();
+            else if (authMech.equals("FORM"))
+                return createFormLoginAuthenticator(webRequest);
+            else if (authMech.equals("BASIC"))
+                return getBasicAuthAuthenticator();
         }
         SecurityMetadata securityMetadata = webRequest.getSecurityMetadata();
         LoginConfiguration loginConfig = securityMetadata.getLoginConfiguration();
@@ -221,6 +242,21 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
     }
 
     /**
+     * Create an instance of the FormLoginAuthenticator.
+     * <p>
+     * Protected so it can be overridden in unit tests.
+     */
+    protected FormLoginAuthenticator createFormLoginAuthenticator(WebRequest webRequest) {
+        WebAuthenticator ssoAuthenticator = providerAuthenticatorProxy.getSSOAuthenticator(webRequest, null);
+        return new FormLoginAuthenticator(ssoAuthenticator, webAppSecurityConfig, providerAuthenticatorProxy);
+    }
+
+    @Override
+    public AuthenticationResult authenticate(HttpServletRequest req, HttpServletResponse res, HashMap props) {
+        return null;
+    }
+
+    /**
      * Create an instance of the BasicAuthAuthenticator.
      * <p>
      * Protected so it can be overridden in unit tests.
@@ -231,18 +267,8 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
         UserRegistry userRegistry = null;
         if (userRegistryService.isUserRegistryConfigured())
             userRegistry = userRegistryService.getUserRegistry();
-        SSOCookieHelper sSOCookieHelper = webAppSecurityConfig.createSSOCookieHelper();
+        SSOCookieHelper sSOCookieHelper = new SSOCookieHelperImpl(webAppSecurityConfig);
         return new BasicAuthAuthenticator(securityService.getAuthenticationService(), userRegistry, sSOCookieHelper, webAppSecurityConfig);
-    }
-
-    /**
-     * Create an instance of the FormLoginAuthenticator.
-     * <p>
-     * Protected so it can be overridden in unit tests.
-     */
-    protected FormLoginAuthenticator createFormLoginAuthenticator(WebRequest webRequest) {
-        WebAuthenticator ssoAuthenticator = providerAuthenticatorProxy.getSSOAuthenticator(webRequest, null);
-        return new FormLoginAuthenticator(ssoAuthenticator, webAppSecurityConfig, providerAuthenticatorProxy);
     }
 
     /**
@@ -252,11 +278,6 @@ public class WebAuthenticatorProxy implements WebAuthenticator {
      */
     public CertificateLoginAuthenticator createCertificateLoginAuthenticator() {
         SecurityService securityService = securityServiceRef.getService();
-        return new CertificateLoginAuthenticator(securityService.getAuthenticationService(), webAppSecurityConfig.createSSOCookieHelper());
-    }
-
-    @Override
-    public AuthenticationResult authenticate(HttpServletRequest req, HttpServletResponse res, HashMap props) {
-        return null;
+        return new CertificateLoginAuthenticator(securityService.getAuthenticationService(), new SSOCookieHelperImpl(webAppSecurityConfig));
     }
 }

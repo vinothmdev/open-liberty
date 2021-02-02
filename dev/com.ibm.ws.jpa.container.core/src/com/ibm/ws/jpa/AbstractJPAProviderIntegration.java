@@ -63,7 +63,7 @@ public abstract class AbstractJPAProviderIntegration implements JPAProviderInteg
      * Log version information about the specified persistence provider, if it can be determined.
      *
      * @param providerName fully qualified class name of JPA persistence provider
-     * @param loader class loader with access to the JPA provider classes
+     * @param loader       class loader with access to the JPA provider classes
      */
     @FFDCIgnore(Exception.class)
     private void logProviderInfo(String providerName, ClassLoader loader) {
@@ -115,16 +115,20 @@ public abstract class AbstractJPAProviderIntegration implements JPAProviderInteg
     }
 
     @Override
-    public void moduleStarting(ModuleInfo moduleInfo) {}
+    public void moduleStarting(ModuleInfo moduleInfo) {
+    }
 
     @Override
-    public void moduleStarted(ModuleInfo moduleInfo) {}
+    public void moduleStarted(ModuleInfo moduleInfo) {
+    }
 
     @Override
-    public void moduleStopping(ModuleInfo moduleInfo) {}
+    public void moduleStopping(ModuleInfo moduleInfo) {
+    }
 
     @Override
-    public void moduleStopped(ModuleInfo moduleInfo) {}
+    public void moduleStopped(ModuleInfo moduleInfo) {
+    }
 
     /**
      * @see com.ibm.ws.jpa.JPAProviderIntegration#supportsEntityManagerPooling()
@@ -143,8 +147,41 @@ public abstract class AbstractJPAProviderIntegration implements JPAProviderInteg
         String providerName = puInfo.getPersistenceProviderClassName();
         if (PROVIDER_ECLIPSELINK.equals(providerName)) {
             props.put("eclipselink.target-server", "WebSphere_Liberty");
-            if (puInfo instanceof com.ibm.ws.jpa.management.JPAPUnitInfo)
+            if (puInfo instanceof com.ibm.ws.jpa.management.JPAPUnitInfo) {
                 props.put("eclipselink.application-id", ((com.ibm.ws.jpa.management.JPAPUnitInfo) puInfo).getApplName());
+            }
+
+            Properties properties = puInfo.getProperties();
+            /*
+             * Section 4.8.5 of the JPA Specification:
+             * If SUM, AVG, MAX, or MIN is used, and there are no values
+             * to which the aggregate function can be applied, the result of
+             * the aggregate function is NULL.
+             *
+             * Set this property to so that EclipseLink does not return null by default
+             *
+             * JPA 3.0: Do not force this override with JPA 3.0 and later.
+             */
+            if (!properties.containsKey("eclipselink.allow-null-max-min") &&
+                JPAAccessor.getJPAComponent().getJPAVersion().lesserThan(JPAVersion.JPA30)) {
+                props.put("eclipselink.allow-null-max-min", "false");
+            }
+
+            /*
+             * EclipseLink Bug 567891: Case expressions that should return boolean instead
+             * return integer values. The JPA spec is too vague to change this, so we set this
+             * property to be safe for customers.
+             *
+             * Set this property to `false` so that EclipseLink will return the same integer
+             * value it has always returned for CASE expressions and not change behavior
+             *
+             * NOTE: This property is only applicable for JPA 22. JPAVersion > JPA22 has changed
+             * behavior by default
+             */
+            if (!properties.containsKey("eclipselink.sql.allow-convert-result-to-boolean") &&
+                JPAAccessor.getJPAComponent().getJPAVersion().equals(JPAVersion.JPA22)) {
+                props.put("eclipselink.sql.allow-convert-result-to-boolean", "false");
+            }
         } else if (PROVIDER_HIBERNATE.equals(providerName)) {
             // Hibernate had vastly outdated built-in knowledge of WebSphere API, until version 5.2.13+ and 5.3+.
             // If the version of Hibernate has the Liberty JtaPlatform, use it
@@ -174,7 +211,8 @@ public abstract class AbstractJPAProviderIntegration implements JPAProviderInteg
      * @see com.ibm.ws.jpa.JPAProvider#modifyPersistenceUnitProperties(java.lang.String, java.util.Properties)
      */
     @Override
-    public void updatePersistenceUnitProperties(String providerClassName, Properties props) {}
+    public void updatePersistenceUnitProperties(String providerClassName, Properties props) {
+    }
 
     /**
      * As of Hibernate 5.2.13+ and 5.3+ built-in knowledge of Liberty's transaction integration was delivered as:

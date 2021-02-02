@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2009 IBM Corporation and others.
+ * Copyright (c) 2004, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -23,7 +23,7 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.http.channel.h2internal.H2HttpInboundLinkWrap;
-import com.ibm.ws.http.channel.h2internal.exceptions.CompressionException;
+import com.ibm.ws.http.channel.h2internal.exceptions.Http2Exception;
 import com.ibm.ws.http.channel.internal.CallbackIDs;
 import com.ibm.ws.http.channel.internal.HttpChannelConfig;
 import com.ibm.ws.http.channel.internal.HttpMessages;
@@ -80,6 +80,8 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
     protected List<ConnectionReadyCallback> appSides = null;
     /** Flag on whether this link has been marked for HTTP/2 */
     private boolean alreadyH2Upgraded = false;
+    /** Flag on whether grpc is being used for this link */
+    private boolean isGrpc = false;
 
     /**
      * Constructor for an HTTP inbound link object.
@@ -112,6 +114,7 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
 
         getVirtualConnection().getStateMap().put(CallbackIDs.CALLBACK_HTTPICL, this);
         this.bIsActive = true;
+        this.isGrpc = false;
     }
 
     VirtualConnection switchedVC = null;
@@ -266,20 +269,41 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
         this.bPartialParsedRequest = b;
     }
 
-    public boolean isAlpnHttp2Link(VirtualConnection vc) {
+    /**
+     * Query if this link should use HTTP/2
+     *
+     * @param vc
+     * @return
+     */
+    public boolean isDirectHttp2Link(VirtualConnection vc) {
         if (alreadyH2Upgraded) {
             return true;
         }
         HttpInboundServiceContextImpl sc = getHTTPContext();
-        if (this.myTSC.getSSLContext() != null &&
-            !sc.isH2Connection() &&
-            this.myTSC.getSSLContext().getAlpnProtocol() != null &&
-            this.myTSC.getSSLContext().getAlpnProtocol().equals("h2") &&
-            checkForH2MagicString(sc)) {
-            alreadyH2Upgraded = true;
-            return true;
+        if (!sc.isH2Connection()) {
+            // if ALPN has selected h2, OR if this link is not secure, check for the HTTP/2 connection preface
+            if ((checkAlpnH2() || (!sc.isSecure() && sc.isHttp2Enabled())) && checkForH2MagicString(sc)) {
+                alreadyH2Upgraded = true;
+                return true;
+            }
         }
         return false;
+    }
+
+    public final void setIsGrpcInParentLink(boolean x) {
+        isGrpc = x;
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "set isGprc: " + isGrpc);
+        }
+    }
+
+    /**
+     * @return true if SSL is in use and "h2" was chosen via ALPN
+     */
+    private boolean checkAlpnH2() {
+        return this.myTSC.getSSLContext() != null
+               && this.myTSC.getSSLContext().getAlpnProtocol() != null
+               && this.myTSC.getSSLContext().getAlpnProtocol().equals("h2");
     }
 
     /**
@@ -328,7 +352,16 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
                 // with information after this call because it may go all the way
                 // from the channel above us back to the persist read, must exit
                 // this callstack immediately
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "processRequest calling handleNewRequest()");
+                }
+
                 handleNewRequest();
+
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "processRequest return from handleNewRequest()");
+                }
+
                 return;
             }
             rc = this.myTSC.getReadInterface().read(1, callback, false, timeout);
@@ -367,7 +400,7 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
         boolean completed = false;
 
         // if this is an http/2 link, don't perform additional parsing
-        if (this.isAlpnHttp2Link(switchedVC)) {
+        if (this.isDirectHttp2Link(switchedVC)) {
             return false;
         }
         try {
@@ -404,12 +437,12 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
             }
             handleGenericHNIError(iae, sc);
             return true;
-        } catch (CompressionException ce) {
+        } catch (Http2Exception h2e) {
             //no FFDC required
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "parseMessage encountered a CompressionException : " + ce);
+                Tr.debug(tc, "parseMessage encountered an Http2Exception : " + h2e);
             }
-            handleGenericHNIError(ce, sc);
+            this.myInterface.getLink().close(getVirtualConnection(), h2e);
             return true;
         } catch (Throwable t) {
             FFDCFilter.processException(t,
@@ -442,7 +475,7 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
     private void handleNewRequest() {
 
         // if this is an http/2 request, skip to discrimination
-        if (!isAlpnHttp2Link(this.vc)) {
+        if (!isDirectHttp2Link(this.vc)) {
             final HttpInboundServiceContextImpl sc = getHTTPContext();
             // save the request info that was parsed in case somebody changes it
             sc.setRequestVersion(sc.getRequest().getVersionValue());
@@ -983,7 +1016,7 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
     }
 
     /**
-     * Check the beginning of the current read buffer for the http/2 preface string
+     * Check the beginning of the current read buffer for the HTTP/2 preface string
      *
      * @param isc the HttpInboundServiceContextImpl to use
      * @return true if the magic string was found
@@ -995,24 +1028,24 @@ public class HttpInboundLink extends InboundProtocolLink implements InterChannel
 
         if (myTSC == null || myTSC.getReadInterface() == null ||
             (buffer = myTSC.getReadInterface().getBuffer()) == null) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
+                Tr.exit(tc, "checkForH2MagicString: returning " + hasMagicString + " due to null read buffer");
+            }
             return hasMagicString;
         }
 
-        // read the buffer, flip it, and if there is a backing array pull that out
         buffer = buffer.duplicate();
         buffer.flip();
-        byte[] bufferArray = null;
-        if (buffer.hasArray()) {
-            bufferArray = buffer.array();
-        }
 
-        // return true if the read buffer starts with the magic string
-        if (bufferArray != null && bufferArray.length >= 24) {
-            String bufferString = new String(bufferArray, 0, 24);
-            if (bufferString.startsWith(HttpConstants.HTTP2PrefaceString)) {
+        if (buffer.remaining() >= 24) {
+            byte[] arr = new byte[24];
+            buffer.get(arr);
+            String bufferString = new String(arr, 0, 24);
+            if (bufferString != null && !bufferString.isEmpty() && bufferString.startsWith(HttpConstants.HTTP2PrefaceString)) {
                 hasMagicString = true;
             }
         }
+
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, "checkForH2MagicString: returning " + hasMagicString);
         }

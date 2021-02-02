@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2017 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -19,8 +19,13 @@ import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -43,6 +48,8 @@ import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.component.annotations.ReferenceCardinality;
+import org.osgi.service.component.annotations.ReferencePolicyOption;
 import org.osgi.service.event.Event;
 import org.osgi.service.event.EventAdmin;
 import org.osgi.service.event.EventHandler;
@@ -56,9 +63,9 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.websphere.servlet.context.ExtendedServletContext;
 import com.ibm.websphere.servlet.filter.IFilterConfig;
-import com.ibm.ws.app.manager.module.DeployedAppInfoFactory;
+import com.ibm.ws.app.manager.ApplicationStateCoordinator;
+import com.ibm.ws.app.manager.module.DeployedAppServices;
 import com.ibm.ws.app.manager.module.DeployedModuleInfo;
-import com.ibm.ws.app.manager.module.internal.DeployedAppInfoFactoryBase;
 import com.ibm.ws.app.manager.module.internal.ModuleClassLoaderFactory;
 import com.ibm.ws.app.manager.module.internal.ModuleHandler;
 import com.ibm.ws.app.manager.module.internal.ModuleInfoUtils;
@@ -69,14 +76,14 @@ import com.ibm.ws.container.service.app.deploy.ContainerInfo;
 import com.ibm.ws.container.service.app.deploy.ModuleInfo;
 import com.ibm.ws.container.service.app.deploy.WebModuleClassesInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ApplicationInfoFactory;
-import com.ibm.ws.container.service.app.deploy.extended.ApplicationInfoForContainer;
 import com.ibm.ws.container.service.app.deploy.extended.ExtendedApplicationInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ExtendedModuleInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ModuleContainerInfo;
 import com.ibm.ws.container.service.metadata.MetaDataException;
 import com.ibm.ws.eba.wab.integrator.EbaProvider;
 import com.ibm.ws.javaee.dd.web.WebApp;
-import com.ibm.ws.runtime.metadata.ModuleMetaData;
+import com.ibm.ws.kernel.feature.ServerReadyStatus;
+import com.ibm.ws.kernel.feature.ServerStarted;
 import com.ibm.ws.runtime.update.RuntimeUpdateListener;
 import com.ibm.ws.runtime.update.RuntimeUpdateManager;
 import com.ibm.ws.runtime.update.RuntimeUpdateNotification;
@@ -94,6 +101,7 @@ import com.ibm.wsspi.kernel.service.location.VariableRegistry;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.FileUtils;
 import com.ibm.wsspi.kernel.service.utils.FrameworkState;
+import com.ibm.wsspi.kernel.service.utils.ServerQuiesceListener;
 import com.ibm.wsspi.wab.configure.WABConfiguration;
 import com.ibm.wsspi.webcontainer.extension.ExtensionFactory;
 import com.ibm.wsspi.webcontainer.extension.ExtensionProcessor;
@@ -174,9 +182,9 @@ import com.ibm.wsspi.webcontainer.servlet.IServletContext;
  */
 @Component(configurationPolicy = ConfigurationPolicy.IGNORE,
            immediate = true,
-           service = {EventHandler.class, RuntimeUpdateListener.class},
+           service = { EventHandler.class, RuntimeUpdateListener.class, ServerQuiesceListener.class, ServerReadyStatus.class },
            property = { "service.vendor=IBM", "event.topics=org/osgi/service/web/UNDEPLOYED" })
-public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpdateListener {
+public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpdateListener, ServerQuiesceListener, ServerReadyStatus {
 
     private static final TraceComponent tc = Tr.register(WABInstaller.class);
     private static final String CONFIGURABLE_FILTER = "(&"
@@ -184,7 +192,8 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                                                       + "(" + WABConfiguration.CONTEXT_NAME + "=*)"
                                                       + "(" + WABConfiguration.CONTEXT_PATH + "=*))";
 
-    private interface WABLifeCycle {};
+    private interface WABLifeCycle {
+    };
 
     private static final TraceComponent tcWabLifeCycleDebug = Tr.register(WABLifeCycle.class);
 
@@ -206,11 +215,13 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
     private final AtomicServiceReference<ArtifactContainerFactory> containerFactorySRRef = new AtomicServiceReference<ArtifactContainerFactory>("ContainerFactory");
     private final AtomicServiceReference<AdaptableModuleFactory> adaptableModuleFactorySRRef = new AtomicServiceReference<AdaptableModuleFactory>("AdaptableModuleFactory");
     private final AtomicServiceReference<ApplicationInfoFactory> applicationInfoFactorySRRef = new AtomicServiceReference<ApplicationInfoFactory>("ApplicationInfoFactory");
+    private final AtomicServiceReference<DeployedAppServices> deployedAppServicesSRRef = new AtomicServiceReference<DeployedAppServices>("DeployedAppServices");
     private final AtomicServiceReference<ModuleHandler> webModuleHandlerSRRef = new AtomicServiceReference<ModuleHandler>("WebModuleHandler");
     private final AtomicServiceReference<VariableRegistry> variableRegistrySRRef = new AtomicServiceReference<VariableRegistry>("VariableRegistry");
 
     private final AtomicBoolean deactivated = new AtomicBoolean(false);
     private final ReentrantReadWriteLock deactivationLock = new ReentrantReadWriteLock();
+    private final AtomicBoolean quiesceStarted = new AtomicBoolean(false);
 
     /**
      * A map of WABs grouped under an EBA, keyed by the EBA ID
@@ -227,6 +238,11 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
 
     @Reference
     private volatile List<WABClassInfoHelper> classInfoHelpers;
+
+    private final Map<WAB, Future<?>> systemWABsDeploying = new ConcurrentHashMap<>();
+
+    @Reference(policyOption = ReferencePolicyOption.GREEDY, cardinality = ReferenceCardinality.OPTIONAL)
+    private volatile ServerStarted serverStarted;
 
     /* Package protected method to allow WAB's to obtain bundle trackers too */
     <T> WABTracker<T> getTracker(BundleTrackerCustomizer<T> wabTrackerCustomizer) {
@@ -258,6 +274,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
         containerFactorySRRef.activate(context);
         adaptableModuleFactorySRRef.activate(context);
         applicationInfoFactorySRRef.activate(context);
+        deployedAppServicesSRRef.activate(context);
         webModuleHandlerSRRef.activate(context);
         variableRegistrySRRef.activate(context);
 
@@ -341,14 +358,17 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
         containerFactorySRRef.deactivate(context);
         adaptableModuleFactorySRRef.deactivate(context);
         applicationInfoFactorySRRef.deactivate(context);
+        deployedAppServicesSRRef.deactivate(context);
         webModuleHandlerSRRef.deactivate(context);
         variableRegistrySRRef.deactivate(context);
         ctx = null;
     }
 
+    @Override
     public void notificationCreated(RuntimeUpdateManager updateManager, RuntimeUpdateNotification notification) {
-      if (RuntimeUpdateNotification.CONFIG_UPDATES_DELIVERED.equals(notification.getName())) {
+        if (RuntimeUpdateNotification.CONFIG_UPDATES_DELIVERED.equals(notification.getName())) {
             notification.onCompletion(new CompletionListener<Boolean>() {
+                @Override
                 public void successfulCompletion(Future<Boolean> future, Boolean result) {
                     if (result) {
                         List<Bundle> bundles = new ArrayList<>();
@@ -364,16 +384,18 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                         } finally {
                             wabGroupsLock.unlock();
                         }
-                
+
                         for (Bundle b : bundles) {
                             restart(b);
                         }
                     }
                 }
 
-                public void failedCompletion(Future<Boolean> future, Throwable t) {}
+                @Override
+                public void failedCompletion(Future<Boolean> future, Throwable t) {
+                }
             });
-      }
+        }
     }
 
     protected String resolveVariable(String stringToResolve) {
@@ -386,7 +408,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
      * This method is called asynchronously from queued work resulting from
      * WAB bundles entering the STARTING|ACTIVE states as tracked by the {@link WABTracker} and {@link WABTrackerCustomizer}.
      *
-     * @param wab - the tracked {@link WAB} object
+     * @param wab    - the tracked {@link WAB} object
      * @param bundle - the {@link Bundle} to install
      */
     protected boolean installIntoWebContainer(WAB wab) {
@@ -461,13 +483,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                                                                                              moduleName,
                                                                                              wabContainer,
                                                                                              null,
-                                                                                             null,
-                                                                                             new ApplicationInfoForContainer() {
-                                                                                                 @Override
-                                                                                                 public boolean getUseJandex() {
-                                                                                                     return false;
-                                                                                                 }
-                                                                                             });
+                                                                                             null);
                     wab.setCreatedApplicationInfo();
                 }
                 wab.setApplicationInfo(appInfo);
@@ -479,7 +495,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                 try {
                     wabGroup = wabGroups.get(appInfo.getName());
                     if (wabGroup == null) {
-                        wabGroup = new WABGroup(new WABDeployedAppInfo(appInfo));
+                        wabGroup = new WABGroup(new WABDeployedAppInfo(deployedAppServicesSRRef.getService(), appInfo));
                         wabGroups.put(appInfo.getName(), wabGroup);
                     }
 
@@ -498,33 +514,26 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                         groupsLocked = false;
                         wabGroupsLock.unlock();
 
-                        ModuleContainerInfo mci = deployedApp.createModuleContainerInfo(contextRoot, wabContainer, modPath);
-                        ModuleMetaData mmd = deployedApp.createModuleMetaData(mci, loader);
-                        ExtendedModuleInfo moduleInfo = deployedApp.getModuleInfo(mci);
-                        DeployedModuleInfo deployedMod = deployedApp.getDeployedModule(moduleInfo);
-                        wab.setDeployedModuleInfo(deployedMod);
-
-                        WebAppConfiguration appConfig = (WebAppConfiguration)((WebModuleMetaData)mmd).getConfiguration();
-
-                        if (appConfig != null) {
-                          String virtualHost = wab.getVirtualHost();
-                          if (virtualHost != null) {
-                            appConfig.setVirtualHostName(virtualHost);
-                          }
-                        }
-
-                        //deploy the module
-                        Future<Boolean> appFuture = webModuleHandler.deployModule(deployedMod, deployedApp);
-                        if (appFuture.isDone() && !appFuture.get()) {
-                            postFailureEvent(wab, "wab.install.fail", bundle, contextRoot);
-                            Tr.error(tc, "wab.install.fail", bundle, contextRoot);
-                            return false;
+                        ModuleContainerInfo mci = deployedApp.createModuleContainerInfo(webModuleHandler, contextRoot, wabContainer, modPath, loader);
+                        wab.setModuleContainerInfo(mci);
+                        if (wab.getCreatedApplicationInfo()) {
+                            if (!deployedApp.installApp(wab)) {
+                                postFailureEvent(wab, "wab.install.fail", bundle, contextRoot);
+                                Tr.error(tc, "wab.install.fail", bundle, contextRoot);
+                                return false;
+                            }
+                        } else {
+                            if (!deployedApp.installModule(wab)) {
+                                postFailureEvent(wab, "wab.install.fail", bundle, contextRoot);
+                                Tr.error(tc, "wab.install.fail", bundle, contextRoot);
+                                return false;
+                            }
                         }
 
                         //register the WAB bundle with a key that can be looked up elsewhere
                         //based on the J2EEName form
                         Dictionary<String, Object> bRegProps = new Hashtable<String, Object>(1);
-                        bRegProps.put("web.module.key", appInfo.getName() + "#" + moduleInfo.getName());
+                        bRegProps.put("web.module.key", appInfo.getName() + "#" + deployedApp.getModuleName(mci));
                         bRegProps.put("installed.wab.contextRoot", contextRoot);
                         bRegProps.put("installed.wab.container", wabContainer);
                         ServiceRegistration<Bundle> reg = ctx.registerService(Bundle.class, bundle, bRegProps);
@@ -572,13 +581,43 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                 if (group != null) {
                     //synchronize on the WABGroup to match up with install
                     synchronized (group) {
+                        WABDeployedAppInfo deployedApp = (WABDeployedAppInfo) group.getDeployedAppInfo();
                         if (group.removeWAB(wab)) {
                             // group is empty remove it
                             wabGroups.remove(groupKey);
                             groupsLocked = false;
                             wabGroupsLock.unlock();
                         }
-                        webModuleHandler.undeployModule(wab.getDeployedModuleInfo());
+                        if (wab.getCreatedApplicationInfo()) {
+                            // system WABs get uninstalled here
+                            deployedApp.uninstallApp(wab);
+                        } else {
+                            if (ctx.getBundle(org.osgi.framework.Constants.SYSTEM_BUNDLE_LOCATION).getState() == Bundle.STOPPING) {
+                                // if shutting down then launch uninstallModule asynchronously and wait up
+                                // to 30 secs. This avoids blocking server shutdown unduly.
+                                final CountDownLatch latch = new CountDownLatch(1);
+                                executorService.getService().submit(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        deployedApp.uninstallModule(wab);
+                                        latch.countDown();
+                                    }
+                                }, Boolean.TRUE);
+                                try {
+                                    // If a quiesce has not been initiated then a force stop was called so
+                                    // continue without waiting. Otherwise give the uninstallModule thread
+                                    // time to unwind before proceeding with WAB removal.
+                                    if (quiesceStarted.get()) {
+                                        latch.await(30, TimeUnit.SECONDS);
+                                    }
+                                } catch (InterruptedException e) {
+                                    // continue with wab uninstall.
+                                    Thread.currentThread().interrupt();
+                                }
+                            } else {
+                                deployedApp.uninstallModule(wab);
+                            }
+                        }
                     }
                 }
             } finally {
@@ -587,10 +626,6 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
                 }
             }
 
-            //if we created app info for this WAB, we must destroy it
-            if (wab.getCreatedApplicationInfo()) {
-                applicationInfoFactorySRRef.getService().destroyApplicationInfo(info);
-            }
             return true;
             //if the entry was already removed then that entire WAB group was already removed
         }
@@ -651,6 +686,15 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
         applicationInfoFactorySRRef.unsetReference(ref);
     }
 
+    @Reference
+    protected void setDeployedAppServices(ServiceReference<DeployedAppServices> ref) {
+        deployedAppServicesSRRef.setReference(ref);
+    }
+
+    protected void unsetDeployedAppServices(ServiceReference<DeployedAppServices> ref) {
+        deployedAppServicesSRRef.unsetReference(ref);
+    }
+
     @Reference(service = ModuleHandler.class, target = "(type=web)")
     protected void setWebModuleHandler(ServiceReference<ModuleHandler> ref) {
         webModuleHandlerSRRef.setReference(ref);
@@ -688,22 +732,22 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
     }
 
     static void restart(Bundle bundle) {
-      // if the wab bundle has been associated with this configuration then it must be restarted
-      if (bundle.getState() != Bundle.STOPPING) {
-          try {
-              bundle.stop();
-          } catch (BundleException e) {
-              // auto FFCD
-          }
-          // note that we are restarting the WAB, but it is likely there is no
-          // available configuration yet for it so it will not trigger another WAB creation until
-          // there is appropriate configuration for it.
-          try {
-              bundle.start();
-          } catch (BundleException e) {
-              // auto FFCD
-          }
-      }
+        // if the wab bundle has been associated with this configuration then it must be restarted
+        if (bundle.getState() != Bundle.STOPPING) {
+            try {
+                bundle.stop();
+            } catch (BundleException e) {
+                // auto FFCD
+            }
+            // note that we are restarting the WAB, but it is likely there is no
+            // available configuration yet for it so it will not trigger another WAB creation until
+            // there is appropriate configuration for it.
+            try {
+                bundle.start();
+            } catch (BundleException e) {
+                // auto FFCD
+            }
+        }
     }
 
     /*
@@ -1477,45 +1521,121 @@ public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpda
 
     }
 
-    private DeployedAppInfoFactoryBase deployedAppFactory;
-
-    @Reference(target = "(type=war)")
-    protected void setDeployedAppFactory(DeployedAppInfoFactory factory) {
-        deployedAppFactory = (DeployedAppInfoFactoryBase) factory;
-    }
-
-    protected void unsetDeployedAppFactory(DeployedAppInfoFactory factory) {
-        deployedAppFactory = null;
-    }
-
-    final class WABDeployedAppInfo extends SimpleDeployedAppInfoBase {
-        WABDeployedAppInfo(ExtendedApplicationInfo appInfo) throws UnableToAdaptException {
-            super(deployedAppFactory);
+    static final class WABDeployedAppInfo extends SimpleDeployedAppInfoBase {
+        WABDeployedAppInfo(DeployedAppServices deployedAppServices, ExtendedApplicationInfo appInfo) throws UnableToAdaptException {
+            super(deployedAppServices);
             super.appInfo = appInfo;
         }
 
-        ExtendedModuleInfo getModuleInfo(ModuleContainerInfo mci) {
-            return ((WebModuleContainerInfo) mci).moduleInfo;
-        }
+        WAB currentWAB;
 
-        ModuleContainerInfo createModuleContainerInfo(String contextRoot, Container moduleContainer,
-                                                      String moduleLocation) throws UnableToAdaptException {
-            String moduleURI = ModuleInfoUtils.getModuleURIFromLocation(moduleLocation);
-            WebModuleContainerInfo mci = new WebModuleContainerInfo(webModuleHandlerSRRef.getServiceWithException(), deployedAppFactory.getModuleMetaDataExtenders().get("web"), deployedAppFactory.getNestedModuleMetaDataFactories().get("web"), moduleContainer, null, moduleURI, moduleClassesInfo, contextRoot);
-            moduleContainerInfos.add(mci);
-            return mci;
-        }
-
-        ModuleMetaData createModuleMetaData(ModuleContainerInfo mci, ClassLoader loader) throws MetaDataException {
-            //create the WebModule
+        ModuleContainerInfo createModuleContainerInfo(ModuleHandler webModuleHandler, String contextRoot, Container moduleContainer,
+                                                      String moduleLocation, ClassLoader loader) throws UnableToAdaptException {
             final ClassLoader moduleClassLoader = loader;
-            ModuleClassLoaderFactory classLoaderFactory = new ModuleClassLoaderFactory() {
+            final ModuleClassLoaderFactory moduleClassLoaderFactory = new ModuleClassLoaderFactory() {
                 @Override
                 public ClassLoader createModuleClassLoader(ModuleInfo moduleInfo, List<ContainerInfo> moduleClassesContainers) {
                     return moduleClassLoader;
                 }
             };
-            return ((WebModuleContainerInfo) mci).createModuleMetaData(appInfo, this, classLoaderFactory);
+            String moduleURI = ModuleInfoUtils.getModuleURIFromLocation(moduleLocation);
+            WebModuleContainerInfo mci = new WebModuleContainerInfo(webModuleHandler, deployedAppServices.getModuleMetaDataExtenders("web"), deployedAppServices.getNestedModuleMetaDataFactories("web"), moduleContainer, null, moduleURI, moduleClassLoaderFactory, moduleClassesInfo, contextRoot);
+            moduleContainerInfos.add(mci);
+            return mci;
+        }
+
+        @Override
+        public DeployedModuleInfo getDeployedModule(ExtendedModuleInfo moduleInfo) {
+            DeployedModuleInfo deployedMod = super.getDeployedModule(moduleInfo);
+            currentWAB.setDeployedModuleInfo(deployedMod);
+
+            WebAppConfiguration appConfig = (WebAppConfiguration) ((WebModuleMetaData) moduleInfo.getMetaData()).getConfiguration();
+            if (appConfig != null) {
+                String virtualHost = currentWAB.getVirtualHost();
+                if (virtualHost != null) {
+                    appConfig.setVirtualHostName(virtualHost);
+                }
+            }
+            return deployedMod;
+        }
+
+        public boolean installApp(WAB wab) {
+            currentWAB = wab;
+            Future<Boolean> result = futureMonitor.createFuture(Boolean.class);
+            return installApp(result);
+        }
+
+        public boolean installModule(WAB wab) throws MetaDataException, InterruptedException, ExecutionException {
+            WebModuleContainerInfo mci = (WebModuleContainerInfo) wab.getModuleContainerInfo();
+            currentWAB = wab;
+            mci.createModuleMetaData(appInfo, this);
+            DeployedModuleInfo deployedMod = getDeployedModule(mci.moduleInfo);
+
+            //deploy the module
+            Future<Boolean> appFuture = mci.moduleHandler.deployModule(deployedMod, this);
+            return !appFuture.isDone() || appFuture.get();
+        }
+
+        public void uninstallApp(WAB wab) {
+            uninstallApp();
+        }
+
+        public void uninstallModule(WAB wab) {
+            WebModuleContainerInfo mci = (WebModuleContainerInfo) wab.getModuleContainerInfo();
+            DeployedModuleInfo deployedMod = wab.getDeployedModuleInfo();
+            mci.moduleHandler.undeployModule(deployedMod);
+        }
+
+        public String getModuleName(ModuleContainerInfo mci) {
+            return ((WebModuleContainerInfo) mci).moduleInfo.getName();
+        }
+    }
+
+    @Override
+    public void serverStopping() {
+        quiesceStarted.set(true);
+    }
+
+    void addSystemWABDeployFuture(WAB wab, Future<?> future) {
+        if (serverStarted != null) {
+            return;
+        }
+        EbaProvider ebaProvider = ebaProviderTracker.getService();
+        if (ebaProvider != null && ebaProvider.getApplicationInfo(wab.getBundle()) != null) {
+            return;
+        }
+        // This is a system wab, not from an OSGi application EBA.
+        systemWABsDeploying.put(wab, future);
+    }
+
+    @Override
+    public void check() {
+        AtomicBoolean timeoutOccurred = new AtomicBoolean();
+        systemWABsDeploying.forEach((w, f) -> {
+            try {
+                if (timeoutOccurred.get()) {
+                    if (!f.isDone()) {
+                        logSlowWab(w);
+                    }
+                } else {
+                    f.get(ApplicationStateCoordinator.getApplicationStartTimeout(), TimeUnit.SECONDS);
+                }
+            } catch (InterruptedException e) {
+                // FFDC here and keep interruption
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException e) {
+                // FFDC here and continue
+            } catch (TimeoutException e) {
+                timeoutOccurred.set(true);
+                logSlowWab(w);
+            }
+        });
+        systemWABsDeploying.clear();
+    }
+
+    private void logSlowWab(WAB w) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(tc, "Stopped waiting for the system WAB to start: ", w.getBundle().getSymbolicName());
         }
     }
 }

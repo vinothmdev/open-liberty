@@ -31,7 +31,8 @@ import com.ibm.wsspi.anno.info.ClassInfo;
 public class NonDelayedClassInfo extends ClassInfoImpl {
 
     private static final TraceComponent tc = Tr.register(NonDelayedClassInfo.class);
-    public static final String CLASS_NAME = NonDelayedClassInfo.class.getName();
+    @SuppressWarnings("hiding")
+	public static final String CLASS_NAME = NonDelayedClassInfo.class.getName();
 
     //
 
@@ -54,7 +55,7 @@ public class NonDelayedClassInfo extends ClassInfoImpl {
     private final boolean isJavaClass;
 
     private final String[] interfaceNames;
-    private ClassInfoImpl[] interfaces;
+    private List<ClassInfoImpl> interfaces;
 
     private final String superClassName;
     private ClassInfoImpl superClass;
@@ -181,16 +182,15 @@ public class NonDelayedClassInfo extends ClassInfoImpl {
     @Override
     public List<ClassInfoImpl> getInterfaces() {
         if (interfaces == null) {
-            interfaces = new ClassInfoImpl[interfaceNames.length];
+            interfaces = new ArrayList<ClassInfoImpl>(interfaceNames.length);
 
-            int i = 0;
             for (String interfaceName : interfaceNames) {
                 ClassInfoImpl nextInterface = getInfoStore().getDelayableClassInfo(interfaceName);
-                interfaces[i++] = nextInterface;
+                interfaces.add(nextInterface);
             }
 
         }
-        return Arrays.asList(interfaces);
+        return new ArrayList<ClassInfoImpl>(interfaces);
     }
 
     @Override
@@ -290,8 +290,8 @@ public class NonDelayedClassInfo extends ClassInfoImpl {
 
         methods.addAll(declaredMethods);
 
-        ClassInfoImpl superClass = getSuperclass();
-        if (superClass != null) {
+        ClassInfoImpl useSuperClass = getSuperclass();
+        if (useSuperClass != null) {
             Map<MethodInfoImpl, MethodInfoImpl> overriden = Collections.emptyMap();
             if (declaredMethods.size() > 0) {
                 overriden = new TreeMap<MethodInfoImpl, MethodInfoImpl>(METHOD_COMPARATOR);
@@ -303,7 +303,7 @@ public class NonDelayedClassInfo extends ClassInfoImpl {
             }
 
             // get the super methods rather than walk to deal with package private evaluation
-            List<MethodInfoImpl> superMethods = superClass.getMethods();
+            List<MethodInfoImpl> superMethods = useSuperClass.getMethods();
 
             // add all methods that do not exist unless private or package protected
             for (MethodInfoImpl method : superMethods) {
@@ -545,22 +545,21 @@ public class NonDelayedClassInfo extends ClassInfoImpl {
         Tr.dump(logger, MessageFormat.format(" Non-Delayed Class [ {0} ]", getHashText()));
     }
 
-    public void setFields(FieldInfoImpl[] fields) {
-        declaredFields = Arrays.asList(fields);
+    public void setFields(List<FieldInfoImpl> fields) {
+        declaredFields = fields;
     }
 
-    public void setConstructors(MethodInfoImpl[] constructors) {
-        declaredConstructors = Arrays.asList(constructors);
+    public void setConstructors(List<MethodInfoImpl> constructors) {
+        declaredConstructors = constructors;
 
     }
 
-    public void setMethods(MethodInfoImpl[] methods) {
-        declaredMethods = Arrays.asList(methods);
-
+    public void setMethods(List<MethodInfoImpl> methods) {
+        declaredMethods = methods;
     }
 
     @Override
-    public void setDeclaredAnnotations(AnnotationInfoImpl[] annos) {
+    public void setDeclaredAnnotations(List<AnnotationInfoImpl> annos) {
         annotations = null;
         super.setDeclaredAnnotations(annos);
     }

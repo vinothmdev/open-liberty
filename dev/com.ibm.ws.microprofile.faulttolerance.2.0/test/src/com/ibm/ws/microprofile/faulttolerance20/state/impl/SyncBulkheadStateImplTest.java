@@ -36,11 +36,15 @@ import org.eclipse.microprofile.faulttolerance.exceptions.BulkheadException;
 import org.junit.Test;
 
 import com.ibm.ws.microprofile.faulttolerance.impl.policy.BulkheadPolicyImpl;
+import com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder;
+import com.ibm.ws.microprofile.faulttolerance.utils.DummyMetricRecorder;
 import com.ibm.ws.microprofile.faulttolerance20.impl.MethodResult;
 
+@SuppressWarnings("restriction") // Unit test accesses non-exported *PolicyImpl classes
 public class SyncBulkheadStateImplTest {
 
     ExecutorService executor = Executors.newFixedThreadPool(10);
+    private static MetricRecorder dummyMetrics = DummyMetricRecorder.get();
 
     /**
      * Check that the bulkhead will reject executions if it's full
@@ -50,7 +54,7 @@ public class SyncBulkheadStateImplTest {
         BulkheadPolicyImpl bulkheadPolicy = new BulkheadPolicyImpl();
         bulkheadPolicy.setMaxThreads(2);
 
-        SyncBulkheadStateImpl bulkheadState = new SyncBulkheadStateImpl(bulkheadPolicy);
+        SyncBulkheadStateImpl bulkheadState = new SyncBulkheadStateImpl(bulkheadPolicy, dummyMetrics);
 
         CompletableFuture<Void> waitingFuture = new CompletableFuture<>();
 
@@ -100,7 +104,7 @@ public class SyncBulkheadStateImplTest {
         BulkheadPolicyImpl bulkheadPolicy = new BulkheadPolicyImpl();
         bulkheadPolicy.setMaxThreads(2);
 
-        SyncBulkheadStateImpl bulkheadState = new SyncBulkheadStateImpl(bulkheadPolicy);
+        SyncBulkheadStateImpl bulkheadState = new SyncBulkheadStateImpl(bulkheadPolicy, dummyMetrics);
 
         for (int i = 0; i < 100; i++) {
             MethodResult<String> result = bulkheadState.run(() -> "ok");

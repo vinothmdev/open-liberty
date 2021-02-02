@@ -21,6 +21,7 @@ Export-Package:\
   com.ibm.ws.opentracing.cdi;version=1.2;provide:=true
   
 Import-Package: \
+  !com.ibm.ws.opentracing.cdi, \
   io.opentracing.propagation;version=0.31.0,\
   io.opentracing.tag;version=0.31.0,\
   javax.enterprise.*;version="[1.1,2.1)",\
@@ -28,6 +29,8 @@ Import-Package: \
 
 Include-Resource: \
   META-INF=resources/META-INF
+
+-cdiannotations:
 
 -dsannotations: com.ibm.ws.opentracing.cdi.OpentracingCDIInjectionExtension
 
@@ -42,4 +45,5 @@ Include-Resource: \
 	com.ibm.websphere.javaee.annotation.1.2;version=latest,\
 	com.ibm.websphere.javaee.interceptor.1.2;version=latest,\
 	com.ibm.websphere.javaee.jaxrs.2.0;version=latest,\
-	com.ibm.ws.jaxrs.2.0.common;version=latest
+	com.ibm.ws.jaxrs.2.0.common;version=latest,\
+	com.ibm.ws.io.opentracing.opentracing-api.0.31.0;version=latest

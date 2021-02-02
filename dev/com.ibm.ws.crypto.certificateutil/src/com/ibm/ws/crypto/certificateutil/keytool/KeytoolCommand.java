@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -42,9 +42,14 @@ class KeytoolCommand {
      * @param password
      * @param validity
      * @param subjectDN
+     * @param keySize
+     * @param keyType
+     * @param sigAlg
      * @param ksType
+     * @param extInfo
      */
-    KeytoolCommand(String filePath, String password, int validity, String subjectDN, int keySize, String keyType, String sigAlg, String ksType) {
+    KeytoolCommand(String filePath, String password, int validity, String subjectDN, int keySize, String keyType, String sigAlg, String ksType, List<String> extInfo) {
+
         cmd = new ArrayList<String>();
         cmd.add(getAbsoluteKeytoolPath());
         cmd.add("-genkey");
@@ -68,6 +73,13 @@ class KeytoolCommand {
         cmd.add(Integer.toString(keySize));
         cmd.add("-storetype");
         cmd.add(ksType);
+
+        if (extInfo != null && !extInfo.isEmpty()) {
+            for (Object extVal : extInfo) {
+                cmd.add("-ext");
+                cmd.add((String) (extVal));
+            }
+        }
     }
 
     /**

@@ -18,7 +18,7 @@ Bundle-Description: WebSphere OSGi Web Application Support, version ${bVersion}
 
 Private-Package: com.ibm.ws.app.manager.wab*
 
--dsannotations:, \
+-dsannotations: \
   com.ibm.ws.app.manager.wab.internal.WABInstaller, \
   com.ibm.ws.app.manager.wab.internal.WABExtensionFactory
 
@@ -35,9 +35,12 @@ IBM-Default-Config: OSGI-INF/wlp/defaultInstances.xml
 
 instrument.classesExcludes: com/ibm/ws/app/manager/wab/internal/resources/*.class
 
+jakartaeeMe: true
+
 -buildpath: \
 	com.ibm.websphere.javaee.servlet.3.0;version=latest,\
 	com.ibm.ws.container.service;version=latest,\
+	com.ibm.ws.kernel.feature.core;version=latest,\
 	com.ibm.websphere.appserver.spi.kernel.service,\
 	com.ibm.websphere.org.osgi.core,\
 	com.ibm.websphere.org.osgi.service.component,\
@@ -47,6 +50,7 @@ instrument.classesExcludes: com/ibm/ws/app/manager/wab/internal/resources/*.clas
 	com.ibm.ws.adaptable.module;version=latest,\
 	com.ibm.ws.artifact;version=latest,\
 	com.ibm.ws.webcontainer;version=latest,\
+	com.ibm.ws.app.manager;version=latest,\
 	com.ibm.ws.app.manager.module;version=latest,\
     com.ibm.ws.runtime.update,\
 	com.ibm.ws.threading,\

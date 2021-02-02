@@ -81,6 +81,7 @@ import org.apache.cxf.ws.addressing.EndpointReferenceUtils;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.cxf.exceptions.InvalidCharsetException;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 
 /**
@@ -463,10 +464,11 @@ public abstract class AbstractHTTPDestination
             //allow gets/deletes/options to not specify an encoding
             String normalizedEncoding = HttpHeaderHelper.mapCharset(enc);
             if (normalizedEncoding == null) {
-                String m = new org.apache.cxf.common.i18n.Message("INVALID_ENCODING_MSG", tc.getLogger(), enc).toString();
-                //LOG.log(Level.WARNING, m);
+                // Liberty Change Start
+                String m = "Invalid MediaType encoding: " + enc;
                 Tr.warning(tc, m);
-                throw new IOException(m);
+                throw new InvalidCharsetException(m);
+                // Liberty Change End
             }
             inMessage.put(Message.ENCODING, normalizedEncoding);
         }
@@ -635,10 +637,14 @@ public abstract class AbstractHTTPDestination
         }
 
         cacheInput(outMessage);
+        //Liberty code change start
+        Headers headers = null;
         HTTPServerPolicy sp = calcServerPolicy(outMessage);
         if (sp != null) {
-            new Headers(outMessage).setFromServerPolicy(sp);
+            headers = new Headers(outMessage);
+            headers.setFromServerPolicy(sp);
         }
+        //Liberty code change end
 
         OutputStream responseStream = null;
         boolean oneWay = isOneWay(outMessage);
@@ -653,8 +659,15 @@ public abstract class AbstractHTTPDestination
                 return null;
             }
         }
-        response.setStatus(responseCode);
-        new Headers(outMessage).copyToResponse(response);
+        //Liberty code change start
+        if (!response.isCommitted()) {
+            response.setStatus(responseCode); //Original CXF line
+            if (headers == null) {
+                headers = new Headers(outMessage);
+            }
+            headers.copyToResponse(response);
+        }
+        //Liberty code change end
 
         outMessage.put(RESPONSE_HEADERS_COPIED, "true");
 

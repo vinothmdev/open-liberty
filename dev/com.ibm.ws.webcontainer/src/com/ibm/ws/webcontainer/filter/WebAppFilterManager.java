@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2018 IBM Corporation and others.
+ * Copyright (c) 1997, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -46,6 +46,7 @@ import com.ibm.ws.managedobject.ManagedObject;
 import com.ibm.ws.webcontainer.WebContainer;
 import com.ibm.ws.webcontainer.collaborator.CollaboratorMetaDataImpl;
 import com.ibm.ws.webcontainer.extension.DefaultExtensionProcessor;
+import com.ibm.ws.webcontainer.filter.extended.IFilterMappingExtended;
 import com.ibm.ws.webcontainer.osgi.interceptor.RegisterRequestInterceptor;
 import com.ibm.ws.webcontainer.servlet.FileServletWrapper;
 import com.ibm.ws.webcontainer.servlet.H2Handler;
@@ -68,7 +69,6 @@ import com.ibm.wsspi.webcontainer.WebContainerRequestState;
 import com.ibm.wsspi.webcontainer.collaborator.CollaboratorInvocationEnum;
 import com.ibm.wsspi.webcontainer.collaborator.ICollaboratorHelper;
 import com.ibm.wsspi.webcontainer.collaborator.ICollaboratorMetaData;
-import com.ibm.wsspi.webcontainer.collaborator.IWebAppNameSpaceCollaborator;
 import com.ibm.wsspi.webcontainer.collaborator.IWebAppSecurityCollaborator;
 import com.ibm.wsspi.webcontainer.extension.ExtensionProcessor;
 import com.ibm.wsspi.webcontainer.filter.IFilterConfig;
@@ -138,7 +138,6 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
     com.ibm.ws.webcontainer.webapp.WebApp webApp;
 
     private ICollaboratorHelper collabHelper;
-    private IWebAppNameSpaceCollaborator webAppNameSpaceCollab;
     private IWebAppSecurityCollaborator secCollab;
     private boolean sessionSecurityIntegrationEnabled;
     // PK77465 private boolean disableSecurityPreInvokeOnFilters =
@@ -177,7 +176,6 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
         // LIDB-3598: end
 
         this.collabHelper = webApp.getCollaboratorHelper();
-        this.webAppNameSpaceCollab = this.collabHelper.getWebAppNameSpaceCollaborator();
         this.secCollab = this.collabHelper.getSecurityCollaborator();
 
         this.defaultComponentMetaData = webApp.getWebAppCmd();
@@ -237,7 +235,7 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
 
     private void addFilterMapping(FilterMapping fMapping) {
         if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
-            logger.logp(Level.FINE, CLASS_NAME, "addFilterMapping", "filter mapping->" + fMapping);
+            logger.logp(Level.FINE, CLASS_NAME, "addFilterMapping", "filter mapping->" + fMapping + " , name -> "+ fMapping.getFilterConfig().getFilterName());
         }
         if (fMapping != null) {
             _filtersDefined = true;
@@ -801,6 +799,13 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
                 }
                 for (i = 0; i < nbrOfMappings; i++) {
                     fmInfo = (IFilterMapping) servletFilterMappings.get(i);
+                    
+                    if (fmInfo.getServletConfig() == null) {               //issue#9386
+                        if (!this.findAndSetServletInfo(fmInfo)) {
+                            continue;  //skip to the next mapping
+                        }
+                    }
+
                     String filterServlet = fmInfo.getServletConfig().getServletName();
                     if (isTraceOn && logger.isLoggable(Level.FINE)) {
                         logger.logp(Level.FINE, CLASS_NAME, "getFilterChainContents", "filter mapping info->" + fmInfo);
@@ -1271,7 +1276,7 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
             dispatchContext.pushException(ser);
             if (!dispatchContext.isInclude() && !dispatchContext.isForward() && (request instanceof HttpServletRequest)) {
                 if (isTraceOn && logger.isLoggable(Level.FINE)) {
-                    logger.logp(Level.FINE, CLASS_NAME, "invokeFilters", "Servletrror report caught, call send error with security context");
+                    logger.logp(Level.FINE, CLASS_NAME, "invokeFilters", "Servlet error report caught, call send error with security context");
                 }
                 WebApp app = (WebApp) dispatchContext.getWebApp();
                 app.sendError((HttpServletRequest) request, (HttpServletResponse) response, ser);
@@ -1475,5 +1480,27 @@ public class WebAppFilterManager implements com.ibm.wsspi.webcontainer.filter.We
         return true;
     }
     //PI08268
+    
+    //issue#9386
+    private boolean findAndSetServletInfo(IFilterMapping fmInfo) {
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+            logger.logp(Level.FINE, CLASS_NAME, "findAndSetServletInfo", "filter mapping -> " + fmInfo);
+        }
+        String servletName = ((IFilterMappingExtended) fmInfo).getServletFilterMappingName();
+        if (servletName != null) {
+            if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                logger.logp(Level.FINE, CLASS_NAME, "findAndSetServletInfo", "found saved servlet name -> " + servletName);
+            }
+            IServletConfig sConfig = this.webAppConfig.getServletInfo(servletName);
+            if (sConfig != null) {
+                ((IFilterMappingExtended) fmInfo).setServletConfig(sConfig);
+                return true;
+            }
+        }
 
+        logger.logp(Level.WARNING, CLASS_NAME, "findAndSetServletInfo", "no.servlet.defined.for.servlet.filter.name.mapping", new Object [] {servletName, fmInfo.getFilterConfig().getFilterName()});
+
+        return false;
+    }
+    //issue#9386
 }

@@ -9,13 +9,13 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 repositories {
-
-   ivy {
-
-       url "../cnf/local"
-
-   }
-
+  ivy {
+    url "../cnf/local"
+    metadataSources {
+      ivyDescriptor()
+      artifact()
+    }
+  }
 }
 
 configurations {
@@ -26,10 +26,13 @@ dependencies {
   ejbTools 'test:com.ibm.ws.ejbcontainer.fat_tools:1.+'
 }
 
-task addEJBTools << {
-  copy {
-    from configurations.ejbTools
-    into "${buildDir}/autoFVT/publish/servers/com.ibm.ws.ejbcontainer.interceptor.fat.AroundTimeoutServer/lib/global"
+task addEJBTools {
+  dependsOn ':com.ibm.ws.ejbcontainer.fat_tools:release'
+  doLast {
+    copy {
+      from configurations.ejbTools
+      into "${buildDir}/autoFVT/publish/servers/com.ibm.ws.ejbcontainer.interceptor.fat.AroundTimeoutServer/lib/global"
+    }
   }
 }
 

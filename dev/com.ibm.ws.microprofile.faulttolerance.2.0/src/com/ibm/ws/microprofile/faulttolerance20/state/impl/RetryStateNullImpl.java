@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,6 +12,7 @@ package com.ibm.ws.microprofile.faulttolerance20.state.impl;
 
 import java.util.concurrent.TimeUnit;
 
+import com.ibm.ws.microprofile.faulttolerance.spi.RetryResultCategory;
 import com.ibm.ws.microprofile.faulttolerance20.impl.MethodResult;
 import com.ibm.ws.microprofile.faulttolerance20.state.RetryState;
 
@@ -34,10 +35,21 @@ public class RetryStateNullImpl implements RetryState {
         public long getDelay() {
             return 0;
         }
+
+        @Override
+        public RetryResultCategory getCategory() {
+            return RetryResultCategory.NO_RETRY;
+        }
+
+        @Override
+        public String toString() {
+            return "@Retry annotation not used";
+        }
     };
 
     @Override
-    public void start() {}
+    public void start() {
+    }
 
     @Override
     public RetryResult recordResult(MethodResult<?> result) {

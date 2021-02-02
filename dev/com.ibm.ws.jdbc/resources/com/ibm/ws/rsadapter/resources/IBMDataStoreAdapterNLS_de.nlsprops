@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2001, 2016 IBM Corporation and others.
+# Copyright (c) 2001, 2019 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -271,6 +271,22 @@ DSRA4011.tran.none.iso.switch.unsupported=DSRA4011E: Der JDBC-Treiber unterst\u0
 DSRA4011.tran.none.iso.switch.unsupported.explanation=Die JDBC-Spezifikation unterst\u00fctzt den Wechsel auf die Isolationsstufe TRANSACTION_NONE nicht.
 DSRA4011.tran.none.iso.switch.unsupported.useraction=Vermeiden Sie den Wechsel auf die Isolationsstufe TRANSACTION_NONE.
 
+DSRA4012.ignored.datasource.config.used=DSRA4012I: Bei der Verwendung von Oracle UCP werden die folgenden Datenquelleneigenschaften ignoriert: {0}.
+DSRA4012.ignored.datasource.config.used.explanation=Die aufgef\u00fchrten Datenquelleneigenschaften sind nicht g\u00fcltig, wenn Oracle UCP verwendet wird.
+DSRA4012.ignored.datasource.config.used.useraction=Entfernen Sie die Datenquelleneigenschaften und verwenden Sie stattdessen die entsprechende Oracle UCP-Funktionalit\u00e4t, sofern verf\u00fcgbar.
+
+DSRA4013.ignored.connection.manager.config.used=DSRA4013I: Die Verbindungsmanagereigenschaften sind nicht g\u00fcltig. Bei der Verwendung von Oracle UCP sind die folgenden Verbindungsmanagereigenschaften zul\u00e4ssig: {0}.
+DSRA4013.ignored.connection.manager.config.used.explanation=Bei der Verwendung von Oracle UCP sind nur die aufgef\u00fchrten Verbindungsmanagereigenschaften g\u00fcltig.
+DSRA4013.ignored.connection.manager.config.used.useraction=Entfernen Sie die Verbindungsmanagereigenschaften, die nicht g\u00fcltig sind und verwenden Sie stattdessen die entsprechende Oracle UCP-Funktionalit\u00e4t, sofern verf\u00fcgbar.
+
+DSRA4014.URL.for.Driver.missing=DSRA4014E: java.sql.Driver wurde als Typ f\u00fcr eine Datenquelle {0} angegeben, aber es wurden keine URL-Attribute angegeben.
+DSRA4014.URL.for.Driver.missing.explanation=Sie m\u00fcssen f\u00fcr eine Datenquelle vom Typ java.sql.Driver eine Verbindungs-URL angegeben.
+DSRA4014.URL.for.Driver.missing.useraction=F\u00fcgen Sie der Datenquelle eine g\u00fcltige URL hinzu.
+
+DSRA4015.no.ucp.connection.pool.datasource=DSRA4015E: Die Datenquelle {0} wurde mit dem Typ {1} konfiguriert, der nicht von Oracle UCP unterst\u00fctzt wird. Verwenden Sie stattdessen den Typ XADataSource oder DataSource.
+DSRA4015.no.ucp.connection.pool.datasource.explanation=Die Datenquelle wurde mit dem Typ ConnectionPoolDataSource oder dem Treibertyp konfiguriert. Dies wird vom Treiber Oracle UCP nicht implementiert.
+DSRA4015.no.ucp.connection.pool.datasource.useraction=\u00c4ndern Sie den Typ f\u00fcr die Datenquelle entweder in XADataSource oder in DataSource.
+
 # ----------------------------------------------------------------------------
 # 
 # Using 7000-7599 for DataStore Helper exception messages and warnings
@@ -349,6 +365,20 @@ PROP_SET_ERROR.useraction=Stellen Sie sicher, dass der angegebene Wert f\u00fcr 
 # 8050-8055 deleted
 # 8060 deleted
 # 8065 deleted
+     
+# 8066E
+# {0}         The invalid attribute value
+# {1}         The allowed attribute values
+# Do not translate: identifyException, as
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET=DSRA8066E: Der ung\u00fcltige Wert ''{0}'' wurde f\u00fcr das Attribut ''as'' im Element identifyException angegeben. Zul\u00e4ssige Werte: {1}
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.explanation=Es wurde ein ung\u00fcltiger Wert f\u00fcr das Konfigurationselement identifyException angegeben.
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.useraction=Aktualisieren Sie die Konfiguration, um einen der zul\u00e4ssigen Werte anzugeben.
+
+# 8067E
+# Do not translate: errorCode, sqlState, identifyException
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE=DSRA8067E: Es muss mindestens eines der beiden folgenden Attribute im Element identifyException angegeben werden: 'errorCode' oder 'sqlState'
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.explanation=Es muss eines der folgenden Attribute angegeben werden: errorCode oder sqlState.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.useraction=Aktualisieren Sie die Konfiguration, um mindestens eines der Attribute (errorCode oder sqlState) im Element identifyException anzugeben.
 
 # 8100E      JAVAX_CONN_ERR
 # 
@@ -534,6 +564,13 @@ NO_WRAPPED_OBJECT.useraction=Stellen Sie sicher, dass der Wrapper und die Parame
 
 # 9123 deleted
 
+# 9124       NOT_AN_INTERFACE
+#
+# {0}        The Class that was specified to unwrap to
+NOT_AN_INTERFACE=DSRA9124E: Das Objekt-Wrapping f\u00fcr {0} kann nicht aufgehoben werden, weil {0} keine Schnittstellenklasse ist.
+NOT_AN_INTERFACE.explanation=Die Unwrap-Methode erlaubt nur das Aufheben von Wrapping f\u00fcr eine Schnittstellenklasse.
+NOT_AN_INTERFACE.useraction=Heben Sie das Wrapping f\u00fcr eine Klasse auf, die eine Schnittstelle ist, anstatt f\u00fcr eine konkrete Klasse.
+
 # 9130E      OPERATION_NOT_PERMITTED
 # 
 # {0}        The operation.
@@ -624,6 +661,10 @@ KERBEROS_NOT_SUPPORTED_WARNING.explanation= Application Server unterst\u00fctzt 
 KERBEROS_NOT_SUPPORTED_WARNING.useraction= Inaktivieren Sie Kerberos, oder verwenden Sie eine DB2-Back-End-Datenbank mit dem Treiber "DB2 Universal JDBC".
 
 # 9544-9548 deleted
+
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED=DSRA9549E: Die Verwendung des SDK IBM Java 8 mit einer Oracle-Datenbank wird nicht unterst\u00fctzt. Der Oracle-JDBC-Treiber unterst\u00fctzt nur die Kerberos-Authentifizierung mit den Standardberechtigungs-APIs, die in OpenJDK, OpenJ9 oder \u00e4hnlichen SDKs verf\u00fcgbar sind.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.explanation=Die Verwendung des SDK IBM Java 8 mit einer Oracle-Datenbank wird nicht unterst\u00fctzt. Der Oracle-JDBC-Treiber unterst\u00fctzt nur die Kerberos-Authentifizierung mit den Standardberechtigungs-APIs, die in OpenJDK, OpenJ9 oder \u00e4hnlichen SDKs verf\u00fcgbar sind.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.useraction=Inaktivieren Sie die Kerberos-Authentifizierung f\u00fcr die Oracle-Datenquelle oder wechseln Sie zu einem anderen Java-SDK als dem SDK IBM Java 8.
 
 # 9600-9603 deleted 
 # 9900 deleted

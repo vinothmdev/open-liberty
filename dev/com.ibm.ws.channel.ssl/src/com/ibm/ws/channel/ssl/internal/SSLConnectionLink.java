@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2018 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -120,6 +120,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      */
     @Override
     public void init(VirtualConnection inVC) {
+
         this.vcHashCode = inVC.hashCode();
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "init, vc=" + getVCHash());
@@ -133,13 +134,15 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
         // Check to see if http/2 is enabled for this connection and save the result
         if (CHFWBundle.getServletConfiguredHttpVersionSetting() != null) {
-            if (SSLChannelConstants.OPTIONAL_DEFAULT_OFF_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
+            if (CHFWBundle.isHttp2DisabledByDefault()) {
                 if (getChannel().getUseH2ProtocolAttribute() != null && getChannel().getUseH2ProtocolAttribute()) {
                     http2Enabled = true;
+                    this.sslChannel.checkandInitALPN();
                 }
-            } else if (SSLChannelConstants.OPTIONAL_DEFAULT_ON_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
+            } else if (CHFWBundle.isHttp2EnabledByDefault()) {
                 if (getChannel().getUseH2ProtocolAttribute() == null || getChannel().getUseH2ProtocolAttribute()) {
                     http2Enabled = true;
+                    this.sslChannel.checkandInitALPN();
                 }
             }
         }
@@ -374,15 +377,17 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         private WsByteBuffer encryptedAppBuffer;
         /** Inbound or outbound */
         private final FlowType flowType;
+        /** allow other code to tell this class if they changed netBuffer */
+        private WsByteBuffer updatedNetBuffer = null;
 
         /**
          * Constructor.
          *
-         * @param _connLink SSLConnectionLink associated with this callback.
-         * @param _netBuffer Buffer from the network / device side.
+         * @param _connLink           SSLConnectionLink associated with this callback.
+         * @param _netBuffer          Buffer from the network / device side.
          * @param _decryptedNetBuffer Buffer containing results of decrypting netbuffer
          * @param _encryptedAppBuffer Encrypted buffer to be sent out through network / device side.
-         * @param _flowType inbound or outbound
+         * @param _flowType           inbound or outbound
          */
         public MyHandshakeCompletedCallback(
                                             SSLConnectionLink _connLink,
@@ -396,6 +401,17 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             this.decryptedNetBuffer = _decryptedNetBuffer;
             this.encryptedAppBuffer = _encryptedAppBuffer;
             this.flowType = _flowType;
+        }
+
+        @Override
+        public void updateNetBuffer(WsByteBuffer newBuffer) {
+            netBuffer = newBuffer;
+            updatedNetBuffer = newBuffer;
+        }
+
+        @Override
+        public WsByteBuffer getUpdatedNetBuffer() {
+            return updatedNetBuffer;
         }
 
         /*
@@ -429,11 +445,20 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         @Override
         public void error(IOException ioe) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
-                Tr.entry(tc, "error (handshake), vc=" + getVCHash());
+                Tr.debug(tc, "error (handshake), vc=" + getVCHash());
             }
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                 Tr.debug(tc, "Caught exception during unwrap, " + ioe);
             }
+
+            // cleanup possible ALPN resources
+            if (flowType == FlowType.INBOUND) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Cleanup possible ALPN resources - error callback");
+                }
+                AlpnSupportUtils.getAlpnResult(getSSLEngine(), this.connLink);
+            }
+
             if (decryptedNetBuffer != null) {
                 decryptedNetBuffer.release();
                 decryptedNetBuffer = null;
@@ -563,9 +588,15 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             // Continue the SSL handshake. Do this with asynchronous handShake
             result = SSLUtils.handleHandshake(this, netBuffer, decryptedNetBuffer,
                                               encryptedAppBuffer, result, callback, false);
+
             // Check to see if the work was able to be done synchronously.
             if (result != null) {
                 // Handshake is done.
+
+                if ((callback != null) && (callback.getUpdatedNetBuffer() != null)) {
+                    netBuffer = callback.getUpdatedNetBuffer();
+                }
+
                 readyInboundPostHandshake(netBuffer, decryptedNetBuffer,
                                           encryptedAppBuffer, result.getHandshakeStatus());
             } else {
@@ -694,6 +725,9 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         encryptedAppBuffer.release();
 
         if (hsStatus == HandshakeStatus.FINISHED) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Cleanup possible ALPN resources - handshake finished");
+            }
             AlpnSupportUtils.getAlpnResult(getSSLEngine(), this);
 
             // PK16095 - take certain actions when the handshake completes
@@ -725,12 +759,16 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         } else {
             // Unknown result from handshake. All other results should have thrown exceptions.
             // Clean up buffers used during read.
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Unhandled result from SSL engine: " + hsStatus);
+                Tr.debug(tc, "Cleanup possible ALPN resources on unhandled results");
+            }
+            AlpnSupportUtils.getAlpnResult(getSSLEngine(), this);
+
             netBuffer.release();
             getDeviceReadInterface().setBuffers(null);
             decryptedNetBuffer.release();
-            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                Tr.debug(tc, "Unhandled result from SSL engine: " + hsStatus);
-            }
+
             SSLException ssle = new SSLException("Unhandled result from SSL engine: " + hsStatus);
             FFDCFilter.processException(ssle, getClass().getName(), "401", this);
             close(getVirtualConnection(), ssle);
@@ -746,7 +784,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      * outbound socket has been established. Establish the SSL connection before reporting
      * to the next channel. Note, this method is called in both sync and async flows.
      *
-     * @param inVC virtual connection associated with this request
+     * @param inVC  virtual connection associated with this request
      * @param async flag for asynchronous (true) or synchronous (false)
      * @throws IOException
      */
@@ -781,6 +819,10 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             // Check to see if the work was able to be done synchronously.
             if (sslResult != null) {
                 // Handshake was done synchronously.
+                if ((callback != null) && (callback.getUpdatedNetBuffer() != null)) {
+                    netBuffer = callback.getUpdatedNetBuffer();
+                }
+
                 readyOutboundPostHandshake(netBuffer, decryptedNetBuffer,
                                            encryptedAppBuffer, sslResult.getHandshakeStatus(), async);
             }
@@ -828,11 +870,11 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      * This method is called to handle the results of an SSL handshake. This may be called
      * by a callback or in the same thread as the connect request.
      *
-     * @param netBuffer buffer for data flowing in fron the net
+     * @param netBuffer          buffer for data flowing in fron the net
      * @param decryptedNetBuffer buffer for decrypted data from the net
      * @param encryptedAppBuffer buffer for encrypted data flowing from the app
-     * @param hsStatus output from the last call to the SSL engine
-     * @param async whether this is for an async (true) or sync (false) request
+     * @param hsStatus           output from the last call to the SSL engine
+     * @param async              whether this is for an async (true) or sync (false) request
      * @throws IOException
      */
     protected void readyOutboundPostHandshake(
@@ -856,7 +898,6 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             }
             exception = new IOException("Unexpected results of handshake after connect, " + hsStatus);
         }
-        AlpnSupportUtils.getAlpnResult(getSSLEngine(), this);
 
         // PK16095 - take certain actions when the handshake completes
         getChannel().onHandshakeFinish(getSSLEngine());

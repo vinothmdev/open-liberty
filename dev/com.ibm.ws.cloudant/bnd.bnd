@@ -5,10 +5,7 @@ Bundle-Name: Cloudant
 Bundle-SymbolicName: com.ibm.ws.cloudant
 Bundle-Description: Allow applications to access Cloudant client APIs as a feature; version=${bVersion}
 
-javac.source: 1.8
-javac.target: 1.8
 
-Require-Capability: osgi.ee; filter:="(&(osgi.ee=JavaSE)(version=1.8))"
 
 WS-TraceGroup: cloudant
 
@@ -21,12 +18,15 @@ DynamicImport-Package: \
     com.ibm.wsspi.ssl
 
 Private-Package:\
-     com.ibm.ws.cloudant.*
+     com.ibm.ws.cloudant.internal
+     
+Export-Package: \
+    com.ibm.ws.cloudant
 
 Include-Resource:\
     OSGI-INF=resources/OSGI-INF
 
--dsannotations: com.ibm.ws.cloudant.internal.CloudantDatabaseService,\
+-dsannotations: com.ibm.ws.cloudant.CloudantDatabaseService,\
  com.ibm.ws.cloudant.internal.CloudantApplicationListener
 
 Service-Component: \

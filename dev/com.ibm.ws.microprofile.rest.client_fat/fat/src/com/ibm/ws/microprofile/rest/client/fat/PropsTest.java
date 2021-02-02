@@ -29,13 +29,19 @@ import mpRestClient10.props.PropsTestServlet;
 @RunWith(FATRunner.class)
 public class PropsTest extends FATServletClient {
 
+    final static String SERVER_NAME = "mpRestClient10.props";
+
     @ClassRule
     public static RepeatTests r = RepeatTests.withoutModification()
-        .andWith(new FeatureReplacementAction("mpRestClient-1.0", "mpRestClient-1.1").forServers("mpRestClient10.props"));
+        .andWith(FATSuite.MP_REST_CLIENT("1.1", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.2", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.3", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "1.4", SERVER_NAME))
+        .andWith(FATSuite.MP_REST_CLIENT(FeatureReplacementAction.EE8_FEATURES(), "2.0", SERVER_NAME));
 
     private static final String appName = "propsApp";
 
-    @Server("mpRestClient10.props")
+    @Server(SERVER_NAME)
     @TestServlet(servlet = PropsTestServlet.class, contextRoot = appName)
     public static LibertyServer server;
 
@@ -47,6 +53,6 @@ public class PropsTest extends FATServletClient {
 
     @AfterClass
     public static void afterClass() throws Exception {
-        server.stopServer();
+        server.stopServer("CWWKE1102W");  //ignore server quiesce timeouts due to slow test machines
     }
 }

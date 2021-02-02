@@ -19,12 +19,9 @@ import static org.junit.Assert.fail;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-
-import test.common.SharedOutputManager;
+import org.junit.rules.TestRule;
 
 import com.ibm.websphere.channelfw.ChainData;
 import com.ibm.websphere.channelfw.FlowType;
@@ -58,44 +55,15 @@ import com.ibm.wsspi.channelfw.exception.IncoherentChainException;
 import com.ibm.wsspi.channelfw.exception.InvalidChainNameException;
 import com.ibm.wsspi.channelfw.exception.InvalidRuntimeStateException;
 
+import test.common.SharedOutputManager;
+
 /**
  * Test the lifecycle of chains.
  */
 public class ChainLifeCycleTest {
-    private static SharedOutputManager outputMgr;
-
-    /**
-     * Capture stdout/stderr output to the manager.
-     * 
-     * @throws Exception
-     */
-    @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-        outputMgr = SharedOutputManager.getInstance();
-        outputMgr.captureStreams();
-    }
-
-    /**
-     * Final teardown work when class is exiting.
-     * 
-     * @throws Exception
-     */
-    @AfterClass
-    public static void tearDownAfterClass() throws Exception {
-        // Make stdout and stderr "normal"
-        outputMgr.restoreStreams();
-    }
-
-    /**
-     * Individual teardown after each test.
-     * 
-     * @throws Exception
-     */
-    @After
-    public void tearDown() throws Exception {
-        // Clear the output generated after each method invocation
-        outputMgr.resetStreams();
-    }
+    private static SharedOutputManager outputMgr = SharedOutputManager.getInstance();
+    @Rule
+    public TestRule managerRule = outputMgr;
 
     // Helper method to create valid tcp props to start a chain with TCP in it.
     private Map<Object, Object> getTcpProps(String portProp, String defPort) {
@@ -554,53 +522,45 @@ public class ChainLifeCycleTest {
 
             ChannelFrameworkImpl framework = new ChannelFrameworkImpl();
 
-            TestEventListener testListener = new TestEventListener()
-            {
+            TestEventListener testListener = new TestEventListener() {
                 @Override
-                public synchronized void chainInitialized(ChainData chainData)
-                {
+                public synchronized void chainInitialized(ChainData chainData) {
                     System.out.println(chainData.getName() + " intitialized");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void chainStarted(ChainData chainData)
-                {
+                public synchronized void chainStarted(ChainData chainData) {
                     System.out.println(chainData.getName() + " started");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void chainStopped(ChainData chainData)
-                {
+                public synchronized void chainStopped(ChainData chainData) {
                     System.out.println(chainData.getName() + " stopped");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void chainQuiesced(ChainData chainData)
-                {
+                public synchronized void chainQuiesced(ChainData chainData) {
                     System.out.println(chainData.getName() + " quiesced");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void chainDestroyed(ChainData chainData)
-                {
+                public synchronized void chainDestroyed(ChainData chainData) {
                     System.out.println(chainData.getName() + " destroyed");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void chainUpdated(ChainData chainData)
-                {
+                public synchronized void chainUpdated(ChainData chainData) {
                     System.out.println(chainData.getName() + " updated");
                     notifyAll();
                 }
 
                 @Override
-                public synchronized void waitForEvent() throws InterruptedException
-                {
+                public synchronized void waitForEvent() throws InterruptedException {
                     this.wait(5 * 1000); // max wait of 5 seconds
                 }
             };

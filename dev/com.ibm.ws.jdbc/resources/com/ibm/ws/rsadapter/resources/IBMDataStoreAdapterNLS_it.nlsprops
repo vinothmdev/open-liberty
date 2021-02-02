@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2001, 2016 IBM Corporation and others.
+# Copyright (c) 2001, 2019 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -271,6 +271,22 @@ DSRA4011.tran.none.iso.switch.unsupported=DSRA4011E: Il driver JDBC non supporta
 DSRA4011.tran.none.iso.switch.unsupported.explanation=La specifica JDBC non supporta la commutazione a un livello di isolamento di TRANSACTION_NONE.
 DSRA4011.tran.none.iso.switch.unsupported.useraction=Evitare la commutazione a un livello di isolamento di TRANSACTION_NONE.
 
+DSRA4012.ignored.datasource.config.used=DSRA4012I: Quando si utilizza l''UCP Oracle le seguenti propriet\u00e0 di origine dati vengono ignorate: {0}.
+DSRA4012.ignored.datasource.config.used.explanation=Le propriet\u00e0 origine dati elencate non sono valide quando si utilizza UCP Oracle.
+DSRA4012.ignored.datasource.config.used.useraction=Rimuovere le propriet\u00e0 dell'origine dati non valide e utilizzare invece la funzionalit\u00e0 UCP Oracle equivalente, se disponibile.
+
+DSRA4013.ignored.connection.manager.config.used=DSRA4013I: Le propriet\u00e0 del gestore connessioni non sono valide. Quando si utilizza UCP Oracle le seguenti propriet\u00e0 del gestore connessioni sono valide: {0}.
+DSRA4013.ignored.connection.manager.config.used.explanation=Quando si utilizza UCP Oracle, sono valide solo le propriet\u00e0 del gestore connessioni elencate.
+DSRA4013.ignored.connection.manager.config.used.useraction=Rimuovere le propriet\u00e0 del del gestore connessioni non valide e utilizzare invece la funzionalit\u00e0 UCP Oracle equivalente, se disponibile.
+
+DSRA4014.URL.for.Driver.missing=DSRA4014E: \u00c8 stato specificato il tipo java.sql.Driver per l''origine dati specificata {0}, ma non \u00e8 stato specificato un attributo URL.
+DSRA4014.URL.for.Driver.missing.explanation=\u00c8 necessario specificare un URL di connessione per un'origine dati di tipo java.sql.Driver.
+DSRA4014.URL.for.Driver.missing.useraction=Aggiungere un URL valido all'origine dati.
+
+DSRA4015.no.ucp.connection.pool.datasource=DSRA4015E: L''origine dati {0} \u00e8 stata configurata con il tipo {1}, che non \u00e8 supportato da Oracle UCP. Utilizzare, invece, il tipo XADataSource o DataSource.
+DSRA4015.no.ucp.connection.pool.datasource.explanation=L'origine dati \u00e8 stata configurata con il tipo Driver o ConnectionPoolDataSource, che non \u00e8 implementato dal driver Oracle UCP.
+DSRA4015.no.ucp.connection.pool.datasource.useraction=Aggiornare l'origine dati per utilizzare il tipo XADataSource o DataSource.
+
 # ----------------------------------------------------------------------------
 # 
 # Using 7000-7599 for DataStore Helper exception messages and warnings
@@ -349,6 +365,20 @@ PROP_SET_ERROR.useraction=Verificare che il valore specificato sia valido per la
 # 8050-8055 deleted
 # 8060 deleted
 # 8065 deleted
+     
+# 8066E
+# {0}         The invalid attribute value
+# {1}         The allowed attribute values
+# Do not translate: identifyException, as
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET=DSRA8066E: Il valore non valido ''{0}'' \u00e8 stato specificato per l''attributo ''as'' nell''elemento identifyException. I valori consentiti sono: {1}
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.explanation=\u00c8 stato specificato un valore non valido per l'elemento di configurazione identifyException.
+8066E_IDENTIFY_EXCEPTION_INVALID_TARGET.useraction=Aggiornare la configurazione in modo che specifichi uno dei valori consentiti.
+
+# 8067E
+# Do not translate: errorCode, sqlState, identifyException
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE=DSRA8067E: \u00c8 necessario specificare almeno uno tra gli attributi 'errorCode' o 'sqlState' nell'elemento identifyException.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.explanation=\u00c8 necessario specificare uno tra gli attributi errorCode o sqlState.
+8067E_IDENTIFY_EXCEPTION_ERRCODE_SQLSTATE.useraction=Aggiornare la configurazione in modo che specifichi almeno uno tra gli attributi errorCode o sqlState nell'elemento identifyException.
 
 # 8100E      JAVAX_CONN_ERR
 # 
@@ -534,6 +564,13 @@ NO_WRAPPED_OBJECT.useraction=Verificare che il wrapper e i parametri dell'oggett
 
 # 9123 deleted
 
+# 9124       NOT_AN_INTERFACE
+#
+# {0}        The Class that was specified to unwrap to
+NOT_AN_INTERFACE=DSRA9124E: Impossibile eseguire l''unwrap dell''oggetto su {0} perch\u00e9 {0} non \u00e8 una classe di interfaccia.
+NOT_AN_INTERFACE.explanation=Il metodo unwrap consente solo l'unwrap in una classe di interfaccia.
+NOT_AN_INTERFACE.useraction=Eseguire l'unwrap a una classe che sia un'interfaccia invece che una classe concreta.
+
 # 9130E      OPERATION_NOT_PERMITTED
 # 
 # {0}        The operation.
@@ -624,6 +661,10 @@ KERBEROS_NOT_SUPPORTED_WARNING.explanation= Il server delle applicazioni non sup
 KERBEROS_NOT_SUPPORTED_WARNING.useraction= Disabilitare Kerberos oppure utilizzare un backend DB2 con il driver JDBC DB2 Universal.
 
 # 9544-9548 deleted
+
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED=DSRA9549E: L'utilizzo dell'SDK IBM Java 8 con un database Oracle non \u00e8 supportato. Il driver JDBC Oracle supporta l'autenticazione Kerberos solo utilizzando le API di sicurezza predefinite disponibili in OpenJDK, OpenJ9 o altri SDK simili.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.explanation=L'utilizzo dell'SDK IBM Java 8 con un database Oracle non \u00e8 supportato. Il driver JDBC Oracle supporta l'autenticazione Kerberos solo utilizzando le API di sicurezza predefinite disponibili in OpenJDK, OpenJ9 o altri SDK simili.
+KERBEROS_ORACLE_IBMJDK_NOT_SUPPORTED.useraction=Disabilitare l'autenticazione Kerberos per l'origine dati Oracle oppure passare a un SDK Java diverso, superiore a all'SDK IBM Java 8.
 
 # 9600-9603 deleted 
 # 9900 deleted

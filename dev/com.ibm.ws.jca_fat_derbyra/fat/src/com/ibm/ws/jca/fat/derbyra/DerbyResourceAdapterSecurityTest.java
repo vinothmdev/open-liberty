@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2021 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -26,6 +26,7 @@ import com.ibm.websphere.simplicity.ShrinkHelper;
 
 import componenttest.annotation.Server;
 import componenttest.custom.junit.runner.FATRunner;
+import componenttest.rules.repeater.JakartaEE9Action;
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.utils.FATServletClient;
 
@@ -68,6 +69,7 @@ public class DerbyResourceAdapterSecurityTest extends FATServletClient {
 
         ShrinkHelper.exportToServer(server, "connectors", rar);
 
+        server.addEnvVar("PERMISSION", JakartaEE9Action.isActive() ? "jakarta.resource.spi.security.PasswordCredential" : "javax.resource.spi.security.PasswordCredential");
         server.addInstalledAppForValidation(derbyRAAppName);
         server.startServer();
     }
@@ -78,14 +80,17 @@ public class DerbyResourceAdapterSecurityTest extends FATServletClient {
                                         // This may just be because we don't care about including manifest files in our test buckets, if that's the case, we can ignore this.
     }
 
+    private void runTest(String servlet) throws Exception {
+        FATServletClient.runTest(server, servlet, getTestMethodSimpleName());
+    }
+
     @Test
     public void testJCADataSourceResourceRefSecurity() throws Exception {
-        FATServletClient.runTest(server, DerbyRAServlet, testName);
+        runTest(DerbyRAServlet);
     }
 
     @Test
     public void testCustomLoginModuleCF() throws Exception {
-        FATServletClient.runTest(server, DerbyRAAnnoServlet, testName);
+        runTest(DerbyRAAnnoServlet);
     }
-
 }

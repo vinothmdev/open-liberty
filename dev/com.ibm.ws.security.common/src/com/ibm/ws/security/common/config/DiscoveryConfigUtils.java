@@ -1,3 +1,13 @@
+/*******************************************************************************
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ *
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.security.common.config;
 
 import java.util.ArrayList;
@@ -24,7 +34,7 @@ public class DiscoveryConfigUtils {
 
     private CommonConfigUtils configUtils = new CommonConfigUtils();
 
-    private Object discoveryDocumentHash;
+    private String discoveryDocumentHash;
 
     private long discoveryPollingRate;
     
@@ -67,9 +77,7 @@ public class DiscoveryConfigUtils {
     }
     
     public DiscoveryConfigUtils discoveryDocumentHash(String discoveryHash) {    
-        //this.discoveryjson = json;
         this.discoveryDocumentHash = discoveryHash;
-        //this.discoveryPollingRate = discoveryPollingRate;
         return this;
     }
     
@@ -80,11 +88,11 @@ public class DiscoveryConfigUtils {
 
     public String adjustTokenEndpointAuthMethod() {
         ArrayList<String> discoveryTokenepAuthMethod = discoverOPConfig(discoveryjson.get(OPDISCOVERY_TOKEN_EP_AUTH));
-        if (isRPUsingDefault("authMethod") && !opHasRPDefault("authMethod", discoveryTokenepAuthMethod)) {
+        if (isSocialRPUsingDefault("authMethod") && !opHasSocialRPDefault("authMethod", discoveryTokenepAuthMethod)) {
             if (tc.isDebugEnabled()) {
                 Tr.debug(tc, "See if we need to adjusted the token endpoint authmethod. The original is : " + tokenEndpointAuthMethod);
             }
-            String supported  = rpSupportsOPConfig("authMethod", discoveryTokenepAuthMethod);
+            String supported  = socialRPSupportsOPConfig("authMethod", discoveryTokenepAuthMethod);
             if (supported != null) {
                 Tr.info(tc,  "OIDC_CLIENT_DISCOVERY_OVERRIDE_DEFAULT", this.tokenEndpointAuthMethod, CFG_KEY_TOKEN_ENDPOINT_AUTH_METHOD, supported, getId());
                 this.tokenEndpointAuthMethod = supported;
@@ -106,11 +114,11 @@ public class DiscoveryConfigUtils {
      */
     public String adjustScopes() {
         ArrayList<String> discoveryScopes = discoverOPConfig(discoveryjson.get(OPDISCOVERY_SCOPES));
-        if (isRPUsingDefault("scope") && !opHasRPDefault("scope", discoveryScopes)) {
+        if (isSocialRPUsingDefault("scope") && !opHasSocialRPDefault("scope", discoveryScopes)) {
             if (tc.isDebugEnabled()) {
                 Tr.debug(tc, "See if we need to adjusted the scopes. The original is : " + this.scope);
             }
-            String supported  = rpSupportsOPConfig("scope", discoveryScopes);
+            String supported  = socialRPSupportsOPConfig("scope", discoveryScopes);
             if (supported != null) {
                 Tr.info(tc,  "OIDC_CLIENT_DISCOVERY_OVERRIDE_DEFAULT", this.scope, CFG_KEY_SCOPE, supported, getId());
                 this.scope = supported;
@@ -122,15 +130,26 @@ public class DiscoveryConfigUtils {
         return this.scope;
     }
     
+    private boolean isSocialRPUsingDefault(String key) {
+        if ("authMethod".equals(key)) {
+            return matches("client_secret_post", this.tokenEndpointAuthMethod);
+        } else if ("alg".equals(key)) {
+            return matches("RS256", this.signatureAlgorithm);
+        } else if ("scope".equals(key)) {
+            return (matchesMultipleValues("openid profile email", this.scope));
+        }
+        return false;
+    }
+
     /**
      * @param discoveryTokenepAuthMethod
      * @return
      */
-    private String rpSupportsOPConfig(String key, ArrayList<String> values) {
+    private String socialRPSupportsOPConfig(String key, ArrayList<String> values) {
 
-        String rpSupportedSignatureAlgorithms = "HS256 RS256";
-        String rpSupportedTokenEndpointAuthMethods = "post basic";
-        String rpSupportedScopes = "openid profile";
+        String rpSupportedSignatureAlgorithms = "RS256";
+        String rpSupportedTokenEndpointAuthMethods = "client_secret_post client_secret_basic";
+        String rpSupportedScopes = "openid profile email";
 
         if ("alg".equals(key) && values != null) {
             for (String value : values) {
@@ -142,7 +161,6 @@ public class DiscoveryConfigUtils {
 
         if ("authMethod".equals(key) && values != null) {
             for (String value : values) {
-                value = matchingRPValue(value);
                 if (rpSupportedTokenEndpointAuthMethods.contains(value)) {
                     return value;
                 }
@@ -167,22 +185,9 @@ public class DiscoveryConfigUtils {
     }
     
     /**
-     * @param value
-     * @return
-     */
-    private String matchingRPValue(String value) {
-        if ("client_secret_post".equals(value)) {
-            return "post";
-        } else if ("client_secret_basic".equals(value)) {
-            return "basic";
-        }
-        return value;
-    }
-    
-    /**
      * @param object
      */
-    private ArrayList<String> discoverOPConfig(Object obj) {
+    public ArrayList<String> discoverOPConfig(Object obj) {
         return jsonValue(obj);
     }
 
@@ -224,49 +229,48 @@ public class DiscoveryConfigUtils {
         return jsonString;
     }
 
-    
-    /**
-     * @param string
-     * @return
-     */
-    private boolean opHasRPDefault(String key, ArrayList<String> opconfig) {
+    private boolean opHasSocialRPDefault(String key, ArrayList<String> opconfig) {
 
         if ("authMethod".equals(key)) {
             return matches("client_secret_post", opconfig);
         } else if ("alg".equals(key)) {
-            return matches("HS256", opconfig);
+            return matches("RS256", opconfig);
         } else if ("scope".equals(key)) {
-            return matches("openid", opconfig) && matches("profile", opconfig);
+            return matches("openid", opconfig) && matches("profile", opconfig) && matches("email", opconfig);
         }
         return false;
     }
 
-    private boolean matches(String rpdefault, ArrayList<String> opconfig) {
+    public boolean matches(String rpdefault, ArrayList<String> opconfig) {
+        if (opconfig == null) {
+            return rpdefault == null;
+        }
         for (String str : opconfig) {
-            if (rpdefault.equals(str)) {
+            if (rpdefault != null && rpdefault.equals(str)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean matches(String rpdefault, String rpconfig) {
+    public boolean matches(String rpdefault, String rpconfig) {
+        if (rpconfig == null) {
+            return rpdefault == null;
+        }
         return rpconfig.equals(rpdefault);
     }
 
-    /**
-     * @param string
-     * @return
-     */
-    private boolean isRPUsingDefault(String key) {
-        if ("authMethod".equals(key)) {
-            return matches("post", this.tokenEndpointAuthMethod);
-        } else if ("alg".equals(key)) {
-            return matches("HS256", this.signatureAlgorithm);
-        } else if ("scope".equals(key)) {
-            return matches("openid profile", this.scope);
+    private boolean matchesMultipleValues(String rpdefault, String rpconfig) {
+        String[] configuredScope = rpconfig.split(" ");
+        if (configuredScope.length != 3) {
+            return false;
         }
-        return false;
+        for (String scope : configuredScope) {
+            if (!rpdefault.contains(scope)) {
+                return false;
+            }
+        }
+        return true;
     }
     
     /**
@@ -274,8 +278,11 @@ public class DiscoveryConfigUtils {
      * @return
      */
     public String discoverOPConfigSingleValue(Object object) {
-       
-        return jsonValue(object).get(0);
+        String str = null;
+        if (object != null) {
+            return jsonValue(object).get(0);
+        }
+        return str;
     }
 
     /**
@@ -311,7 +318,7 @@ public class DiscoveryConfigUtils {
      */
     private void logWarning(String key, String endpoints) {
            
-        Tr.warning(tc, key, KEY_DISCOVERY_ENDPOINT, endpoints, getId());
+        Tr.warning(tc, key, this.discoveryURL, endpoints, getId());
         
     }
 
@@ -327,35 +334,45 @@ public class DiscoveryConfigUtils {
     /**
      * @param string
      */
-    public void logDiscoveryMessage(String key, String defaultMessage) {
+    public void logDiscoveryMessage(String key, String nlsMessage, String defaultMessage) {
         //String defaultMessage = "Error processing discovery request";
 
+        if (nlsMessage != null) {
+            Tr.info(tc, nlsMessage);
+        } else {
+            Tr.info(tc, getNlsMessage(key, defaultMessage));
+        }     
+    }
+
+    private String getNlsMessage(String key, String defaultMessage) {
         String message = defaultMessage;
-        if (key != null) {
-            message = TraceNLS.getFormattedMessage(getClass(),
-                    "com.ibm.ws.security.common.internal.resources.SSOCommonMessages", key,
-                    new Object[] { getId(), this.discoveryURL }, defaultMessage);
-        }       
-        Tr.info(tc, message);
+        String bundleName = "com.ibm.ws.security.common.internal.resources.SSOCommonMessages";
+        message = TraceNLS.getFormattedMessage(getClass(),
+                bundleName, key,
+                new Object[] { getId(), this.discoveryURL }, defaultMessage);
+             
+        return message;
     }
 
     public boolean calculateDiscoveryDocumentHash(JSONObject json) {
         String latestDiscoveryHash = HashUtils.digest(json.toString());
-        //TODO
-        String OIDC_CLIENT_DISCOVERY_UPDATED_CONFIG="CWWKS6110I: The client [{" + getId() + "}] configuration has been updated with the new information received from the discovery endpoint URL [{"+ this.discoveryURL + "}].";
+        String OIDC_CLIENT_DISCOVERY_UPDATED_CONFIG="CWWKS6111I: The client [{" + getId() + "}] configuration has been updated with the new information received from the discovery endpoint URL [{"+ this.discoveryURL + "}].";
         boolean updated = false;
         if (this.discoveryDocumentHash == null || !this.discoveryDocumentHash.equals(latestDiscoveryHash)) {
             if (this.discoveryDocumentHash != null) {
-                logDiscoveryMessage(null, OIDC_CLIENT_DISCOVERY_UPDATED_CONFIG);
+                logDiscoveryMessage("OIDC_CLIENT_DISCOVERY_UPDATED_CONFIG", null, OIDC_CLIENT_DISCOVERY_UPDATED_CONFIG);
             }
             updated = true;
             this.discoveryDocumentHash = latestDiscoveryHash;
         } else if (this.discoveryDocumentHash != null && this.discoveryDocumentHash.equals(latestDiscoveryHash)) {
-            String OIDC_CLIENT_DISCOVERY_NOT_UPDATED_CONFIG="CWWKS6110I: The client [{" + getId() + "}] configuration has been updated with the new information received from the discovery endpoint URL [{"+ this.discoveryURL + "}].";
-            logDiscoveryMessage(null, OIDC_CLIENT_DISCOVERY_NOT_UPDATED_CONFIG);
+            String OIDC_CLIENT_DISCOVERY_NOT_UPDATED_CONFIG="CWWKS6112I: The client [{" + getId() + "}] configuration is consistent with the information from the discovery endpoint URL [{"+ this.discoveryURL + "}], so no configuration updates are needed.";
+            logDiscoveryMessage("OIDC_CLIENT_DISCOVERY_NOT_UPDATED_CONFIG", null, OIDC_CLIENT_DISCOVERY_NOT_UPDATED_CONFIG);
         }
         return updated;
     }
     
+    public String getDiscoveryDocumentHash() {
+        return this.discoveryDocumentHash;
+    }
     
 }

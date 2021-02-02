@@ -28,14 +28,14 @@ public class RequestProbeClassVisitor extends ClassVisitor {
 
 	//private final RequestProbeTransformDescriptor metaobj;
 	private String classname = null;
-	private static final TraceComponent tc = Tr.register(RequestProbeClassVisitor.class);
+	private static final TraceComponent tc = Tr.register(RequestProbeClassVisitor.class,"requestProbe", "com.ibm.ws.request.probe.internal.resources.LoggingMessages");
 	String[] listOfMonitoredMethods = null;
 
 	/**
 	 * @param arg0
 	 */
 	public RequestProbeClassVisitor(ClassVisitor cv, String clsName) {
-		super(Opcodes.ASM7, cv);
+		super(Opcodes.ASM8, cv);
 		this.classname = clsName;
 	}
 

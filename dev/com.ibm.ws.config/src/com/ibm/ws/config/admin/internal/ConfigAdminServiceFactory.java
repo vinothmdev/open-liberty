@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2010 IBM Corporation and others.
+ * Copyright (c) 2010,2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,6 +11,7 @@
 
 package com.ibm.ws.config.admin.internal;
 
+import java.io.IOException;
 import java.security.Permission;
 import java.util.Collections;
 import java.util.Dictionary;
@@ -34,6 +35,7 @@ import org.osgi.util.tracker.ServiceTracker;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.config.admin.ConfigID;
 import com.ibm.ws.config.admin.ExtendedConfiguration;
 import com.ibm.wsspi.kernel.service.location.VariableRegistry;
@@ -41,7 +43,7 @@ import com.ibm.wsspi.kernel.service.location.VariableRegistry;
 /**
  * A factory to create instances of ConfigurationAdmin.
  * It also contains all of centralized maps and tables
- * 
+ *
  */
 class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, BundleListener {
 
@@ -68,7 +70,7 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
     private final PluginManager pluginManager;
     private final ConfigurationStore configurationStore;
 
-    protected final UpdateQueue<String> updateQueue;
+    protected final UpdateQueue<String> updateQueue = new UpdateQueue<>();
 
     private final ConfigEventDispatcher ced;
 
@@ -86,9 +88,9 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
 
     /**
      * Constructor.
-     * 
+     *
      * @param bc
-     *            BundleContext
+     *               BundleContext
      */
     public ConfigAdminServiceFactory(BundleContext bc) {
         this.bundleContext = bc;
@@ -103,8 +105,6 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
         pluginManager.start();
 
         this.ced = new ConfigEventDispatcher(this, bc);
-
-        this.updateQueue = new UpdateQueue<String>();
 
         this.msTracker = new ManagedServiceTracker(this, bc);
         this.msfTracker = new ManagedServiceFactoryTracker(this, bc);
@@ -128,6 +128,11 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
         this.configurationAdminRef.unregister();
         this.msfTracker.close();
         this.msTracker.close();
+        try {
+            configurationStore.saveConfigurationDatas(true);
+        } catch (IOException e) {
+            // Auto FFDC
+        }
         this.updateQueue.shutdown();
         this.ced.close();
         pluginManager.stop();
@@ -140,7 +145,7 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
 
     /*
      * (non-Javadoc)
-     * 
+     *
      * @see
      * org.osgi.framework.ServiceFactory#getService(org.osgi.framework.Bundle,
      * org.osgi.framework.ServiceRegistration)
@@ -154,13 +159,14 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
 
     /*
      * (non-Javadoc)
-     * 
+     *
      * @see
      * org.osgi.framework.ServiceFactory#ungetService(org.osgi.framework.Bundle,
      * org.osgi.framework.ServiceRegistration, java.lang.Object)
      */
     @Override
-    public void ungetService(Bundle bundle, ServiceRegistration<ConfigurationAdmin> registration, ConfigurationAdmin service) {}
+    public void ungetService(Bundle bundle, ServiceRegistration<ConfigurationAdmin> registration, ConfigurationAdmin service) {
+    }
 
     public void registerConfiguration(ConfigID id, ExtendedConfigurationImpl config) {
         if (tc.isDebugEnabled()) {
@@ -249,6 +255,7 @@ class ConfigAdminServiceFactory implements ServiceFactory<ConfigurationAdmin>, B
             configurationStore.unbindConfigurations(event.getBundle());
     }
 
+    @Trivial
     public void checkConfigurationPermission() throws SecurityException {
         SecurityManager sm = System.getSecurityManager();
         if (sm != null)

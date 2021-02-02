@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2017 IBM Corporation and others.
+ * Copyright (c) 2012, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,9 +11,13 @@
 package com.ibm.ws.logging.internal.impl;
 
 import java.lang.reflect.Array;
+import java.lang.reflect.Proxy;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.text.MessageFormat;
+import java.util.Collection;
+import java.util.ConcurrentModificationException;
+import java.util.NoSuchElementException;
 import java.util.ResourceBundle;
 import java.util.logging.Formatter;
 import java.util.logging.Level;
@@ -43,6 +47,12 @@ public class BaseTraceFormatter extends Formatter {
 
     static final int basicNameLength = 13;
     static final int enhancedNameLength = 60;
+    static final int COLLECTION_DEPTH_LIMIT = AccessController.doPrivileged(new PrivilegedAction<Integer>() {
+        @Override
+        public Integer run() {
+            return Integer.getInteger("com.ibm.ws.logging.collectionDepthLimit", 8);
+        }
+    });
 
     static final String pad8 = "        ";
     static final String basicPadding = "                                 ";
@@ -58,6 +68,8 @@ public class BaseTraceFormatter extends Formatter {
     static final String emptyStringReplacement = "\"\"";
     static final String ENTRY = "Entry ";
     static final String EXIT = "Exit ";
+    static final String SYSOUT = "SystemOut";
+    static final String SYSERR = "SystemErr";
 
     /**
      * Array used to convert integers to hex values
@@ -156,21 +168,6 @@ public class BaseTraceFormatter extends Formatter {
         return "";
     }
 
-    //copied from BTS
-    /** Flags for suppressing traceback output to the console */
-    private static class StackTraceFlags {
-        boolean needsToOutputInternalPackageMarker = false;
-        boolean isSuppressingTraces = false;
-    }
-
-    /** Track the stack trace printing activity of the current thread */
-    private static ThreadLocal<StackTraceFlags> traceFlags = new ThreadLocal<StackTraceFlags>() {
-        @Override
-        protected StackTraceFlags initialValue() {
-            return new StackTraceFlags();
-        }
-    };
-
     final TraceFormat traceFormat;
 
     static boolean useIsoDateFormat = false;
@@ -211,10 +208,10 @@ public class BaseTraceFormatter extends Formatter {
      *
      * @param logRecord
      * @param id
-     * @param formattedMsg the result of {@link #formatMessage}, or null if that
-     *            method was not previously called
+     * @param formattedMsg        the result of {@link #formatMessage}, or null if that
+     *                                method was not previously called
      * @param formattedVerboseMsg the result of {@link #formatVerboseMessage},
-     *            or null if that method was not previously called
+     *                                or null if that method was not previously called
      * @return
      */
     public String traceLogFormat(LogRecord logRecord, Object id, String formattedMsg, String formattedVerboseMsg) {
@@ -262,7 +259,7 @@ public class BaseTraceFormatter extends Formatter {
      * formatObj(...) to the log record message.
      *
      * @param logRecord
-     * @param logParams the parameters for the message
+     * @param logParams         the parameters for the message
      * @param useResourceBundle
      * @return
      */
@@ -315,8 +312,8 @@ public class BaseTraceFormatter extends Formatter {
      * reused if specified and no parameters need to be modified.
      *
      * @param logRecord
-     * @param msg the result of {@link #formatMessage}, or null if that method
-     *            was not previously called
+     * @param msg       the result of {@link #formatMessage}, or null if that method
+     *                      was not previously called
      * @return
      */
     public String formatVerboseMessage(LogRecord logRecord, String msg) {
@@ -330,8 +327,8 @@ public class BaseTraceFormatter extends Formatter {
      * reused if specified and no parameters need to be modified.
      *
      * @param logRecord
-     * @param formattedMsg the result of {@link #formatMessage}, or null if that
-     *            method was not previously called
+     * @param formattedMsg      the result of {@link #formatMessage}, or null if that
+     *                              method was not previously called
      * @param useResourceBundle
      * @return the formatted message
      */
@@ -403,7 +400,7 @@ public class BaseTraceFormatter extends Formatter {
      * messages
      *
      * @param logRecord
-     * @param txt the result of {@link #formatMessage}
+     * @param txt       the result of {@link #formatMessage}
      * @return Formatted string for the console
      */
     public String consoleLogFormat(LogRecord logRecord, String txt) {
@@ -474,7 +471,12 @@ public class BaseTraceFormatter extends Formatter {
         // This is a very light trace format, based on enhanced:
         StringBuilder sb = new StringBuilder(256);
         String sym = getMarker(logRecord);
-        String name = nonNullString(logRecord.getLoggerName(), logRecord.getSourceClassName());
+        String name = null;
+        if (logRecord.getLoggerName() != null && (logRecord.getLoggerName().equals(SYSOUT) ||
+                                                  logRecord.getLoggerName().equals(SYSERR)))
+            name = nonNullString(logRecord.getLoggerName(), null);
+        else
+            name = nonNullString(logRecord.getLoggerName(), logRecord.getSourceClassName());
 
         sb.append('[').append(DateFormatHelper.formatTime(logRecord.getMillis(), useIsoDateFormat)).append("] ");
         sb.append(DataFormatHelper.getThreadId()).append(' ');
@@ -681,6 +683,7 @@ public class BaseTraceFormatter extends Formatter {
         String txt = null;
         Integer id = null;
         String objId;
+        @SuppressWarnings("unused")
         Integer levelVal = null;
         String name;
 
@@ -695,6 +698,7 @@ public class BaseTraceFormatter extends Formatter {
         String component = null;
 
         String sym = null;
+        @SuppressWarnings("unused")
         String logLevel = null;
 
         String threadName = null;
@@ -984,22 +988,8 @@ public class BaseTraceFormatter extends Formatter {
                 }
 
                 ans = sb.toString();
-            } else if (objs instanceof Untraceable) {
-                ans = nlPad + objs.getClass().getName(); // Use only the class name of the object
-            } else if (objs instanceof Traceable) {
-                ans = nlPad + formatTraceable((Traceable) objs);
-            } else if (objs instanceof TruncatableThrowable) {
-                ans = nlPad + DataFormatHelper.throwableToString((TruncatableThrowable) objs);
-            } else if (objs instanceof Throwable) {
-                ans = nlPad + DataFormatHelper.throwableToString(new TruncatableThrowable((Throwable) objs));
             } else {
-                try { // Protect ourselves from badly behaved toString methods
-                    ans = nlPad + objs.toString();
-                } catch (Exception e) {
-                    // No FFDC code needed
-                    ans = "<Exception " + e + " caught while calling toString() on object " + objs.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(objs))
-                          + ">";
-                }
+                ans = nlPad + formatObject(objs, 0);
             }
         } else {
             // objs is null - print out "null"
@@ -1007,6 +997,65 @@ public class BaseTraceFormatter extends Formatter {
         }
 
         return ans;
+    }
+
+    private String formatObject(Object objs, int depth) {
+        if (objs == null) {
+            return nullParamString;
+        }
+        if (depth >= COLLECTION_DEPTH_LIMIT) {
+            return "Collection depth limit exceeded";
+        }
+        if (objs instanceof Untraceable) {
+            return objs.getClass().getName(); // Use only the class name of the object
+        } else if (objs instanceof Traceable) {
+            return formatTraceable((Traceable) objs);
+        } else if (objs instanceof TruncatableThrowable) {
+            return DataFormatHelper.throwableToString((TruncatableThrowable) objs);
+        } else if (objs instanceof Throwable) {
+            return DataFormatHelper.throwableToString(new TruncatableThrowable((Throwable) objs));
+        } else if (objs instanceof Collection) {
+            Object[] objArray = null;
+            int retryableExceptionCount = 0;
+            while (objArray == null) {
+                try {
+                    if (retryableExceptionCount >= 100) {
+                        return "[Caught too many exceptions while logging collection type " + objs.getClass().getName() + "]";
+                    }
+                    objArray = ((Collection<?>) objs).toArray();
+                } catch (ConcurrentModificationException cme) {
+                    // this exception is possible.  Need to retry until it doesn't happen any longer.
+                    retryableExceptionCount++;
+                } catch (NoSuchElementException nsee) {
+                    // this exception is possible.  Need to retry until it doesn't happen any longer.
+                    retryableExceptionCount++;
+                } catch (Throwable t) {
+                    return "[Caught " + t.toString() + " while logging collection type " + objs.getClass().getName() + "]";
+                }
+            }
+            StringBuilder sb = new StringBuilder("[");
+            if (objArray.length != 0) {
+                sb.append(formatObject(objArray[0], depth + 1));
+            }
+            for (int i = 1; i < objArray.length; ++i) {
+                sb.append(", ").append(formatObject(objArray[i], depth + 1));
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+        try { // Protect ourselves from badly behaved toString methods
+            Class<?> cls = objs.getClass();
+            String className = cls.getName();
+            if (Proxy.isProxyClass(cls) || className.contains("$Proxy$_$$_Weld")) {
+                return "Proxy for " + className + "@" + Integer.toHexString(System.identityHashCode(objs));
+            }
+            return objs.toString();
+        } catch (Exception e) {
+            // No FFDC code needed
+            String s = objs == null ? "null" : objs.getClass().getName();
+            return "<Exception " + e + " caught while calling toString() on object " + s + "@" +
+                   Integer.toHexString(System.identityHashCode(objs)) + ">";
+        }
     }
 
     private static String nonNullString(final String parameter, final String alternate) {

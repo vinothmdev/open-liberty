@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.iiopcommon-1.0
+WLP-DisableAllFeatures-OnConflict: false
 IBM-API-Package: javax.rmi; type="spec", \
  javax.rmi.CORBA; type="spec", \
  org.omg.stub.java.rmi; type="spec", \
@@ -66,3 +67,4 @@ IBM-Process-Types: server, \
  com.ibm.ws.org.apache.yoko.rmi.spec.1.5
 kind=ga
 edition=base
+WLP-Activation-Type: parallel

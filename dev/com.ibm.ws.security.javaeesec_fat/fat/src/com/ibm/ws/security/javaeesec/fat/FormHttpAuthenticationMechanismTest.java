@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2017, 2019 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,15 +11,8 @@
 
 package com.ibm.ws.security.javaeesec.fat;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-
-import java.io.IOException;
-
 import javax.servlet.http.HttpServletResponse;
 
-import org.apache.http.Header;
-import org.apache.http.HttpResponse;
 import org.apache.http.client.params.ClientPNames;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.params.BasicHttpParams;
@@ -39,7 +32,6 @@ import com.ibm.ws.security.javaeesec.fat_helper.LocalLdapServer;
 import com.ibm.ws.security.javaeesec.fat_helper.WCApplicationHelper;
 import com.ibm.ws.webcontainer.security.test.servlets.SSLHelper;
 
-import componenttest.annotation.MinimumJavaLevel;
 import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
@@ -58,7 +50,6 @@ import componenttest.topology.impl.LibertyServerFactory;
  * values for getAuthType, getUserPrincipal and getRemoteUser after JASPI authentication.
  *
  */
-@MinimumJavaLevel(javaLevel = 8)
 @RunWith(FATRunner.class)
 @Mode(TestMode.FULL)
 public class FormHttpAuthenticationMechanismTest extends JavaEESecTestBase {
@@ -84,9 +75,9 @@ public class FormHttpAuthenticationMechanismTest extends JavaEESecTestBase {
         ldapServer = new LocalLdapServer();
         ldapServer.start();
         WCApplicationHelper.addWarToServerApps(myServer, "JavaEEsecFormAuth.war", true, JAR_NAME, false, "web.jar.base", "web.war.servlets.form.get.forward",
-                                               "web.war.identitystores.ldap.ldap1");
+                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap");
         WCApplicationHelper.addWarToServerApps(myServer, "JavaEEsecFormAuthRedirect.war", true, JAR_NAME, false, "web.jar.base", "web.war.servlets.form.get.redirect",
-                                               "web.war.identitystores.ldap.ldap1");
+                                               "web.war.identitystores.ldap.ldap1", "web.war.identitystores.ldap");
         myServer.setServerConfigurationFile("form.xml");
         myServer.startServer(true);
         urlHttp = "http://" + myServer.getHostname() + ":" + myServer.getHttpDefaultPort();
@@ -95,9 +86,12 @@ public class FormHttpAuthenticationMechanismTest extends JavaEESecTestBase {
 
     @AfterClass
     public static void tearDownAfterClass() throws Exception {
-        myServer.stopServer();
-        if (ldapServer != null) {
-            ldapServer.stop();
+        try {
+            myServer.stopServer();
+        } finally {
+            if (ldapServer != null) {
+                ldapServer.stop();
+            }
         }
     }
 

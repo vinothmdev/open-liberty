@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2010, 2018 IBM Corporation and others.
+ * Copyright (c) 2010, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,6 +12,7 @@ package com.ibm.ws.logging.internal.impl;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -21,8 +22,6 @@ import java.util.Map;
 import java.util.logging.Level;
 
 import com.ibm.websphere.logging.WsLevel;
-import com.ibm.websphere.ras.Tr;
-import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.logging.internal.impl.LoggingConstants.FFDCSummaryPolicy;
 import com.ibm.ws.logging.internal.impl.LoggingConstants.TraceFormat;
 import com.ibm.ws.logging.utils.FileLogHolder;
@@ -31,13 +30,7 @@ import com.ibm.wsspi.logprovider.FFDCFilterService;
 import com.ibm.wsspi.logprovider.LogProviderConfig;
 import com.ibm.wsspi.logprovider.TrService;
 
-/**
- *
- */
 public class LogProviderConfigImpl implements LogProviderConfig {
-
-    private final static TraceComponent tc = Tr.register(LogProviderConfigImpl.class);
-
     /** TrService delegate */
     protected final TrService trDelegate;
 
@@ -103,6 +96,12 @@ public class LogProviderConfigImpl implements LogProviderConfig {
     /** Format to use for messages.log */
     protected volatile String messageFormat = LoggingConstants.DEFAULT_MESSAGE_FORMAT;
 
+    /** Mapping to use for json.fields */
+    protected volatile String jsonFields = "";
+
+    /** Which access log format fields should be printed as JSON logs */
+    protected volatile String jsonAccessLogFields = LoggingConstants.DEFAULT_JSON_ACCESS_LOG_FIELDS;
+
     /** List of sources to route to console.log / console */
     protected volatile Collection<String> consoleSource = Arrays.asList(LoggingConstants.DEFAULT_CONSOLE_SOURCE);
 
@@ -123,6 +122,9 @@ public class LogProviderConfigImpl implements LogProviderConfig {
 
     /** The wlp user dir name. */
     private final String wlpUsrDir;
+
+    /** Allow JSON from applications write directly to System.out/System.err */
+    protected volatile boolean appsWriteJson = false;
 
     /**
      * Initial configuration of BaseTraceService from TrServiceConfig.
@@ -148,6 +150,12 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         messageFormat = LoggingConfigUtils.getStringValue(LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_MESSAGE_FORMAT),
                                                           messageFormat);
 
+        jsonFields = LoggingConfigUtils.getStringValue(LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_JSON_FIELD_MAPPINGS),
+                                                       jsonFields);
+
+        jsonAccessLogFields = LoggingConfigUtils.getStringValue(LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_JSON_ACCESS_LOG_FIELDS),
+                                                                jsonAccessLogFields);
+
         consoleSource = LoggingConfigUtils.parseStringCollection("consoleSource",
                                                                  LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_CONSOLE_SOURCE),
                                                                  consoleSource);
@@ -157,6 +165,9 @@ public class LogProviderConfigImpl implements LogProviderConfig {
 
         consoleLogLevel = LoggingConfigUtils.getLogLevel(LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_CONSOLE_LOGLEVEL),
                                                          consoleLogLevel);
+
+        appsWriteJson = LoggingConfigUtils.getBooleanValue(LoggingConfigUtils.getEnvValue(LoggingConstants.ENV_WLP_LOGGING_APPS_WRITE_JSON),
+                                                           appsWriteJson);
         doCommonInit(config, true);
 
         // If the trace file name is 'java.util.logging', then Logger won't write output via Tr,
@@ -227,7 +238,12 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         consoleSource = InitConfgAttribute.CONSOLE_SOURCE.getStringCollectionValueAndSaveInit("consoleSource", c, consoleSource, isInit);
         consoleFormat = InitConfgAttribute.CONSOLE_FORMAT.getStringValueAndSaveInit(c, consoleFormat, isInit);
 
+        jsonFields = InitConfgAttribute.JSON_FIELD_MAPPINGS.getStringValueAndSaveInit(c, jsonFields, isInit);
+
+        jsonAccessLogFields = InitConfgAttribute.JSON_ENABLE_CUSTOM_ACCESS_LOG_FIELDS.getStringValueAndSaveInit(c, jsonAccessLogFields, isInit);
+
         newLogsOnStart = InitConfgAttribute.NEW_LOGS_ON_START.getBooleanValue(c, newLogsOnStart, isInit);
+        appsWriteJson = InitConfgAttribute.APPS_WRITE_JSON.getBooleanValueAndSaveInit(c, appsWriteJson, isInit);
     }
 
     /**
@@ -262,7 +278,23 @@ public class LogProviderConfigImpl implements LogProviderConfig {
 
         builder.append("os = ").append(System.getProperty("os.name")).append(" (").append(System.getProperty("os.version")).append("; ").append(System.getProperty("os.arch")).append(") (").append(Locale.getDefault()).append(")").append(LoggingConstants.nl);
 
-        builder.append("process = ").append(ManagementFactory.getRuntimeMXBean().getName()).append(LoggingConstants.nl);
+        // avoid the initialization overhead retrieving the RuntimeMXBean. Not guaranteed to work on all platforms, so fallback as appropriate
+        builder.append("process = ");
+        String pid = System.getProperty("sun.java.launcher.pid");
+
+        if (pid != null) {
+            try {
+                String ip = InetAddress.getLocalHost().getHostAddress();
+                builder.append(pid).append('@').append(ip);
+            } catch (Exception e) {
+                pid = null;
+            }
+        }
+        if (pid == null) {
+            builder.append(ManagementFactory.getRuntimeMXBean().getName());
+        }
+        builder.append(LoggingConstants.nl);
+
         return builder.toString();
     }
 
@@ -371,6 +403,14 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         return messageFormat;
     }
 
+    public String getjsonFields() {
+        return jsonFields;
+    }
+
+    public String getjsonAccessLogFields() {
+        return jsonAccessLogFields;
+    }
+
     public Collection<String> getConsoleSource() {
         return consoleSource;
     }
@@ -381,6 +421,10 @@ public class LogProviderConfigImpl implements LogProviderConfig {
 
     public boolean getNewLogsOnStart() {
         return newLogsOnStart;
+    }
+
+    public boolean getAppsWriteJson() {
+        return appsWriteJson;
     }
 
     /**
@@ -399,6 +443,8 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         sb.append(",consoleLogLevel=").append(consoleLogLevel.getName());
         sb.append(",copySystemStreams=").append(copySystemStreams);
         sb.append(",messageFileName=").append(messageFileName);
+        sb.append(",messageFormat=").append(messageFormat);
+        sb.append(",consoleFormat=").append(consoleFormat);
         sb.append(",traceFormat=").append(traceFormat);
         sb.append(",isoDateFormat=").append(isoDateFormat);
         sb.append(",traceFileName=").append(traceFileName);
@@ -426,6 +472,10 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         MESSAGE_FORMAT("messageFormat", "com.ibm.ws.logging.message.format"),
         CONSOLE_SOURCE("consoleSource", "com.ibm.ws.logging.console.source"),
         CONSOLE_FORMAT("consoleFormat", "com.ibm.ws.logging.console.format"),
+        JSON_FIELD_MAPPINGS("jsonFieldMappings", "com.ibm.ws.logging.json.field.mappings"),
+
+        JSON_ENABLE_CUSTOM_ACCESS_LOG_FIELDS("jsonAccessLogFields", "com.ibm.ws.logging.json.access.log.fields"),
+        APPS_WRITE_JSON("appsWriteJson", "com.ibm.ws.logging.apps.write.json"),
         NEW_LOGS_ON_START("newLogsOnStart", FileLogHolder.NEW_LOGS_ON_START_PROPERTY);
 
         final String configKey;
@@ -439,6 +489,15 @@ public class LogProviderConfigImpl implements LogProviderConfig {
         boolean getBooleanValue(Map<String, Object> config, boolean defaultValue, boolean isInit) {
             Object value = config.get(isInit ? propertyKey : configKey);
             return LoggingConfigUtils.getBooleanValue(value, defaultValue);
+        }
+
+        boolean getBooleanValueAndSaveInit(Map<String, Object> config, boolean defaultValue, boolean isInit) {
+            Object value = config.get(isInit ? propertyKey : configKey);
+            Boolean newValue = LoggingConfigUtils.getBooleanValue(value, defaultValue);
+            if (isInit && newValue != value) {
+                config.put(propertyKey, newValue.toString());
+            }
+            return newValue;
         }
 
         int getIntValue(Map<String, Object> config, int defaultValue, boolean isInit) {

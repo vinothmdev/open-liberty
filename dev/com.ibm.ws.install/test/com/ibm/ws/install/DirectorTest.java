@@ -24,14 +24,14 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 
-import test.common.SharedOutputManager;
-
 import com.ibm.ws.install.internal.Director;
+
+import test.common.SharedOutputManager;
 
 public class DirectorTest {
 
     @Rule
-    public SharedOutputManager outputMgr = SharedOutputManager.getInstance();
+    public static SharedOutputManager outputMgr = SharedOutputManager.getInstance().trace("*=all");
 
     private static File imageDir;
     private static File tempDir;
@@ -39,11 +39,13 @@ public class DirectorTest {
 
     /**
      * Capture stdout/stderr output to the manager.
-     * 
+     *
      * @throws Exception
      */
     @BeforeClass
     public static void setUpBeforeClass() throws Exception {
+        outputMgr.captureStreams();
+
         imageDir = new File("build/unittest/wlpDirs/developers/wlp").getAbsoluteFile();
         System.out.println("setUpBeforeClass() imageDir set to " + imageDir);
         if (imageDir == null || !imageDir.exists())
@@ -60,13 +62,14 @@ public class DirectorTest {
 
     /**
      * Final teardown work when class is exiting.
-     * 
+     *
      * @throws Exception
      */
     @AfterClass
     public static void tearDownAfterClass() throws Exception {
         System.setProperty("java.io.tmpdir", orginialTmpDir);
         System.out.println("tearDownAfterClass() java.io.tmpdir set to " + System.getProperty("java.io.tmpdir"));
+        outputMgr.restoreStreams();
     }
 
     @Test
@@ -280,7 +283,7 @@ public class DirectorTest {
             fail("Director.installFeature() did not throw exception");
         } catch (InstallException e) {
             // For some platforms which may fail at create temp file before download, check CWWKF1008E too
-            if (!e.getMessage().contains("CWWKF1008E") && !e.getMessage().contains("CWWKF1007E")) {
+            if (!e.getMessage().contains("CWWKF1008E") && !e.getMessage().contains("CWWKF1007E") && !e.getMessage().contains("CWWKF1014E")) {
                 outputMgr.failWithThrowable("testDirector_installLocalFeatureESAURLNotExist", e);
             }
         }
@@ -297,7 +300,7 @@ public class DirectorTest {
             fail("Director.installFeature() did not throw exception");
         } catch (InstallException e) {
             // For some platforms which cannot set the java.io.tmpdir, check CWWKF1007E
-            if (!e.getMessage().contains("CWWKF1008E") && !e.getMessage().contains("CWWKF1007E")) {
+            if (!e.getMessage().contains("CWWKF1008E") && !e.getMessage().contains("CWWKF1007E") && !e.getMessage().contains("CWWKF1014E")) {
                 outputMgr.failWithThrowable("testDirector_installLocalFeatureFailedCreateTemp", e);
             }
         } finally {

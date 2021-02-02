@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -42,6 +42,7 @@ import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.websphere.security.wim.ras.WIMMessageHelper;
 import com.ibm.websphere.security.wim.ras.WIMMessageKey;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.security.wim.adapter.ldap.BEROutputStream;
 import com.ibm.wsspi.kernel.service.utils.SerializableProtectedString;
 import com.ibm.wsspi.security.wim.exception.EntityAlreadyExistsException;
 import com.ibm.wsspi.security.wim.exception.EntityHasDescendantsException;
@@ -88,10 +89,10 @@ public class ContextManager {
     private static final int DEFAULT_PREF_POOL_SIZE = 3;
 
     /** The default connect time limit - 1 minute. */
-    private static final long DEFAULT_CONNECT_TIMEOUT = 600000;
+    private static final long DEFAULT_CONNECT_TIMEOUT = 60000L;
 
-    /** The default read time limit - infinite. */
-    private static final long DEFAULT_READ_TIMEOUT = 0;
+    /** The default read time limit - 1 minute. */
+    private static final long DEFAULT_READ_TIMEOUT = 60000L;
 
     /** Key to use for accessing the active URL from the JNDI environment table. */
     private static final String ENVKEY_ACTIVE_URL = "_ACTIVE_URL_";
@@ -109,13 +110,16 @@ public class ContextManager {
     private static final String LDAP_ENV_PROP_CONNECT_TIMEOUT = "com.sun.jndi.ldap.connect.timeout";
 
     /** JNDI property for dereferencing aliases setting. */
-//    private static final String LDAP_ENV_PROP_DEREF_ALIASES = "java.naming.ldap.derefAliases";
+    private static final String LDAP_ENV_PROP_DEREF_ALIASES = "java.naming.ldap.derefAliases";
 
     /** JNDI property for the socket factory settings. */
     private static final String LDAP_ENV_PROP_FACTORY_SOCKET = "java.naming.ldap.factory.socket";
 
     /** JNDI property for read timeout setting. */
     private static final String LDAP_ENV_PROP_READ_TIMEOUT = "com.sun.jndi.ldap.read.timeout";
+
+    /** JNDI property for the packet dump setting. */
+    private static final String LDAP_ENV_PROP_JNDI_BER_OUTPUT = "com.sun.jndi.ldap.trace.ber";
 
     /** Timestamp of quick bind statistics trace. */
     private static final AtomicLong LDAP_STATS_TIMER = new AtomicLong(0);
@@ -167,6 +171,8 @@ public class ContextManager {
     /** List that acts as a storage for the Pool of Directory contexts. */
     private List<TimedDirContext> iContexts = null;
 
+    private String iDerefAliases = null;
+
     /** The table that stores the LDAP environment. */
     private Hashtable<String, Object> iEnvironment = null;
 
@@ -175,6 +181,9 @@ public class ContextManager {
 
     /** The initial pool size for the DirContext pool. */
     private int iInitPoolSize = DEFAULT_INIT_POOL_SIZE;
+
+    /** Whether to dump JNDI packets to system out */
+    private Boolean iJndiOutputEnabled = false;
 
     /** The timestamp of the last query for the return to primary. */
     private long iLastQueryTime = System.currentTimeMillis() / 1000;
@@ -253,6 +262,73 @@ public class ContextManager {
                 throw new OperationNotSupportedException(WIMMessageKey.WRITE_TO_SECONDARY_SERVERS_NOT_ALLOWED, msg);
             }
         }
+    }
+
+    /**
+     * Check whether we can write on the LDAP server the context is currently connected to. It is not
+     * permissible to write to a fail-over server if write to secondary is disabled.
+     *
+     * @param ctx the current directory context, can be null
+     * @param currentURL The URL of the current LDAP server.
+     * @param contextPoolEnabled Boolean to see if a context pool is enabled
+     * @param currentTimeSeconds the current time in seconds
+     * @return updated context if necessary otherwise will return original context
+     * @throws NamingException If the primary server context isn't able to close properly or we are unavailable to ping the primary server or if we are unable to create the
+     *                             contextPool
+     */
+    @FFDCIgnore(NamingException.class)
+    private TimedDirContext checkPrimaryServer(TimedDirContext ctx, String currentURL, long currentTimeSeconds) throws WIMSystemException {
+        String METHODNAME = "checkPrimaryServer";
+        if (iReturnToPrimary && (currentTimeSeconds - iLastQueryTime) > iQueryInterval) {
+
+            try {
+                String primaryURL = getPrimaryURL();
+                if (!primaryURL.equalsIgnoreCase(currentURL)) {
+                    Hashtable<String, Object> env = getEnvironment(URLTYPE_SINGLE, primaryURL);
+                    boolean primaryOK = false;
+                    try {
+                        if (tc.isDebugEnabled())
+                            Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "'...");
+                        TimedDirContext testCtx = createDirContext(env);
+                        if (tc.isDebugEnabled())
+                            Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': success");
+                        if (tc.isDebugEnabled())
+                            Tr.debug(tc, WIMMessageKey.CURRENT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(getActiveURL()));
+                        primaryOK = true;
+                        if (ctx != null) {
+                            TimedDirContext tempCtx = ctx;
+                            try {
+                                tempCtx.close();
+                            } catch (NamingException e) {
+                                if (tc.isDebugEnabled())
+                                    Tr.debug(tc, METHODNAME + " Can not close LDAP connection: " + e.toString(true));
+                            }
+                        }
+                        ctx = testCtx;
+                    } catch (NamingException e) {
+                        if (tc.isInfoEnabled())
+                            Tr.info(tc, WIMMessageKey.CANNOT_CONNECT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(primaryURL));
+                        if (tc.isDebugEnabled())
+                            Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': fail");
+                    }
+
+                    // Refresh context pool if another thread has not already done so
+                    if (primaryOK && iContextPoolEnabled) {
+                        synchronized (iLock) {
+                            if (!getActiveURL().equalsIgnoreCase(primaryURL)) {
+                                createContextPool(iLiveContexts - 1, primaryURL);
+                                ctx.setCreateTimestamp(iPoolCreateTimestampSeconds);
+                            }
+                        }
+                    }
+                }
+                iLastQueryTime = currentTimeSeconds;
+            } catch (NamingException e) {
+                String msg = Tr.formatMessage(tc, WIMMessageKey.NAMING_EXCEPTION, WIMMessageHelper.generateMsgParms(e.toString(true)));
+                throw new WIMSystemException(WIMMessageKey.NAMING_EXCEPTION, msg, e);
+            }
+        }
+        return ctx;
     }
 
     /**
@@ -713,6 +789,8 @@ public class ContextManager {
                         Tr.debug(tc, METHODNAME + " ContextPool: no free context, create a new one...");
                     }
                 }
+                // Test if primaryURL is available
+                ctx = checkPrimaryServer(ctx, getActiveURL(), currentTimeSeconds);
 
                 if (ctx == null) {
                     try {
@@ -721,63 +799,6 @@ public class ContextManager {
                         iLiveContexts--;
                         String msg = Tr.formatMessage(tc, WIMMessageKey.NAMING_EXCEPTION, WIMMessageHelper.generateMsgParms(e.toString(true)));
                         throw new WIMSystemException(WIMMessageKey.NAMING_EXCEPTION, msg, e);
-                    }
-                } else {
-                    // Check
-                    if (iReturnToPrimary && (currentTimeSeconds - iLastQueryTime) > iQueryInterval) {
-                        try {
-                            String currentURL = getProviderURL(ctx);
-                            String primaryURL = getPrimaryURL();
-                            if (!primaryURL.equalsIgnoreCase(currentURL)) {
-                                // Test if primaryURL is available
-                                Hashtable<String, Object> env = getEnvironment(URLTYPE_SINGLE, primaryURL);
-                                boolean primaryOK = false;
-                                try {
-                                    if (tc.isDebugEnabled()) {
-                                        Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "'...");
-                                    }
-                                    TimedDirContext testCtx = createDirContext(env);
-                                    if (tc.isDebugEnabled()) {
-                                        Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': success");
-                                    }
-
-                                    // Log the URL being used.
-                                    if (tc.isDebugEnabled())
-                                        Tr.debug(tc, WIMMessageKey.CURRENT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(getActiveURL()));
-
-                                    primaryOK = true;
-                                    TimedDirContext tempCtx = ctx;
-                                    try {
-                                        tempCtx.close();
-                                    } catch (NamingException e) {
-                                        if (tc.isDebugEnabled())
-                                            Tr.debug(tc, METHODNAME + " Can not close LDAP connection: " + e.toString(true));
-                                    }
-                                    ctx = testCtx;
-                                } catch (NamingException e) {
-                                    if (tc.isInfoEnabled())
-                                        Tr.info(tc, WIMMessageKey.CANNOT_CONNECT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(primaryURL));
-
-                                    if (tc.isDebugEnabled()) {
-                                        Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': fail");
-                                    }
-                                }
-
-                                // Refresh context pool if another thread has not already done so
-                                if (primaryOK) {
-                                    synchronized (iLock) {
-                                        if (!getActiveURL().equalsIgnoreCase(primaryURL)) {
-                                            createContextPool(iLiveContexts - 1, primaryURL);
-                                            ctx.setCreateTimestamp(iPoolCreateTimestampSeconds);
-                                        }
-                                    }
-                                }
-                            }
-                            iLastQueryTime = currentTimeSeconds;
-                        } catch (NamingException e) {
-                            String msg = Tr.formatMessage(tc, WIMMessageKey.NAMING_EXCEPTION, WIMMessageHelper.generateMsgParms(e.toString(true)));
-                            throw new WIMSystemException(WIMMessageKey.NAMING_EXCEPTION, msg, e);
-                        }
                     }
                 }
                 if (oldCtx != null) {
@@ -797,28 +818,7 @@ public class ContextManager {
         } else {
             try {
                 // Test if primaryURL is available
-                if (iReturnToPrimary && (currentTimeSeconds - iLastQueryTime) > iQueryInterval) {
-                    String primaryURL = getPrimaryURL();
-                    if (!primaryURL.equalsIgnoreCase(getActiveURL())) {
-                        Hashtable<String, Object> env = getEnvironment(URLTYPE_SINGLE, primaryURL);
-                        try {
-                            if (tc.isDebugEnabled())
-                                Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "'...");
-                            ctx = createDirContext(env);
-                            if (tc.isDebugEnabled())
-                                Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': success");
-
-                            if (tc.isDebugEnabled())
-                                Tr.debug(tc, WIMMessageKey.CURRENT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(getActiveURL()));
-                        } catch (NamingException e) {
-                            if (tc.isInfoEnabled())
-                                Tr.info(tc, WIMMessageKey.CANNOT_CONNECT_LDAP_SERVER, WIMMessageHelper.generateMsgParms(primaryURL));
-                            if (tc.isDebugEnabled())
-                                Tr.debug(tc, METHODNAME + " Ping primary server '" + primaryURL + "': fail");
-                        }
-                    }
-                    iLastQueryTime = currentTimeSeconds;
-                }
+                ctx = checkPrimaryServer(null, getActiveURL(), currentTimeSeconds);
 
                 // create the connection
                 if (ctx == null) {
@@ -1066,6 +1066,13 @@ public class ContextManager {
         }
 
         /*
+         * Enabled JNDI BER output if required.
+         */
+        if (iJndiOutputEnabled != null && iJndiOutputEnabled) {
+            iEnvironment.put(LDAP_ENV_PROP_JNDI_BER_OUTPUT, new BEROutputStream());
+        }
+
+        /*
          * TODO Support different authentication mechanisms.
          *
          * String authen = (String) configProps.get(ConfigConstants.CONFIG_PROP_AUTHENTICATION);
@@ -1078,13 +1085,12 @@ public class ContextManager {
         iEnvironment.put(Context.REFERRAL, iReferral);
 
         /*
-         * TODO Support dereferencing aliases.
-         *
-         * String derefAliases = (String) configProps.get(ConfigConstants.CONFIG_PROP_DEREFALIASES);
-         * if (!"always".equalsIgnoreCase(derefAliases)) {
-         * iEnvironment.put(LdapConstants.LDAP_ENV_PROP_DEREF_ALIASES, derefAliases);
-         * }
+         * Determine alias dereferencing behavior. JNDI defaults to "always",
+         * so only set if not null and not "always".
          */
+        if (iDerefAliases != null && !"always".equalsIgnoreCase(iDerefAliases)) {
+            iEnvironment.put(LDAP_ENV_PROP_DEREF_ALIASES, iDerefAliases);
+        }
 
         /*
          * Add binary attribute names
@@ -1123,6 +1129,7 @@ public class ContextManager {
             strBuf.append("\tBind DN: ").append(iBindDN).append("\n");
             // strBuf.append("\tAuthenticate: ").append(authen).append("\n");
             strBuf.append("\tReferral: ").append(iReferral).append("\n");
+            strBuf.append("\tDeref Aliases: ").append(iDerefAliases).append("\n");
             strBuf.append("\tBinary Attributes: ").append(iBinaryAttributeNames).append("\n");
             // strBuf.append("\tAdditional Evn Props: ").append(envProps);
 
@@ -1426,6 +1433,15 @@ public class ContextManager {
     }
 
     /**
+     * Configure handling for dereferencing aliases.
+     *
+     * @param derefAliases The setting for dereferencing aliases.
+     */
+    public void setDerefAliases(String derefAliases) {
+        iDerefAliases = derefAliases;
+    }
+
+    /**
      * Set the primary LDAP server hostname and port.
      *
      * @param hostname The hostname for the primary LDAP server.
@@ -1454,6 +1470,16 @@ public class ContextManager {
      */
     public void setReadTimeout(Long readTimeout) {
         this.iReadTimeout = readTimeout;
+    }
+
+    /**
+     * Set JndiOutput
+     *
+     * @param jndiOutputEnabled whether the output is enabled.
+     */
+    public void setJndiOutputEnabled(Boolean jndiOutputEnabled) {
+        this.iJndiOutputEnabled = jndiOutputEnabled;
+
     }
 
     /**
@@ -1516,7 +1542,6 @@ public class ContextManager {
     @Override
     public String toString() {
         StringBuffer sb = new StringBuffer();
-
         sb.append("ContextManager {");
         sb.append("iBindDN=").append(iBindDN);
         sb.append(", iBindPassword=").append(iBindPassword);
@@ -1524,6 +1549,7 @@ public class ContextManager {
         sb.append(", iSSLEnabled=").append(iSSLEnabled);
         sb.append(", iConnectTimeout=").append(iConnectTimeout);
         sb.append(", iReadTimeout=").append(iReadTimeout);
+        sb.append(", iJndiOutputEnabled=").append(iJndiOutputEnabled);
         sb.append(", iPrimaryServer=").append(iPrimaryServer);
         sb.append(", iFailoverServers=").append(iFailoverServers);
         sb.append(", iContextPoolEnabled=").append(iContextPoolEnabled);

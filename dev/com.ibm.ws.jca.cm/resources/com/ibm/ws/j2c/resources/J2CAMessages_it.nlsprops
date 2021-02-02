@@ -112,7 +112,7 @@ NO_VALID_TRANSACTION_CONTEXT_J2CA0040.explanation=Errore interno nell'elaborazio
 NO_VALID_TRANSACTION_CONTEXT_J2CA0040.useraction=CMSG0002
 
 # --------------------------------
-POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: connessione non disponibile nel richiamo del metodo {0} per la risorsa {1}.
+POOL_MANAGER_EXCP_CCF2_0001_J2CA0045=J2CA0045E: connessione non disponibile nel richiamo del metodo {0} per la risorsa {1}. Timout dopo l''attesa di {2} millisecondi con {3} richieste in attesa rimanenti e {4} connessioni totali correnti utilizzate.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.explanation=Si \u00e8 verificato un timeout di attesa connessioni. \u00c8 stata creata una ConnectionWaitTimeoutException.
 POOL_MANAGER_EXCP_CCF2_0001_J2CA0045.useraction=Riconfigurare il pool di connessioni. Aumentare il numero massimo di connessioni o aumentare il tempo di attesa relativo, per evitare questo errore.
 
@@ -320,6 +320,11 @@ DUPLICATE_CONNECTOR_PROPERTY_J2CA0308.useraction=\u00c8 stata specificata una pr
 POOL_MANAGER_NOT_FOUND_J2CA0695=J2CA0695E: Impossibile trovare il gestore pool primario durante l''elaborazione del failover per una risorsa con nome JNDI {0}.
 POOL_MANAGER_NOT_FOUND_J2CA0695.explanation=Si \u00e8 verificato un errore interno durante l'elaborazione del failover.
 POOL_MANAGER_NOT_FOUND_J2CA0695.useraction=CMSG0002
+
+# ---------------------------------
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W=J2CA0695W: \u00e8 stata effettuata una richiesta di connessione per la risorsa XA {0} utilizzando l''autenticazione SPNEGO, ma non \u00e8 stato configurato alcun alias dei dati di autenticazione per il ripristino. La risorsa XA non \u00e8 in grado di partecipare al ripristino XA automatizzato a meno che non sia configurato un alias dei dati di autenticazione.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.explanation=Il ripristino XA \u00e8 un processo in background automatizzato, ma l'autenticazione SPNEGO richiede un input manuale da parte dell'utente. Di conseguenza, l'autenticazione SPNEGO non pu\u00f2 essere utilizzata per il ripristino XA automatico.
+SPNEGO_XA_RECOVERY_NOT_SUPPORTED_J2CA0695W.useraction=Configurare un alias dei dati di autenticazione di ripristino sulla risorsa XA.
 
 # ---------------------------------
 FREEPOOL_GETFREECONNECTION_ERROR_J2CA1002=J2CA1002E: MCWrapper {0} non valido dal pool libero per la risorsa {1}.

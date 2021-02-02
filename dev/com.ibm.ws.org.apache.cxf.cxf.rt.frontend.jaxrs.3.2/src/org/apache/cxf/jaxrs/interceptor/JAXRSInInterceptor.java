@@ -20,6 +20,7 @@
 package org.apache.cxf.jaxrs.interceptor;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.ResourceBundle;
@@ -217,7 +218,7 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
             Tr.debug(tc, "shouldFind = " + shouldFind);
         }
         if (shouldFind == true) {
-            matchedValues = new MetadataMap<String, String>(); // Liberty change
+            matchedValues = new MetadataMap<>(); // Liberty change
 
             Map<ClassResourceInfo, MultivaluedMap<String, String>> matchedResources = JAXRSUtils.selectResourceClass(resources, rawPath, message);
 
@@ -248,7 +249,10 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
 
         } catch (WebApplicationException ex) {
             if (JAXRSUtils.noResourceMethodForOptions(ex.getResponse(), httpMethod)) {
-                Response response = JAXRSUtils.createResponse(resources, null, null, 200, true);
+                //Liberty Change start
+                // Use the matched ClassResourceInfo so that the options request returns the allowed headers for this ClassResourceInfo not the allowed headers for all of the ClassResourceInfos 
+                Response response = JAXRSUtils.createResponse(new ArrayList<ClassResourceInfo>(matchedResources.keySet()), message, null, 200, true);
+              //Liberty Change end
                 exchange.put(Response.class, response);
                 return;
             }
@@ -318,11 +322,6 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
             //cri.isSingleton is not guaranteed to indicate we have a 'pure' singleton
             exchange.put(Message.SERVICE_OBJECT, rp.getInstance(message));
         }
-    }
-
-    @Override
-    public void handleFault(Message message) {
-        super.handleFault(message);
     }
 
     private Message createOutMessage(Message inMessage, Response r) {

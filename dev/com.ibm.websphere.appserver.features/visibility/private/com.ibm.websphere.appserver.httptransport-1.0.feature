@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.httptransport-1.0
+WLP-DisableAllFeatures-OnConflict: false
 IBM-SPI-Package: com.ibm.wsspi.http, \
 com.ibm.wsspi.http.ee8
 Subsystem-Version: 1.0
@@ -9,3 +10,4 @@ Subsystem-Version: 1.0
 -files=dev/spi/ibm/javadoc/com.ibm.websphere.appserver.spi.httptransport_4.1-javadoc.zip
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

@@ -36,12 +36,12 @@ public class PSProcessStatusImpl implements ProcessStatus {
     }
 
     @Override
-    public boolean isPossiblyRunning() {
+    public State isPossiblyRunning() {
         if (pid.isEmpty()) {
             // OS/400 shell does not support $!, so an empty PID is always
             // passed (unless native integration is enabled).  Return true since
             // the process might be running.
-            return true;
+            return State.YES;
         }
 
         ProcessBuilder pb = new ProcessBuilder();
@@ -68,9 +68,21 @@ public class PSProcessStatusImpl implements ProcessStatus {
             }
 
             p.waitFor();
-            return p.exitValue() == 0;
+            Debug.println("Exit code for 'ps' command: " + p.exitValue());
+            if (p.exitValue() == 0)
+                return State.YES;
+            else
+                return State.NO;
         } catch (IOException e) {
+            if (e.getMessage().contains("Cannot run program \"ps\"")) {
+                // "ps" doesn't exist on this machine.
+                Debug.println("Unable to execute the 'ps' command.  Returning UNDETERMINED.");
+                // Return Undetermined since we can't poll the process
+                return State.UNDETERMINED;
+            }
+
             Debug.printStackTrace(e);
+
         } catch (InterruptedException e) {
             Debug.printStackTrace(e);
         } finally {
@@ -78,6 +90,6 @@ public class PSProcessStatusImpl implements ProcessStatus {
             Utils.tryToClose(reader);
         }
 
-        return true;
+        return State.YES;
     }
 }

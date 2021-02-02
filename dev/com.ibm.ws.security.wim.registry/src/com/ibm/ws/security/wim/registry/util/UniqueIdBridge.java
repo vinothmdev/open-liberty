@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2015 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -29,12 +29,10 @@ import com.ibm.ws.security.wim.registry.dataobject.IDAndRealm;
 import com.ibm.ws.security.wim.util.SchemaConstantsInternal;
 import com.ibm.wsspi.security.wim.SchemaConstants;
 import com.ibm.wsspi.security.wim.exception.EntityNotFoundException;
-import com.ibm.wsspi.security.wim.exception.InvalidIdentifierException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
 import com.ibm.wsspi.security.wim.model.Context;
 import com.ibm.wsspi.security.wim.model.Control;
 import com.ibm.wsspi.security.wim.model.Entity;
-import com.ibm.wsspi.security.wim.model.LoginAccount;
 import com.ibm.wsspi.security.wim.model.Root;
 import com.ibm.wsspi.security.wim.model.SearchControl;
 
@@ -143,8 +141,14 @@ public class UniqueIdBridge {
                 resultRoot = this.mappingUtils.getEntityByIdentifier(root, inputAttrName,
                                                                      id, outputAttrName, this.mappingUtils);
             } catch (WIMException e) {
-                if (!allowDNAsPrincipalName)
-                    throw e;
+//                if (!allowDNAsPrincipalName)
+//                    throw e;
+                /*
+                 * This is OK. Let's search for it below.
+                 */
+                if (tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Ignoring exception: " + e.getMessage(), e);
+                }
             }
 
             // Did you find data in URBridge
@@ -164,7 +168,7 @@ public class UniqueIdBridge {
 
             if (resultRoot != null && !resultRoot.getEntities().isEmpty() && (isDN(id) || foundInURBridge)) {
                 root = resultRoot;
-            } else {
+            } else if (!this.mappingUtils.isIdentifierTypeProperty(inputAttrName) || allowDNAsPrincipalName) {
                 if (allowDNAsPrincipalName)
                     inputAttrName = SchemaConstants.PROP_PRINCIPAL_NAME;
 
@@ -221,25 +225,18 @@ public class UniqueIdBridge {
             // the user was found
             else {
                 Entity entity = returnList.get(0);
-                if (entity instanceof LoginAccount) {
-                    // d113801
-                    LoginAccount loginAccount = (LoginAccount) entity;
+                if (entity != null) {
                     if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
-                        returnValue = (String) loginAccount.get(outputAttrName);
+                        Object value = entity.get(outputAttrName);
+                        if (value instanceof List<?>) {
+                            returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                        } else {
+                            returnValue = BridgeUtils.getStringValue(value);
+                        }
                     } else {
-                        returnValue = (String) loginAccount.getIdentifier().get(outputAttrName);
+                        returnValue = BridgeUtils.getStringValue(entity.getIdentifier().get(outputAttrName));
                     }
                     // PM50390
-                    if (mappingUtils.returnRealmInfoInUniqueUserId && idAndRealm.isRealmDefined()
-                        || (idAndRealm.isRealmDefined() && (!this.mappingUtils.getDefaultRealmName().equals(idAndRealm.getRealm())))) {
-                        returnValue += idAndRealm.getDelimiter() + idAndRealm.getRealm();
-                    }
-                } else if (entity != null) {
-                    if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
-                        returnValue = (String) entity.get(outputAttrName);
-                    } else {
-                        returnValue = (String) entity.getIdentifier().get(outputAttrName);
-                    }
                     if (mappingUtils.returnRealmInfoInUniqueUserId && idAndRealm.isRealmDefined()
                         || (idAndRealm.isRealmDefined() && (!this.mappingUtils.getDefaultRealmName().equals(idAndRealm.getRealm())))) {
                         returnValue += idAndRealm.getDelimiter() + idAndRealm.getRealm();
@@ -258,19 +255,7 @@ public class UniqueIdBridge {
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, methodName + " " + toCatch.getMessage(), toCatch);
-            }
-
-            // the user was not found
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof InvalidIdentifierException) {
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            }
-            // other cases
-            else {
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
 
         // Determine if the returned object to check if the context was set.
@@ -390,9 +375,14 @@ public class UniqueIdBridge {
                 Entity group = returnList.get(0);
                 // d113801
                 if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
-                    returnValue = (String) group.get(outputAttrName);
+                    Object value = group.get(outputAttrName);
+                    if (value instanceof List<?>) {
+                        returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                    } else {
+                        returnValue = BridgeUtils.getStringValue(value);
+                    }
                 } else {
-                    returnValue = (String) group.getIdentifier().get(outputAttrName);
+                    returnValue = BridgeUtils.getStringValue(group.getIdentifier().get(outputAttrName));
                 }
 
                 // if return attribute is uniqueName and returnValue is not in DN format, default to uniqueId (as this is potentially a customRegistry data)
@@ -407,19 +397,7 @@ public class UniqueIdBridge {
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, methodName + " " + toCatch.getMessage(), toCatch);
-            }
-
-            // the group was not found
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof InvalidIdentifierException) {
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            }
-            // other cases
-            else {
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
         return returnValue;
     }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018 IBM Corporation and others.
+ * Copyright (c) 2018, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -28,6 +28,7 @@ import javax.servlet.http.HttpServletResponse;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import com.gargoylesoftware.htmlunit.Page;
 import com.gargoylesoftware.htmlunit.WebRequest;
@@ -51,6 +52,8 @@ import com.ibm.ws.security.fat.common.utils.FatStringUtils;
 import com.ibm.ws.security.fat.common.validation.TestValidationUtils;
 import com.ibm.ws.security.fat.common.web.WebResponseUtils;
 
+import componenttest.annotation.AllowedFFDC;
+import componenttest.custom.junit.runner.FATRunner;
 import componenttest.custom.junit.runner.Mode;
 import componenttest.custom.junit.runner.Mode.TestMode;
 import componenttest.topology.impl.LibertyServer;
@@ -61,6 +64,7 @@ import componenttest.topology.impl.LibertyServer;
  * This class should encompass all tests required for the minimal certification for the Basic RP profile.
  */
 @Mode(TestMode.FULL)
+@RunWith(FATRunner.class)
 public abstract class OidcCertificationRPBasicProfileTests extends CommonSecurityFat {
 
     public static Class<?> thisClass = OidcCertificationRPBasicProfileTests.class;
@@ -102,7 +106,7 @@ public abstract class OidcCertificationRPBasicProfileTests extends CommonSecurit
             Page response = actions.invokeUrl(method, endpoint);
             validationUtils.validateResult(response, method, expectations);
         } catch (Exception e) {
-            fail("Failed to properly access the RP certification endpoint [" + endpoint + "]. No tests will run in this class. The exception was: " + e);
+            fail("Failed to properly access the RP certification endpoint [" + endpoint + "]. No tests will run in this class. The exception was: " + e + ". The underlying cause was: " + e.getCause());
         }
     }
 
@@ -112,6 +116,7 @@ public abstract class OidcCertificationRPBasicProfileTests extends CommonSecurit
      * Expected Results:
      * - Should successfully make authentication request and access the protected resource
      */
+    @Mode(TestMode.LITE)
     @Test
     public void test_responseType_code() throws Exception {
         String conformanceTestName = "rp-response_type-code";
@@ -170,6 +175,7 @@ public abstract class OidcCertificationRPBasicProfileTests extends CommonSecurit
      * - 401 when accessing the protected resource
      * - Error message should be logged saying the OIDC client failed to validate the ID token because the "sub" claim was missing
      */
+    @AllowedFFDC("org.jose4j.jwt.consumer.InvalidJwtException")
     @Test
     public void test_idTokenMissingSub() throws Exception {
         String conformanceTestName = "rp-id_token-sub";

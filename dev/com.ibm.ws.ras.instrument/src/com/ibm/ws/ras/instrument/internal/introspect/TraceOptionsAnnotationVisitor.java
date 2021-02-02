@@ -24,16 +24,22 @@ public class TraceOptionsAnnotationVisitor extends AnnotationVisitor {
     protected String messageBundle;
     protected boolean traceExceptionThrow;
     protected boolean traceExceptionHandling;
+    private TraceOptionsData packageData;
 
     public TraceOptionsAnnotationVisitor() {
-        super(Opcodes.ASM7);
+        super(Opcodes.ASM8);
     }
 
     public TraceOptionsAnnotationVisitor(AnnotationVisitor av) {
-        super(Opcodes.ASM7, av);
+        super(Opcodes.ASM8, av);
     }
 
-    @Override
+    public TraceOptionsAnnotationVisitor(AnnotationVisitor av, TraceOptionsData od) {
+    	super(Opcodes.ASM8, av);
+    	packageData = od;
+	}
+
+	@Override
     public void visit(String name, Object value) {
         if ("traceGroup".equals(name)) {
             String traceGroup = String.class.cast(value);
@@ -62,7 +68,7 @@ public class TraceOptionsAnnotationVisitor extends AnnotationVisitor {
     private final class TraceGroupsValueArrayVisitor extends AnnotationVisitor {
 
         private TraceGroupsValueArrayVisitor(AnnotationVisitor av) {
-            super(Opcodes.ASM7, av);
+            super(Opcodes.ASM8, av);
         }
 
         @Override
@@ -76,6 +82,9 @@ public class TraceOptionsAnnotationVisitor extends AnnotationVisitor {
     }
 
     public TraceOptionsData getTraceOptionsData() {
-        return new TraceOptionsData(traceGroups, messageBundle, traceExceptionThrow, traceExceptionHandling);
+    	if (traceGroups.isEmpty() && packageData != null)
+    		return packageData;
+    	else
+    		return new TraceOptionsData(traceGroups, messageBundle, traceExceptionThrow, traceExceptionHandling);
     }
 }

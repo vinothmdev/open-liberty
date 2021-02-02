@@ -1,5 +1,5 @@
 #*******************************************************************************
-# Copyright (c) 2018 IBM Corporation and others.
+# Copyright (c) 2018,2020 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -12,8 +12,6 @@
 bVersion=1.0
 
 #TODO update to Java 9 once available
-javac.source: 1.8
-javac.target: 1.8
 
 javac.args.release: current
 
@@ -21,9 +19,11 @@ Bundle-Name: Database Connectivity
 Bundle-SymbolicName: com.ibm.ws.jdbc.4.3
 Bundle-Description: Database connectivity infrastructure, version ${bVersion}
 
+jakartaeeMe: true
+
 WS-TraceGroup: RRA
 
-Require-Capability: osgi.ee; filter:="(&(osgi.ee=JavaSE)(version=1.8))"
+Require-Capability: osgi.ee; filter:="(&(osgi.ee=JavaSE)(version=11))"
 
 Export-Package: \
   com.ibm.ws.rsadapter.jdbc.v43

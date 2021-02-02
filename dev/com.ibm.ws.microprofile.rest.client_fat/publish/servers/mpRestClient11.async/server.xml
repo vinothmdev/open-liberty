@@ -1,7 +1,7 @@
 <server>
     <featureManager>
         <feature>componenttest-1.0</feature>
-        <feature>jaxrs-2.0</feature>
+        <feature>jaxrs-2.1</feature>
         <feature>mpRestClient-1.1</feature>
         <feature>jsonb-1.0</feature>
         <feature>concurrent-1.0</feature>
@@ -21,4 +21,6 @@
     <javaPermission className="java.lang.RuntimePermission" name="getProtectionDomain"/>
     <javaPermission className="java.util.logging.LoggingPermission" name="control" actions=""/>
     <javaPermission className="java.util.PropertyPermission" name="bvt.prop.HTTP_default" actions="read"/>
+    <javaPermission className="java.util.PropertyPermission" name="os.name" actions="read"/>
+    <javaPermission className="java.lang.management.ManagementPermission" name="monitor"/>
 </server>

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2014 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -185,7 +185,7 @@ public abstract class WebAppConfiguration extends BaseConfiguration implements W
     private Map<JNDIEnvironmentRefType, Map<String, String>> allRefBindings = JNDIEnvironmentRefBindingHelper.createAllBindingsMap();
     private Map<String, String> envEntryValues;
     private ResourceRefConfigList resourceRefConfigList;
-
+    
     public void setApplicationName(String applicationName) {
         this.applicationName = applicationName;
     }
@@ -200,7 +200,7 @@ public abstract class WebAppConfiguration extends BaseConfiguration implements W
     private String requestEncoding = null;
     private String responseEncoding = null;
     private static final String NULLSERVLETNAME = "com.ibm.ws.webcontainer.NullServletName"; //PI93226
-
+    
     /**
      * Constructor.
      * 
@@ -1589,7 +1589,7 @@ public abstract class WebAppConfiguration extends BaseConfiguration implements W
     @Override
     public List<String> getLibBinPathList() {
         if (libBinPathList == null) {
-            libBinPathList = new ArrayList<String>();
+            List<String> libBinPathListTemp = new ArrayList<String>();
             if (webApp != null) {
                 MetaInfResourceFinder metaInfRes = webApp.getMetaInfResourceFinder();
                 for (URL url : metaInfRes.getJarResourceURLs()) {
@@ -1601,9 +1601,10 @@ public abstract class WebAppConfiguration extends BaseConfiguration implements W
                     } else {
                         continue;
                     }
-                    libBinPathList.add(path);
+                    libBinPathListTemp.add(path);
                 }
             }
+            libBinPathList = libBinPathListTemp;
         }
         return libBinPathList;
     }
@@ -2161,5 +2162,4 @@ public abstract class WebAppConfiguration extends BaseConfiguration implements W
         }
         this.responseEncoding = encoding;
     }
-
 }

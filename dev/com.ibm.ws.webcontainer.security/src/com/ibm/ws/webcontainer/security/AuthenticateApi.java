@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2018 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -20,41 +20,45 @@ import java.util.Set;
 
 import javax.security.auth.Subject;
 import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
-
-import javax.servlet.http.Cookie;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Sensitive;
 import com.ibm.websphere.security.audit.AuditEvent;
+import com.ibm.websphere.security.web.PasswordExpiredException;
+import com.ibm.websphere.security.web.UserRevokedException;
+import com.ibm.ws.kernel.security.thread.ThreadIdentityException;
+import com.ibm.ws.kernel.security.thread.ThreadIdentityManager;
 import com.ibm.ws.security.SecurityService;
 import com.ibm.ws.security.audit.Audit;
 import com.ibm.ws.security.authentication.AuthenticationException;
 import com.ibm.ws.security.authentication.AuthenticationService;
+import com.ibm.ws.security.authentication.UnauthenticatedSubjectService;
 import com.ibm.ws.security.authentication.cache.AuthCacheService;
 import com.ibm.ws.security.authentication.utility.SubjectHelper;
 import com.ibm.ws.security.collaborator.CollaboratorUtils;
 import com.ibm.ws.security.context.SubjectManager;
+import com.ibm.ws.security.mp.jwt.proxy.MpJwtHelper;
 import com.ibm.ws.webcontainer.security.internal.BasicAuthAuthenticator;
 import com.ibm.ws.webcontainer.security.internal.ChallengeReply;
 import com.ibm.ws.webcontainer.security.internal.DenyReply;
+import com.ibm.ws.webcontainer.security.internal.OAuthChallengeReply;
 import com.ibm.ws.webcontainer.security.internal.RedirectReply;
 import com.ibm.ws.webcontainer.security.internal.SRTServletRequestUtils;
 import com.ibm.ws.webcontainer.security.internal.SSOAuthenticator;
 import com.ibm.ws.webcontainer.security.internal.TAIChallengeReply;
 import com.ibm.ws.webcontainer.security.internal.WebReply;
+import com.ibm.ws.webcontainer.security.util.SSOAuthFilter;
 import com.ibm.ws.webcontainer.session.IHttpSessionContext;
 import com.ibm.ws.webcontainer.srt.SRTServletRequest;
 import com.ibm.ws.webcontainer.webapp.WebApp;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.ConcurrentServiceReferenceMap;
 import com.ibm.wsspi.webcontainer.webapp.IWebAppDispatcherContext;
-
-import com.ibm.websphere.security.web.PasswordExpiredException;
-import com.ibm.websphere.security.web.UserRevokedException;
 
 public class AuthenticateApi {
     private static final TraceComponent tc = Tr.register(AuthenticateApi.class);
@@ -68,21 +72,28 @@ public class AuthenticateApi {
     private AuthCacheService authCacheService = null;
     private final CollaboratorUtils collabUtils;
     private AuthenticationService authService = null;
+    private AtomicServiceReference<SSOAuthFilter> ssoAuthFilterRef;
     private ConcurrentServiceReferenceMap<String, WebAuthenticator> webAuthenticatorRefs = null;
     private ConcurrentServiceReferenceMap<String, UnprotectedResourceService> unprotectedResourceServiceRef = null;
+    private UnauthenticatedSubjectService unauthenticatedSubjectService;
     protected static final WebReply DENY_AUTHN_FAILED = new DenyReply("AuthenticationFailed");
     private Subject logoutSubject = null;
+    private final String SECURITY_CONTEXT = "SECURITY_CONTEXT";
 
     public AuthenticateApi(SSOCookieHelper ssoCookieHelper,
                            AtomicServiceReference<SecurityService> securityServiceRef,
                            CollaboratorUtils collabUtils,
                            ConcurrentServiceReferenceMap<String, WebAuthenticator> webAuthenticatorRef,
-                           ConcurrentServiceReferenceMap<String, UnprotectedResourceService> unprotectedResourceServiceRef) {
+                           ConcurrentServiceReferenceMap<String, UnprotectedResourceService> unprotectedResourceServiceRef,
+                           UnauthenticatedSubjectService unauthenticatedSubjectService,
+                           AtomicServiceReference<SSOAuthFilter> ssoAuthFilterRef) {
         this.ssoCookieHelper = ssoCookieHelper;
         this.securityServiceRef = securityServiceRef;
         this.collabUtils = collabUtils;
         this.webAuthenticatorRefs = webAuthenticatorRef;
         this.unprotectedResourceServiceRef = unprotectedResourceServiceRef;
+        this.unauthenticatedSubjectService = unauthenticatedSubjectService;
+        this.ssoAuthFilterRef = ssoAuthFilterRef;
 
         // securityService may or may not be available at this point. so if it is available, do the the initialization work,
         // otherwise defer getting authService and authCacheService when it is ready.
@@ -143,17 +154,15 @@ public class AuthenticateApi {
             reply = createReplyForAuthnFailure(authResult, realm);
 
             Audit.audit(Audit.EventID.SECURITY_API_AUTHN_01, req, authResult, Integer.valueOf(reply.getStatusCode()));
-            
+
             if (authResult.passwordExpired == true) {
                 throw new PasswordExpiredException(authResult.getReason());
-            }
-            else if (authResult.userRevoked == true) {
+            } else if (authResult.userRevoked == true) {
                 throw new UserRevokedException(authResult.getReason());
-            }
-            else {
+            } else {
                 throw new ServletException(authResult.getReason());
             }
-            
+
         } else {
 
             Audit.audit(Audit.EventID.SECURITY_API_AUTHN_01, req, authResult, Integer.valueOf(HttpServletResponse.SC_OK));
@@ -192,6 +201,22 @@ public class AuthenticateApi {
         invalidateSession(req);
         ssoCookieHelper.removeSSOCookieFromResponse(res);
         ssoCookieHelper.createLogoutCookies(req, res);
+
+        // if we have jwt, put on mpjwt's list of logged out jwt's so it cannot be reused.
+        // will be null if mpJwt feature not active, or no jwt in principal
+        Principal p = MpJwtHelper.getJsonWebTokenPricipal(subjectManager.getCallerSubject());
+        if (p != null) {
+            MpJwtHelper.addLoggedOutJwtToList(p);
+        }
+
+        try {
+            if (unauthenticatedSubjectService != null) {
+                ThreadIdentityManager.setAppThreadIdentity(unauthenticatedSubjectService.getUnauthenticatedSubject());
+            }
+
+        } catch (ThreadIdentityException e) {
+            //FFDC will be generated
+        }
 
         //If authenticated with form login, we need to clear the RefrrerURLCookie
         ReferrerURLCookieHandler referrerURLHandler = config.createReferrerURLCookieHandler();
@@ -282,6 +307,7 @@ public class AuthenticateApi {
         authResult.setAuditOutcome(AuditEvent.OUTCOME_SUCCESS);
         Audit.audit(Audit.EventID.SECURITY_API_AUTHN_TERMINATE_01, req, authResult, Integer.valueOf(res.getStatus()));
 
+        removeEntryFromAuthCacheForUser(req, res);
         invalidateSession(req);
         ssoCookieHelper.removeSSOCookieFromResponse(res);
         ssoCookieHelper.createLogoutCookies(req, res);
@@ -496,6 +522,17 @@ public class AuthenticateApi {
         if (addSSOCookie) {
             ssoCookieHelper.addSSOCookiesToResponse(subject, req, resp);
         }
+        try {
+            Object loginToken = ThreadIdentityManager.setAppThreadIdentity(subject);
+            WebSecurityContext webSecurityContext = (WebSecurityContext) SRTServletRequestUtils.getPrivateAttribute(req, SECURITY_CONTEXT);
+
+            if (webSecurityContext != null && webSecurityContext.getSyncToOSThreadToken() == null) {
+                webSecurityContext.setSyncToOSThreadToken(loginToken);
+            }
+        } catch (ThreadIdentityException e) {
+            //FFDC will be generated
+        }
+
     }
 
     /**
@@ -515,7 +552,7 @@ public class AuthenticateApi {
             if (authService == null && securityServiceRef != null) {
                 authService = securityServiceRef.getService().getAuthenticationService();
             }
-            SSOAuthenticator ssoAuthenticator = new SSOAuthenticator(authService, null, null, ssoCookieHelper);
+            SSOAuthenticator ssoAuthenticator = new SSOAuthenticator(authService, null, null, ssoCookieHelper, ssoAuthFilterRef);
             //TODO: We can not call ssoAuthenticator.authenticate because it can not handle multiple tokens.
             //In the next release, authenticate need to handle multiple authentication data. See story
             AuthenticationResult authResult = ssoAuthenticator.handleSSO(req, res);
@@ -601,11 +638,16 @@ public class AuthenticateApi {
                 return new RedirectReply(authResult.getRedirectURL(), authResult.getCookies());
 
             case UNKNOWN:
+
             case CONTINUE:
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                     Tr.debug(tc, "Authentication failed with status [" + authResult.getStatus() + "] and reason [" + authResult.getReason() + "]");
                 }
                 return DENY_AUTHN_FAILED;
+
+            case OAUTH_CHALLENGE:
+                return new OAuthChallengeReply(authResult.getReason());
+
             default:
                 break;
         }

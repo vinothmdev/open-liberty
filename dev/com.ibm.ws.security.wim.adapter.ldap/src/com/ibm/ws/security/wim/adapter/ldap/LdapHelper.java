@@ -10,8 +10,6 @@
  *******************************************************************************/
 package com.ibm.ws.security.wim.adapter.ldap;
 
-import static com.ibm.ws.security.wim.util.UniqueNameHelper.unescapeSpaces;
-
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.SoftReference;
 import java.security.cert.X509Certificate;
@@ -43,7 +41,7 @@ import com.ibm.websphere.security.wim.ras.WIMMessageHelper;
 import com.ibm.websphere.security.wim.ras.WIMMessageKey;
 import com.ibm.websphere.security.wim.ras.WIMTraceHelper;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
-import com.ibm.ws.security.wim.AccessControllerHelper;
+import com.ibm.ws.security.wim.util.UniqueNameHelper;
 import com.ibm.wsspi.security.wim.exception.CertificateMapperException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
 import com.ibm.wsspi.security.wim.exception.WIMSystemException;
@@ -117,7 +115,7 @@ public class LdapHelper {
         // unescape double blackslashes
         DN = unescapeDoubleBackslash(DN);
         DN = unescapeSingleQuote(DN); // fix login failure when single quote (') is in userid
-        DN = unescapeSpaces(DN);
+        DN = UniqueNameHelper.unescapeSpaces(DN);
 
         //process special character enclosing double quotes
         int length = DN.length();
@@ -281,8 +279,8 @@ public class LdapHelper {
             e.getMessage();
             DN = DN.trim();
             int pos1 = DN.indexOf(',');
-            if (DN.charAt(pos1 - 1) == '\\') {
-                pos1 = DN.indexOf(pos1, ',');
+            while (DN.charAt(pos1 - 1) == '\\') {
+                pos1 = DN.indexOf(',', pos1 + 1);
             }
             if (pos1 > -1) {
                 RDN = DN.substring(0, pos1).trim();
@@ -293,32 +291,57 @@ public class LdapHelper {
         return RDN;
     }
 
-    public static String replaceRDN(String DN, String[] RDNAttrTypes, String[] RDNAttrValues) {
-        String parentDN = getParentDN(DN);
-        if (RDNAttrTypes == null || RDNAttrValues == null || RDNAttrTypes.length != RDNAttrValues.length
-            || RDNAttrTypes.length == 0) {
-            return DN;
+    public static String replaceRDN(String dn, String[] rdnAttrTypes, String[] rdnAttrValues) {
+        if (rdnAttrTypes == null || rdnAttrValues == null || rdnAttrTypes.length != rdnAttrValues.length
+            || rdnAttrTypes.length == 0) {
+            return dn;
         }
-        StringBuffer RDN = new StringBuffer();
-        String[] oldRDNValues = getRDNValues(DN);
-        for (int i = 0; i < RDNAttrTypes.length; i++) {
+
+        /*
+         * Strip the parent DN from the end of the DN. We want just the leading RDN.
+         */
+        String parentDN = getParentDN(dn);
+        if (!parentDN.isEmpty()) {
+            dn = dn.replace("," + parentDN, "");
+        }
+
+        /*
+         * Retrieve the values for the leading RDN.
+         */
+        String[] oldRDNValues = getRDNValues(dn);
+
+        /*
+         * Iterate over all the RDN attribute types.
+         */
+        StringBuffer rdn = new StringBuffer();
+        for (int i = 0; i < rdnAttrTypes.length; i++) {
+            /*
+             * Multi-attribute RDNs require a '+' between each attribute type and value.
+             */
             if (i != 0) {
-                RDN.append("+");
+                rdn.append("+");
             }
-            String newRDNValue = RDNAttrValues[i];
+
+            /*
+             * If there is a new value, replace the value of the RDN.
+             */
+            String newRDNValue = rdnAttrValues[i];
             if (newRDNValue == null) {
                 newRDNValue = oldRDNValues[i];
             }
-            RDN.append(RDNAttrTypes[i] + "=" + Rdn.escapeValue(newRDNValue));
+            rdn.append(rdnAttrTypes[i] + "=" + Rdn.escapeValue(newRDNValue));
         }
 
-        if (parentDN.length() == 0) {
-            DN = RDN.toString();
+        /*
+         * Append the parent DN back onto the end of the DN.
+         */
+        if (parentDN.isEmpty()) {
+            dn = rdn.toString();
         } else {
-            DN = RDN.append("," + parentDN).toString();
+            dn = rdn.append("," + parentDN).toString();
         }
 
-        return DN;
+        return dn;
     }
 
     public static String getParentDN(String DN) {
@@ -362,18 +385,8 @@ public class LdapHelper {
         return list.toArray(new String[0]);
     }
 
-    public static boolean isUnderBases(String dn, String[] bases) {
-        dn = getValidDN(dn);
-        if (dn != null) {
-            dn = dn.toLowerCase();
-            //return true if any of bases is empty node/""/root or if dn ends with any of the the base
-            for (int i = 0; i < bases.length; i++) {
-                if (bases[i].trim().length() == 0 || dn.endsWith(bases[i].toLowerCase())) {
-                    return true;
-                }
-            }
-        }
-        return false;
+    public static boolean isUnderBases(String dn, String... bases) {
+        return UniqueNameHelper.isDNUnderBaseEntry(dn, bases);
     }
 
     /**
@@ -557,24 +570,6 @@ public class LdapHelper {
                                                         WIMTraceHelper.printObjectArray(searchControls.getReturningAttributes())).append("]");
         return result.toString();
 
-    }
-
-    /**
-     * Determine if the given DN is under the given Base.
-     *
-     * @param dn
-     * @param base
-     * @return
-     */
-    public static boolean isUnderBases(String dn, String base) {
-        dn = getValidDN(dn);
-        if (dn != null) {
-            dn = dn.toLowerCase();
-            if (dn.endsWith(base.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -897,14 +892,7 @@ public class LdapHelper {
      * @return the array of separated RDNs.
      */
     public static String[] getRDNs(String rdnStr) {
-        //TODO use String.split
-        StringTokenizer st = new StringTokenizer(rdnStr.toLowerCase(), "+");
-        List<String> list = new ArrayList<String>();
-        while (st.hasMoreTokens()) {
-            String rdn = st.nextToken();
-            list.add(rdn);
-        }
-        return list.toArray(new String[0]);
+        return UniqueNameHelper.getRDNs(rdnStr);
     }
 
     /**

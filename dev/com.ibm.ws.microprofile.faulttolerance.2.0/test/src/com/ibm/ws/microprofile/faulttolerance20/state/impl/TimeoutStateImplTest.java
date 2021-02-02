@@ -10,35 +10,36 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.faulttolerance20.state.impl;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
+import static com.ibm.ws.microprofile.faulttolerance20.state.impl.MockScheduledTaskMatcher.cancelledTask;
+import static com.ibm.ws.microprofile.faulttolerance20.state.impl.MockScheduledTaskMatcher.taskWithDelay;
+import static java.time.Duration.ofMillis;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.time.Duration;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import com.ibm.ws.microprofile.faulttolerance.impl.policy.TimeoutPolicyImpl;
+import com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder;
+import com.ibm.ws.microprofile.faulttolerance.utils.DummyMetricRecorder;
 
+@SuppressWarnings("restriction") // Unit test accesses non-exported *PolicyImpl classes
 public class TimeoutStateImplTest {
 
-    private ScheduledExecutorService scheduledExecutorService;
+    private MockScheduledExecutorService scheduledExecutorService;
     private final AtomicBoolean timeoutFlag = new AtomicBoolean(false);
+    private static MetricRecorder dummyMetrics = DummyMetricRecorder.get();
 
     @Before
     public void setup() {
-        scheduledExecutorService = new ScheduledThreadPoolExecutor(10);
-    }
-
-    @After
-    public void teardown() throws InterruptedException {
-        scheduledExecutorService.shutdownNow();
-        scheduledExecutorService.awaitTermination(10, SECONDS);
+        scheduledExecutorService = new MockScheduledExecutorService();
     }
 
     @Test
@@ -46,15 +47,17 @@ public class TimeoutStateImplTest {
         TimeoutPolicyImpl policy = new TimeoutPolicyImpl();
         policy.setTimeout(Duration.ofMillis(100L));
 
-        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy);
-        state.start(this::setTimeoutFlag);
+        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy, dummyMetrics);
+        state.start();
+        state.setTimeoutCallback(this::setTimeoutFlag);
+
+        // Check the timeout task has been scheduled
+        assertThat(scheduledExecutorService.getTasks(), contains(taskWithDelay(ofMillis(100))));
+
         state.stop();
 
-        assertFalse(state.isTimedOut());
-        assertFalse(timeoutFlag.get());
-
-        // Wait until the timeout should have fired
-        Thread.sleep(150L);
+        // Check the timeout task has been cancelled
+        assertThat(scheduledExecutorService.getTasks(), contains(cancelledTask()));
 
         assertFalse(state.isTimedOut());
         assertFalse(timeoutFlag.get());
@@ -65,15 +68,95 @@ public class TimeoutStateImplTest {
         TimeoutPolicyImpl policy = new TimeoutPolicyImpl();
         policy.setTimeout(Duration.ofMillis(100L));
 
-        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy);
-        state.start(this::setTimeoutFlag);
+        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy, dummyMetrics);
+        state.start();
+        state.setTimeoutCallback(this::setTimeoutFlag);
+
+        // Check the timeout task has been scheduled
+        assertThat(scheduledExecutorService.getTasks(), contains(taskWithDelay(ofMillis(100))));
 
         assertFalse(timeoutFlag.get());
 
-        // Wait until the timeout should have fired
-        Thread.sleep(150L);
+        // Run the timeout
+        scheduledExecutorService.getTasks().get(0).run();
 
         state.stop();
+
+        assertTrue(state.isTimedOut());
+        assertTrue(timeoutFlag.get());
+    }
+
+    @Test
+    public void testTimeoutZero() throws InterruptedException {
+        TimeoutPolicyImpl policy = new TimeoutPolicyImpl();
+        policy.setTimeout(Duration.ZERO);
+
+        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy, dummyMetrics);
+        state.start();
+        state.setTimeoutCallback(this::setTimeoutFlag);
+
+        // Assert that no timeout test was scheduled
+        assertThat(scheduledExecutorService.getTasks(), is(empty()));
+
+        assertFalse(timeoutFlag.get());
+
+        state.stop();
+
+        assertFalse(state.isTimedOut());
+        assertFalse(timeoutFlag.get());
+    }
+
+    /**
+     * Test setting the timeoutCallback before calling start()
+     */
+    @Test
+    public void testCallbackSetEarly() throws InterruptedException {
+        TimeoutPolicyImpl policy = new TimeoutPolicyImpl();
+        policy.setTimeout(Duration.ofMillis(100L));
+
+        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy, dummyMetrics);
+        state.setTimeoutCallback(this::setTimeoutFlag);
+        state.start();
+
+        // Check the timeout task has been scheduled
+        assertThat(scheduledExecutorService.getTasks(), contains(taskWithDelay(ofMillis(100))));
+
+        assertFalse(timeoutFlag.get());
+
+        // Call the timeout
+        scheduledExecutorService.getTasks().get(0).run();
+
+        state.stop();
+
+        assertTrue(state.isTimedOut());
+        assertTrue(timeoutFlag.get());
+    }
+
+    /**
+     * Test setting the timeoutCallback after calling stop()
+     */
+    @Test
+    public void testCallbackSetLate() throws InterruptedException {
+        TimeoutPolicyImpl policy = new TimeoutPolicyImpl();
+        policy.setTimeout(Duration.ofMillis(100L));
+
+        TimeoutStateImpl state = new TimeoutStateImpl(scheduledExecutorService, policy, dummyMetrics);
+        state.start();
+
+        // Check the timeout task has been scheduled
+        assertThat(scheduledExecutorService.getTasks(), contains(taskWithDelay(ofMillis(100))));
+
+        assertFalse(timeoutFlag.get());
+
+        // Call the timeout
+        scheduledExecutorService.getTasks().get(0).run();
+
+        state.stop();
+
+        assertTrue(state.isTimedOut());
+        assertFalse(timeoutFlag.get());
+
+        state.setTimeoutCallback(this::setTimeoutFlag);
 
         assertTrue(state.isTimedOut());
         assertTrue(timeoutFlag.get());

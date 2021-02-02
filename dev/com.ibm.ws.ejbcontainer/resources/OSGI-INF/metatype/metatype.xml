@@ -38,6 +38,27 @@
 
         <AD name="%timerService" description="%timerService.desc"
             id="timerService" type="String" required="false" ibm:type="pid" ibm:reference="com.ibm.ws.ejbcontainer.timer.runtime" />
+        
+        <AD name="%bindToServerRoot" description="%bindToServerRoot.desc" 
+        	id="bindToServerRoot" type="Boolean" required="false" default="true" ibmui:group="Advanced"/>
+        
+        <AD name="%bindToJavaGlobal" description="%bindToJavaGlobal.desc" 
+        	id="bindToJavaGlobal" type="Boolean" required="false" default="true" ibmui:group="Advanced"/>
+        
+        <AD name="%disableShortDefaultBindings" description="%disableShortDefaultBindings.desc" 
+        	id="disableShortDefaultBindings" type="String" required="false" ibmui:group="Advanced"/>
+            
+        <AD name="%customBindings.onError" description="%customBindings.onError.desc"
+            id="customBindingsOnError" type="String" ibm:type="onError" required="false"
+            ibm:variable="onError" default="WARN" ibmui:group="Advanced">
+            <Option label="%customBindings.onError.warn" value="WARN"/>
+            <Option label="%customBindings.onError.fail" value="FAIL"/>
+            <Option label="%customBindings.onError.ignore" value="IGNORE"/>   
+        </AD>  
+        
+        	
+        
+        
 
         <!--  Previously tWAS system properties  -->
 

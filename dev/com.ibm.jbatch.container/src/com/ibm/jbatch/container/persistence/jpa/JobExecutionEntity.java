@@ -36,6 +36,7 @@ import javax.persistence.OneToMany;
 import org.eclipse.persistence.annotations.ClassExtractor;
 
 import com.ibm.jbatch.container.ws.WSJobExecution;
+import com.ibm.websphere.ras.annotation.Trivial;
 
 @NamedQueries({
                 @NamedQuery(name = JobExecutionEntity.UPDATE_JOB_EXECUTION_AND_INSTANCE_SERVER_NOT_SET, query = "UPDATE JobExecutionEntity x SET x.batchStatus = :batchStatus, x.lastUpdatedTime = :lastUpdatedTime WHERE x.jobExecId = :jobExecId AND x.serverId IS NULL"),
@@ -49,6 +50,9 @@ import com.ibm.jbatch.container.ws.WSJobExecution;
                  * " WHERE e.jobInstance.instanceId = :id AND e.jobInstance.e.executionNumberForThisInstance = " +
                  * " (SELECT MAX(e.executionNumberForThisInstance) FROM JobExecutionEntity e WHERE e.jobInstance.instanceId = :id)"),
                  */
+
+                @NamedQuery(name = JobExecutionEntity.GET_JOB_EXECUTIONIDS_BY_JOB_INST_ID, query = "SELECT e.jobExecId FROM JobExecutionEntity e" +
+                                                                                                   " WHERE e.jobInstance.instanceId in :instanceList ORDER BY e.createTime DESC"),
 
                 @NamedQuery(name = JobExecutionEntity.GET_JOB_EXECUTIONIDS_BY_NAME_AND_STATUSES_QUERY, query = "SELECT e.jobExecId FROM JobExecutionEntity e" +
                                                                                                                " WHERE e.jobInstance.jobName=:name AND e.batchStatus IN :status ORDER BY e.createTime DESC"),
@@ -76,6 +80,7 @@ public class JobExecutionEntity extends JobThreadExecutionBase implements JobExe
     public static final String GET_JOB_EXECUTIONS_BY_SERVERID_AND_STATUSES_QUERY = "JobExecutionEntity.getJobExecutionsByServerIdAndStatusesQuery";
     public static final String GET_JOB_EXECUTIONS_MOST_TO_LEAST_RECENT_BY_INSTANCE = "JobExecutionEntity.getJobExecutionsMostToLeastRecentByInstanceQuery";
     public static final String GET_JOB_EXECUTIONS_BY_JOB_INST_ID_AND_JOB_EXEC_NUM = "JobExecutionEntity.getJobExecutionsByJobInstanceIdAndJobExecNumberQuery";
+    public static final String GET_JOB_EXECUTIONIDS_BY_JOB_INST_ID = "JobExecutionEntity.getJobExecutionsByJobInstanceId";
     /*
      * Key
      */
@@ -101,30 +106,21 @@ public class JobExecutionEntity extends JobThreadExecutionBase implements JobExe
     @JoinColumn(name = "FK_JOBINSTANCEID", nullable = false)
     private JobInstanceEntity jobInstance;
 
-    //@OneToMany(mappedBy="jobExec",cascade=CascadeType.REMOVE)
+    //@OneToMany(mappedBy = "jobExec", cascade = CascadeType.REMOVE)
     //private Collection<RemotableSplitFlowEntity> splitFlowExecutions;
-
-    //@OneToMany(mappedBy="jobExec",cascade=CascadeType.REMOVE)
-    //private Collection<RemotablePartitionEntity> partitionExecutions;
 
     @OneToMany(mappedBy = "jobExec", cascade = CascadeType.REMOVE)
     private Collection<StepThreadExecutionEntity> stepThreadExecutions;
 
-    /*
-     * 222050 - backout 205106
-     *
-     * @OneToMany(mappedBy = "jobExec", cascade = CascadeType.REMOVE)
-     * private Collection<RemotablePartitionEntity> remotablePartitions;
-     */
-
     // For JPA
-    public JobExecutionEntity() {}
+    @Trivial
+    public JobExecutionEntity() {
+    }
 
     // For in-memory persistence
     public JobExecutionEntity(long jobExecId) {
         this.jobExecId = jobExecId;
         //this.splitFlowExecutions = new ArrayList<RemotableSplitFlowEntity>();
-        // 222050 - backout 205106 this.remotablePartitions = Collections.synchronizedList(new ArrayList<RemotablePartitionEntity>());
         this.stepThreadExecutions = Collections.synchronizedList(new ArrayList<StepThreadExecutionEntity>());
     }
 
@@ -146,14 +142,11 @@ public class JobExecutionEntity extends JobThreadExecutionBase implements JobExe
     }
 
     public Collection<RemotablePartitionEntity> getRemotablePartitions() {
-        // 220050 - Backout 205106
-        // return remotablePartitions;
         return null;
     }
 
     public void setRemotablePartitions(Collection<RemotablePartitionEntity> remotablePartitions) {
-        // 222050 - Backout 205106
-        // this.remotablePartitions = remotablePartitions;
+        // Intentionally empty, see JobExecutionEntityV3
     }
 
     @Override

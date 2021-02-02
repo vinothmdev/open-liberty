@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2017 IBM Corporation and others.
+ * Copyright (c) 2011, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -115,6 +115,15 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
     /** Current endpoint configuration */
     private volatile Map<String, Object> endpointConfig = null;
 
+    /** Current remoteIp configuration */
+    private volatile ChannelConfiguration remoteIpConfig = null;
+
+    /** Current compression configuration */
+    private volatile ChannelConfiguration compressionConfig = null;
+
+    /** Current samesite configuration */
+    private volatile ChannelConfiguration samesiteConfig = null;
+
     private volatile boolean endpointStarted = false;
     private volatile String resolvedHostName = null;
     private volatile String host = HttpServiceConstants.LOCALHOST;
@@ -141,6 +150,8 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
     private final Object actionLock = new Object() {};
     private final LinkedList<Runnable> actionQueue = new LinkedList<Runnable>();
     private Future<?> actionFuture = null;
+
+    Object cid = null;
 
     private final Runnable actionsRunner = new Runnable() {
         @Override
@@ -210,7 +221,7 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
 
     @Activate
     protected void activate(ComponentContext ctx, Map<String, Object> config) {
-        Object cid = config.get(ComponentConstants.COMPONENT_ID);
+        cid = config.get(ComponentConstants.COMPONENT_ID);
         name = (String) config.get("id");
         pid = (String) config.get(Constants.SERVICE_PID);
 
@@ -222,6 +233,7 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
         if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
             Tr.event(this, tc, "activate HttpEndpoint " + this);
         }
+
         HttpEndpointList.registerEndpoint(this);
         endpointStarted = true;
 
@@ -329,7 +341,13 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
         // Store the configuration
         endpointConfig = config;
 
-        processHttpChainWork(endpointEnabled, false);
+        if ((CHFWBundle.isServerCompletelyStarted() != true) && (endpointEnabled == true)) {
+            // SplitStartUp. Enabling during startup need this to stay on the same thread,
+            // or else the port may listen after the server says it is ready
+            processHttpChainWork(endpointEnabled, true);
+        } else {
+            processHttpChainWork(endpointEnabled, false);
+        }
     }
 
     /**
@@ -435,7 +453,7 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
         return httpSecureChain.getActivePort();
     }
 
-    public String getProtocolVersion(){
+    public String getProtocolVersion() {
         return this.protocolVersion;
     }
 
@@ -604,6 +622,124 @@ public class HttpEndpointImpl implements RuntimeUpdateListener, PauseableCompone
 
     public Map<String, Object> getHttpOptions() {
         ChannelConfiguration c = httpOptions;
+        return c == null ? null : c.getConfiguration();
+    }
+
+    /**
+     * The specific compressionOptions is selected by a filter et through metatype that matches a specific user-configured
+     * option set or falls back to a default.
+     *
+     * @param service
+     */
+    @Trivial
+    @Reference(name = "compression",
+               service = ChannelConfiguration.class,
+               policy = ReferencePolicy.DYNAMIC,
+               policyOption = ReferencePolicyOption.GREEDY,
+               cardinality = ReferenceCardinality.MANDATORY)
+    protected void setCompression(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "set compression " + config.getProperty("id"), this);
+        }
+        this.compressionConfig = config;
+        if (compressionConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    @Trivial
+    protected void updatedCompression(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "update auto compression " + config.getProperty("id"), this);
+        }
+
+        if (compressionConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    protected void unsetCompression(ChannelConfiguration config) {}
+
+    public Map<String, Object> getCompressionConfig() {
+        ChannelConfiguration c = compressionConfig;
+        return c == null ? null : c.getConfiguration();
+    }
+
+    /**
+     * The specific remoteIpOptions is selected by a filter set through metatype that matches a specific user-configured option set or falls back to a default.
+     *
+     * @param service
+     */
+    @Trivial
+    @Reference(name = "remoteIp",
+               service = ChannelConfiguration.class,
+               policy = ReferencePolicy.DYNAMIC,
+               policyOption = ReferencePolicyOption.GREEDY,
+               cardinality = ReferenceCardinality.MANDATORY)
+    protected void setRemoteIp(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "set remote ip " + config.getProperty("id"), this);
+        }
+        this.remoteIpConfig = config;
+        if (remoteIpConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    @Trivial
+    protected void updatedRemoteIp(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "update remote ip " + config.getProperty("id"), this);
+        }
+        if (remoteIpConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    protected void unsetRemoteIp(ChannelConfiguration config) {}
+
+    public Map<String, Object> getRemoteIpConfig() {
+        ChannelConfiguration c = remoteIpConfig;
+        return c == null ? null : c.getConfiguration();
+    }
+
+    /**
+     * The specific samesite configuration is selected by a filter through metatype that matches a specific user-configured
+     * option set or falls back to a default.
+     *
+     * @param service
+     */
+    @Trivial
+    @Reference(name = "samesite",
+               service = ChannelConfiguration.class,
+               policy = ReferencePolicy.DYNAMIC,
+               policyOption = ReferencePolicyOption.GREEDY,
+               cardinality = ReferenceCardinality.MANDATORY)
+    protected void setSamesite(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "set samesite " + config.getProperty("id"), this);
+        }
+        this.samesiteConfig = config;
+        if (samesiteConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    @Trivial
+    protected void updatedSamesite(ChannelConfiguration config) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+            Tr.event(this, tc, "update samesite configuration " + config.getProperty("id"), this);
+        }
+
+        if (samesiteConfig != null) {
+            performAction(updateAction);
+        }
+    }
+
+    protected void unsetSamesite(ChannelConfiguration config) {}
+
+    public Map<String, Object> getSamesiteConfig() {
+        ChannelConfiguration c = samesiteConfig;
         return c == null ? null : c.getConfiguration();
     }
 

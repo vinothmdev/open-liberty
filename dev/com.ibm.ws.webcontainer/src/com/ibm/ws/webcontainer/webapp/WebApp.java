@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2017 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -99,16 +99,20 @@ import com.ibm.websphere.servlet.event.ServletErrorEvent;
 import com.ibm.websphere.servlet.event.ServletErrorListener;
 import com.ibm.websphere.servlet.event.ServletInvocationListener;
 import com.ibm.websphere.servlet.event.ServletListener;
+import com.ibm.websphere.servlet.request.extended.IRequestExtended;
 import com.ibm.websphere.webcontainer.async.AsyncRequestDispatcher;
 import com.ibm.ws.container.Container;
 import com.ibm.ws.container.DeployedModule;
 import com.ibm.ws.container.ErrorPage;
 import com.ibm.ws.container.MimeFilter;
 import com.ibm.ws.container.service.annotations.WebAnnotations;
+import com.ibm.ws.container.service.annocache.AnnotationsBetaHelper;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.http.dispatcher.internal.channel.HttpDispatcherLink;
 import com.ibm.ws.managedobject.ManagedObject;
 import com.ibm.ws.session.SessionCookieConfigImpl;
+import com.ibm.ws.session.utils.IDGeneratorImpl;
 import com.ibm.ws.session.utils.LoggingUtil;
 import com.ibm.ws.util.WSThreadLocal;
 import com.ibm.ws.webcontainer.WebContainer;
@@ -139,6 +143,7 @@ import com.ibm.ws.webcontainer.servlet.ServletWrapper;
 import com.ibm.ws.webcontainer.servlet.exception.NoTargetForURIException;
 import com.ibm.ws.webcontainer.session.IHttpSessionContext;
 import com.ibm.ws.webcontainer.spiadapter.collaborator.IInvocationCollaborator;
+import com.ibm.ws.webcontainer.srt.SRTServletRequest;
 import com.ibm.ws.webcontainer.util.DocumentRootUtils;
 import com.ibm.ws.webcontainer.util.EmptyEnumeration;
 import com.ibm.ws.webcontainer.util.IteratorEnumerator;
@@ -148,6 +153,7 @@ import com.ibm.wsspi.adaptable.module.Entry;
 import com.ibm.wsspi.adaptable.module.UnableToAdaptException;
 import com.ibm.wsspi.anno.targets.AnnotationTargets_Targets;
 import com.ibm.wsspi.http.HttpInboundConnection;
+import com.ibm.wsspi.http.ee7.HttpInboundConnectionExtended;
 import com.ibm.wsspi.injectionengine.InjectionException;
 import com.ibm.wsspi.webcontainer.ClosedConnectionException;
 import com.ibm.wsspi.webcontainer.RequestProcessor;
@@ -306,6 +312,7 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
     private static boolean errorExceptionTypeFirst = WCCustomProperties.ERROR_EXCEPTION_TYPE_FIRST;
     private static boolean initFilterBeforeServletInit = WCCustomProperties.INIT_FILTER_BEFORE_INIT_SERVLET; //PM62909
     //protected final static boolean stopAppStartupOnListenerException = WCCustomProperties.STOP_APP_STARTUP_ON_LISTENER_EXCEPTION ; //PI58875 update server.xml without restarting server may not pick up the change dynamically.
+    private static boolean SET_400_SC_ON_TOO_MANY_PARENT_DIRS = Boolean.valueOf(WebContainer.getWebContainerProperties().getProperty("com.ibm.ws.webcontainer.set400scontoomanyparentdirs")).booleanValue(); //PI80786
 
     private List<IServletConfig> sortedServletConfigs;
     private int effectiveMajorVersion;
@@ -750,31 +757,54 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
      * @return True if annotations are accepted from the class.  Otherwise, false.
      */
     protected boolean acceptAnnotationsFrom(String className, boolean acceptPartial, boolean acceptExcluded) {
-        String methodName = "acceptAnnotationsFrom";
+        // As an optimization, immediately return with a false - do-not-accept - value
+        // when the web module is metadata complete and neither partial nor excluded
+        // classes are accepted:
+        //
+        // Always accept annotations from seed classes.
+        //
+        // Accept classes from metadata-complete but non-excluded regions of the web module
+        // if 'acceptPartial' is true.
+        //
+        // Accept classes from excluded regions of the web module if 'acceptExcluded' is true.
+        //
+        // If 'acceptPartial' and 'acceptExcluded' are both false, then only accept a class
+        // if that class is in a non-metadata-complete region of the web module.
+        //
+        // If the web module as a whole is metatadata complete, the non-metadata complete
+        // region is empty.
 
-        // Don't unnecessarily obtain the annotation targets table:
-        // No seed annotations will be obtained when the module is metadata-complete.
-      
-        if (config.isMetadataComplete()) {
-            if (!acceptPartial && !acceptExcluded) {
+        if ( config.isMetadataComplete() ) {
+            if ( !acceptPartial && !acceptExcluded ) {
                 return false;
             }
         }
-      
-        try {
-            WebAnnotations webAppAnnotations = getModuleContainer().adapt(WebAnnotations.class);
-            AnnotationTargets_Targets table = webAppAnnotations.getAnnotationTargets();
-          
-            return ( table.isSeedClassName(className) ||
-                     (acceptPartial && table.isPartialClassName(className)) ||
-                     (acceptExcluded && table.isExcludedClassName(className)) );
-              
-        } catch (UnableToAdaptException e) {
-            logger.logp(Level.FINE, CLASS_NAME, methodName, "caught UnableToAdaptException: " + e);
-            return false;
-        }      
+
+        AnnotationTargets_Targets targets = getAnnotationTargets();
+        if ( targets == null ) {
+        	return false; // Annotations failure
+        }
+
+        return ( targets.isSeedClassName(className) ||
+                 (acceptPartial && targets.isPartialClassName(className)) ||
+                 (acceptExcluded && targets.isExcludedClassName(className)) );
     }
-    
+
+    /**
+     * Answer the annotation targets of the web module.
+     *
+     * @return The annotations targets of the web module.  Return null if
+     *     annotation processing fails.
+     */
+    private AnnotationTargets_Targets getAnnotationTargets() {
+        try {
+            // Conditionally use the cache enabled implementation.
+            WebAnnotations webAnnotations = AnnotationsBetaHelper.getWebAnnotations( getModuleContainer() );
+            return webAnnotations.getAnnotationTargets();
+        } catch ( UnableToAdaptException e ) {
+            return null; // FFDC
+        } 
+    }
     
     /**
      * <p>Invoke post-construct and pre-destroy methods on the target object.</p>
@@ -935,9 +965,15 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
         // PK63920 End
         serverInfo = getServerInfo(); // NEVER INVOKED BY WEBSPHERE APPLICATION
         // SERVER (Common Component Specific)
+
+        // Initialize the Logger for IDGeneratorImpl before setting Thread context ClassLoader
+        // in order to avoid using the application ClassLoader to load the Logger's resource bundle.
+        IDGeneratorImpl.init();
+
         ClassLoader origClassLoader = null; // NEVER INVOKED BY WEBSPHERE
         // APPLICATION SERVER (Common
         // Component Specific)
+        boolean webAppNameCollPreInvokeCalled = false;
         try {
             origClassLoader = ThreadContextHelper.getContextClassLoader(); // NEVER
             // INVOKED
@@ -989,6 +1025,7 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             // setupWebAppAnnotations();
 
             webAppNameSpaceCollab.preInvoke(config.getMetaData().getCollaboratorComponentMetaData()); //added 661473
+            webAppNameCollPreInvokeCalled = true;
             commonInitializationFinish(extensionFactories); // NEVER INVOKED BY
             
             this.initializeServletContainerInitializers(moduleConfig);
@@ -1005,14 +1042,29 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             } catch (Throwable th) {
                 // pk435011
                 logger.logp(Level.SEVERE, CLASS_NAME, "initialize", "error.notifying.listeners.of.WebApp.start", new Object[] { th });
-                if (WCCustomProperties.STOP_APP_STARTUP_ON_LISTENER_EXCEPTION) {          //PI58875
+                if (WCCustomProperties.STOP_APP_STARTUP_ON_LISTENER_EXCEPTION) { //PI58875
                     if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
                         logger.logp(Level.FINE, CLASS_NAME, "initialize", "rethrowing exception due to stopAppStartupOnListenerException");
+
+                    if (moduleConfig instanceof com.ibm.ws.webcontainer.osgi.container.DeployedModule) {
+                        // complete the notification here for app manager
+                        ((com.ibm.ws.webcontainer.osgi.container.DeployedModule) moduleConfig).initTaskFailed();
+                    }
+
                     throw th;
                 }
             }
+
+            if (moduleConfig instanceof com.ibm.ws.webcontainer.osgi.container.DeployedModule) {
+                // complete the notification here for app manager
+                ((com.ibm.ws.webcontainer.osgi.container.DeployedModule) moduleConfig).initTaskComplete();
+                
+                if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                    logger.logp(Level.FINE, CLASS_NAME, "initialize", "set future done for deployedModule -->" + moduleConfig);
+                }
+            }
+            
             commonInitializationFinally(extensionFactories); // NEVER INVOKED BY
-            webAppNameSpaceCollab.postInvoke(); //added 661473            
             // WEBSPHERE
             // APPLICATION
             // SERVER (Common
@@ -1025,6 +1077,10 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             AnnotationHelperManager.verifyClassIsLoaded();
             
         } finally {
+            // if initialization failed, this can be null.
+            if (webAppNameCollPreInvokeCalled) {
+                webAppNameSpaceCollab.postInvoke(); //added 661473            
+            }
             if (origClassLoader != null) // NEVER INVOKED BY WEBSPHERE
             // APPLICATION SERVER (Common Component
             // Specific)
@@ -1224,13 +1280,16 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
         //webAppNameSpaceCollab.preInvoke(cmd);
 
         webAppNameSpaceCollab.preInvoke(config.getMetaData().getCollaboratorComponentMetaData());
-        loadWebAppAttributes();
+        try {
+            loadWebAppAttributes();
 
-        // loadLifecycleListeners();
-        //since we have now removed clearing the listeners from within loadLifecycleListeners (due to when it is being called), 
-        //we need to add this method to clear listeners now in case there was an error and the app gets updated
-        clearLifecycleListeners();
-        webAppNameSpaceCollab.postInvoke();
+            // loadLifecycleListeners();
+            //since we have now removed clearing the listeners from within loadLifecycleListeners (due to when it is being called), 
+            //we need to add this method to clear listeners now in case there was an error and the app gets updated
+            clearLifecycleListeners();
+        } finally {
+            webAppNameSpaceCollab.postInvoke();
+        }
 
         registerGlobalWebAppListeners();
         txCollab = collabHelper.getWebAppTransactionCollaborator();
@@ -2290,7 +2349,7 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             }
         } catch (Throwable th) {
             // pk435011
-            logger.logp(Level.SEVERE, CLASS_NAME, "loadLifecycleListeners", "error.processing.global.listeners.for.webapp", th);
+            logger.logp(Level.SEVERE, CLASS_NAME, "loadLifecycleListeners", "error.processing.global.listeners.for.webapp", new Object[] { getApplicationName(), th });
 			if (WCCustomProperties.STOP_APP_STARTUP_ON_LISTENER_EXCEPTION) { //PI58875
                 throw th;
             }
@@ -2345,15 +2404,17 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             logger.logp(Level.FINE, CLASS_NAME, "notifyServletContextCreated", "ENTRY"); //PI26908
 
         TxCollaboratorConfig txConfig = null;
+        final boolean hasListeners = !servletContextListeners.isEmpty();
+
         try {
-            webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
+            if (hasListeners) {
+                webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
 
-            txConfig = txCollab.preInvoke(null, this.isServlet23);
-            if (txConfig != null)
-                txConfig.setDispatchContext(null);
+                txConfig = txCollab.preInvoke(null, this.isServlet23);
+                if (txConfig != null)
+                    txConfig.setDispatchContext(null);
 
-            if (!servletContextListeners.isEmpty()) {
-				if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
+                if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
                     logger.logp(Level.FINE, CLASS_NAME, "notifyServletContextCreated", "stopAppStartupOnListenerException = " + WCCustomProperties.STOP_APP_STARTUP_ON_LISTENER_EXCEPTION);
 
                 Iterator i = servletContextListeners.iterator();
@@ -2404,13 +2465,15 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             logger.logp(Level.SEVERE, CLASS_NAME, "notifyServletContextCreated", "exception.caught.in.notifyServletContextCreated", new Object[] { e } ); // PK27660
         } finally {
             canAddServletContextListener = true;
-            try {
-                txCollab.postInvoke(null, txConfig, this.isServlet23);
-            } catch (Exception e) {
-                com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, CLASS_NAME + ".notifyServletContextCreated", "1327", this);
+            if (hasListeners) {
+                try {
+                    txCollab.postInvoke(null, txConfig, this.isServlet23);
+                } catch (Exception e) {
+                    com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, CLASS_NAME + ".notifyServletContextCreated", "1327", this);
 
+                }
+                webAppNameSpaceCollab.postInvoke();
             }
-            webAppNameSpaceCollab.postInvoke();
         }
     }
     
@@ -2486,7 +2549,7 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             try {
                 sci.onStartup(setOfClasses, ctx);
             } catch (ServletException e) {
-                logger.logp(Level.WARNING, CLASS_NAME,"initializeServletContainerInitializers", "exception.occurred.while.running.ServletContainerInitializers.onStartup", new Object[] {sci, this.config.getDisplayName()});;
+                logger.logp(Level.WARNING, CLASS_NAME,"initializeServletContainerInitializers", "exception.occurred.while.running.ServletContainerInitializers.onStartup", new Object[] {sci, e, this.config.getDisplayName()});
             }
         }
 
@@ -2582,9 +2645,13 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
         TxCollaboratorConfig txConfig = null;
         try {
 
-            webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
+            if (webAppNameSpaceCollab != null) {
+                webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
+            }
 
-            txConfig = txCollab.preInvoke(null, this.isServlet23);
+            if (txCollab != null) {
+                txConfig = txCollab.preInvoke(null, this.isServlet23);
+            }
             if (txConfig != null)
                 txConfig.setDispatchContext(null);
             // need to notify listeners registered in the
@@ -2612,12 +2679,16 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             // pk435011
             logger.logp(Level.SEVERE, CLASS_NAME, "notifyServletContextDestroyed", "exception.caught.in.notifyServletContextDestroyed", e); // PK27660
         } finally {
-            try {
-                txCollab.postInvoke(null, txConfig, this.isServlet23);
-            } catch (Exception e) {
-                com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, CLASS_NAME + ".notifyServletContextDestroyed", "1557", this);
+            if (txCollab != null) {
+                try {
+                    txCollab.postInvoke(null, txConfig, this.isServlet23);
+                } catch (Exception e) {
+                    com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(e, CLASS_NAME + ".notifyServletContextDestroyed", "1557", this);
+                }
             }
-            webAppNameSpaceCollab.postInvoke();
+            if (webAppNameSpaceCollab != null) {
+                webAppNameSpaceCollab.postInvoke();
+            }
         }
     }
 
@@ -3852,9 +3923,6 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             if(!initialized){
                 if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
                     logger.logp(Level.FINE, CLASS_NAME, "destroy", "WebApp {0} has not been initialized", applicationName);
-                //At least note that destroy was called for this Webapp, even if we were not already inited
-                destroyed = Boolean.TRUE;
-                return;
             }
             // 325429 BEGIN
             if (destroyed.booleanValue()) {
@@ -3863,7 +3931,6 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                 return;
             }
             destroyed = Boolean.TRUE;
-            ClassLoader origClassLoader = null;
             // 325429 END
             try {
 /*
@@ -3882,7 +3949,9 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                 if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE))
                     logger.logp(Level.FINE, CLASS_NAME, "destroy", "WebApp {0} is destroying", applicationName);
 
-                webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
+                if (webAppNameSpaceCollab != null) {
+                    webAppNameSpaceCollab.preInvoke(getModuleMetaData().getCollaboratorComponentMetaData());
+                }
                 notifyStop();
                 
                 //PM70296 Start
@@ -3953,7 +4022,9 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                 logger.logp(Level.SEVERE, CLASS_NAME, "destroy", "WebApp.destroy.encountered.errors", vals);
                 com.ibm.wsspi.webcontainer.util.FFDCWrapper.processException(th, CLASS_NAME + ".destroy", "2459", this);
             } finally {
-                webAppNameSpaceCollab.postInvoke();
+                if (webAppNameSpaceCollab != null) {
+                    webAppNameSpaceCollab.postInvoke();
+                }
                 /*
                  * Liberty commenting out WAS code
                  * if (origClassLoader != null)
@@ -4006,6 +4077,8 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
         
         // parent.removeSubContainer(name); //PK37449
         callWebAppInitializationCollaborators(InitializationCollaborCommand.STOPPED);
+
+        attributes.clear();
     }
 
     // End 299205, Collaborator added in extension processor recieves no events
@@ -4022,10 +4095,28 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             logger.entering(CLASS_NAME, "sendError", "error :" + error.getMessage());
 
         req.setAttribute("javax.servlet.jsp.jspException", error);
+        
+        WebContainerRequestState reqState = WebContainerRequestState.getInstance(true);   //PI80786
 
         // PK82794
-        if (WCCustomProperties.SUPPRESS_LAST_ZERO_BYTE_PACKAGE)
-            WebContainerRequestState.getInstance(true).setAttribute("com.ibm.ws.webcontainer.suppresslastzerobytepackage", "true");
+        if (WCCustomProperties.SUPPRESS_LAST_ZERO_BYTE_PACKAGE) {
+           // reqState.setAttribute("com.ibm.ws.webcontainer.suppresslastzerobytepackage", "true");
+            if (req instanceof SRTServletRequest) {
+                SRTServletRequest srtReq = (SRTServletRequest) req;
+                IRequestExtended iReq = (IRequestExtended)srtReq.getIRequest();
+                if (iReq != null) {
+                    HttpInboundConnection httpInboundConnection = iReq.getHttpInboundConnection();
+                    HttpInboundConnectionExtended extendedConnection= (HttpInboundConnectionExtended) httpInboundConnection;
+                    if(extendedConnection!=null) {
+                        HttpDispatcherLink dispatcherLink=(HttpDispatcherLink) extendedConnection.getHttpDispatcherLink();
+			if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+				logger.logp(Level.FINE, CLASS_NAME, "sendError", "Setting SuppressZeroByteChunk");
+			}
+                        dispatcherLink.setSuppressZeroByteChunk(true);
+                        }
+                }
+            }
+        }
         // PK82794
 
         if (!res.isCommitted())
@@ -4059,6 +4150,18 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
             // 198256 - end
             this.eventSource.onServletServiceDenied(new ServletErrorEvent(this, this, servletName, null, error));
         }
+        
+        //PI80786 set error code to 400 to avoid logging as 500
+        if (SET_400_SC_ON_TOO_MANY_PARENT_DIRS){
+            if(reqState.getAttribute("com.ibm.ws.webcontainer.set400") != null) {
+                if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                    logger.logp(Level.FINE, CLASS_NAME, "sendError", "Setting the status code to 400");
+                }
+                error.setErrorCode(HttpServletResponse.SC_BAD_REQUEST);
+                reqState.removeAttribute("com.ibm.ws.webcontainer.set400");
+            }
+        }
+        //PI80786
 
         if (error.getErrorCode() >= 500) {
             if (servletName == null)
@@ -4219,7 +4322,6 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                     }
                 } catch (IllegalStateException ise) {
                     ServletOutputStream os = res.getOutputStream();
-                    WebContainerRequestState reqState = WebContainerRequestState.getInstance(true);
                     reqState.setAttribute("com.ibm.ws.webcontainer.AllowWriteFromE", true); 
                     if( WCCustomProperties.DISPLAY_TEXT_WHEN_NO_ERROR_PAGE_DEFINED == null) {                                             
                         // PM03788 Start
@@ -4724,6 +4826,8 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
         // VirtualHost
         String partialUri = fullUri;
 
+        dispatchContext.setWebApp(this);
+
         if (!contextPath.equals("/")) {
             int index = 0;
             if (contextPath.endsWith("/*")) {
@@ -4753,7 +4857,6 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
 
         if (partialUri.length() == 0)
             partialUri = "/";
-        dispatchContext.setWebApp(this);
         dispatchContext.setRelativeUri(partialUri);
         
         if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
@@ -4961,6 +5064,20 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                 }
             }
         } catch (Throwable th) {
+            //PI80786
+            if (SET_400_SC_ON_TOO_MANY_PARENT_DIRS) { 
+                if(th.getMessage().contains("is invalid because it contains more references to parent directories")){
+                    if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                        logger.logp(Level.FINE, CLASS_NAME, "handleRequest", "Request contains more ../ than allowed, will set 400 SC");
+                    }
+
+                    WebContainerRequestState reqState = WebContainerRequestState.getInstance(false);
+                    if(reqState != null)
+                        reqState.setAttribute("com.ibm.ws.webcontainer.set400", "true");
+                }
+            }
+            //PI80786
+
             boolean logStack = true;
             boolean donothandleexception = false;
             if (th instanceof ServletException) {
@@ -5603,7 +5720,7 @@ public abstract class WebApp extends BaseContainer implements ServletContext, IS
                 ThreadContextHelper.setClassLoader(origLoader);
             }
             if (envObjectStack.isEmpty()) {
-                envObject.set(null);
+                envObject.remove();
             }
         }
 

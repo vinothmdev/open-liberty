@@ -13,15 +13,15 @@ package com.ibm.ws.microprofile.faulttolerance20.impl;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 
-import com.ibm.ws.microprofile.faulttolerance.impl.ProviderResolverImpl;
+import com.ibm.ws.microprofile.faulttolerance.impl.AbstractProviderResolverImpl;
 import com.ibm.ws.microprofile.faulttolerance.spi.ExecutorBuilder;
 import com.ibm.ws.microprofile.faulttolerance.spi.FaultToleranceProviderResolver;
 
 @Component(service = { FaultToleranceProviderResolver.class }, property = { "service.vendor=IBM" }, immediate = true, configurationPolicy = ConfigurationPolicy.IGNORE)
-public class ProviderResolverImpl20 extends ProviderResolverImpl {
+public class ProviderResolverImpl20 extends AbstractProviderResolverImpl {
 
     @Override
-    public <T, R> ExecutorBuilder<T, R> newExecutionBuilder() {
+    public <R> ExecutorBuilder<R> newExecutionBuilder() {
         return new ExecutorBuilderImpl20<>(contextService, policyExecutorProvider, getScheduledExecutorService());
     }
 

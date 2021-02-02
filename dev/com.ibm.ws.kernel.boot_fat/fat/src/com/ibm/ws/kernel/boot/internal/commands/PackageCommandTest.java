@@ -18,26 +18,48 @@ import static org.junit.Assume.assumeTrue;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
+import com.ibm.websphere.simplicity.config.ServerConfiguration;
+
+import componenttest.custom.junit.runner.FATRunner;
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.impl.LibertyServerFactory;
 
 /**
  *
  */
+@RunWith(FATRunner.class)
 public class PackageCommandTest {
     private static final Class<?> c = PackageCommandTest.class;
 
     private static String serverName = "com.ibm.ws.kernel.boot.root.fat";
     private static String archivePackage = "MyPackage.zip";
+    private static String archivePackageNoExtension = "MyPackage";
+    private static String archivePackageTarGzExtension = "MyPackage.tar.gz";
+    private static String archivePackageJarExtension = "MyPackage.jar";
+
+    @Before
+    public void before() throws Exception {
+
+        // Delete previous archive file if it exists
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+        server.deleteFileFromLibertyServerRoot(archivePackage);
+    }
 
     /**
      * The package command requires that the lib/extract directory exists, as this directory
@@ -206,6 +228,104 @@ public class PackageCommandTest {
         }
     }
 
+    /**
+     * This tests that --include=usr outputs the correct information in
+     * the archive file
+     *
+     */
+    @Test
+    public void testMinifyInclude() throws Exception {
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+        try {
+
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            String[] cmd = new String[] { "--archive=" + archivePackage,
+                                          "--include=minify" };
+            // Ensure package completes
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+            assertTrue("The package command did not complete as expected. STDOUT = " + stdout, stdout.contains("package complete"));
+
+            // Ensure root is correct in the .zip
+            ZipFile zipFile = new ZipFile(server.getServerRoot() + "/" + archivePackage);
+            try {
+                boolean foundDefaultRootEntry = false;
+                boolean foundUsrEntry = false;
+                boolean foundBinEntry = false;
+                boolean foundLibEntry = false;
+                boolean foundDevEntry = false;
+
+                for (Enumeration<? extends ZipEntry> en = zipFile.entries(); en.hasMoreElements();) {
+                    ZipEntry entry = en.nextElement();
+                    foundDefaultRootEntry |= entry.getName().startsWith("wlp");
+                    foundUsrEntry |= entry.getName().contains("/usr");
+                    foundBinEntry |= entry.getName().contains("/bin");
+                    foundLibEntry |= entry.getName().contains("/lib");
+                    foundDevEntry |= entry.getName().contains("/dev");
+                }
+                assertTrue("The package did not contain /wlp root structure as expected.", foundDefaultRootEntry);
+                assertTrue("The package did not contain /usr/ as expected.", foundUsrEntry);
+                assertTrue("The package did not contain /bin/ as expected.", foundBinEntry);
+                assertTrue("The package did not contain /lib/ as expected.", foundLibEntry);
+                assertTrue("The package did not contain /dev/ as expected.", foundDevEntry);
+
+            } finally {
+                try {
+                    zipFile.close();
+                } catch (IOException ex) {
+                }
+            }
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that --include=usr outputs the correct information in
+     * the archive file
+     *
+     */
+    @Test
+    public void testUsrInclude() throws Exception {
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+        try {
+
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            String[] cmd = new String[] { "--archive=" + archivePackage,
+                                          "--include=usr" };
+            // Ensure package completes
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+            assertTrue("The package command did not complete as expected. STDOUT = " + stdout, stdout.contains("package complete"));
+
+            // Ensure root is correct in the .zip
+            ZipFile zipFile = new ZipFile(server.getServerRoot() + "/" + archivePackage);
+            try {
+                boolean foundDefaultRootEntry = false;
+                boolean foundUsrEntry = true;
+                for (Enumeration<? extends ZipEntry> en = zipFile.entries(); en.hasMoreElements();) {
+                    ZipEntry entry = en.nextElement();
+                    foundDefaultRootEntry |= entry.getName().startsWith("wlp");
+                    foundUsrEntry |= entry.getName().contains("/usr/");
+                }
+                assertTrue("The package did not contain /wlp root structure as expected.", foundDefaultRootEntry);
+                assertTrue("The package did not contain /usr/ as expected.", foundUsrEntry);
+            } finally {
+                try {
+                    zipFile.close();
+                } catch (IOException ex) {
+                }
+            }
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that when --server-root is supplied, that the value supplied
+     * shows up as the root of the archive
+     *
+     */
     @Test
     public void testServerRootSpecified() throws Exception {
         LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
@@ -240,6 +360,11 @@ public class PackageCommandTest {
         }
     }
 
+    /**
+     * This tests that when --server-root is supplied, and --include=usr that the
+     * /shared folder is also placed at the root of the archive.
+     *
+     */
     @Test
     public void testSharedFolderWithServerRootandUsrSpecified() throws Exception {
 
@@ -247,6 +372,10 @@ public class PackageCommandTest {
         try {
 
             server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Ensure the usr/shared dir exists
+            Path sharedPath = Paths.get(server.getServerSharedPath());
+            sharedPath.toFile().mkdirs();
 
             String[] cmd = new String[] { "--archive=" + archivePackage,
                                           "--include=usr",
@@ -275,6 +404,10 @@ public class PackageCommandTest {
         }
     }
 
+    /**
+     * This tests that when --server-root is supplied and --include=minify that /usr
+     * does show up in the archive file.
+     */
     @Test
     public void testServerFoundWithServerRootSpecified() throws Exception {
 
@@ -294,11 +427,15 @@ public class PackageCommandTest {
             ZipFile zipFile = new ZipFile(server.getServerRoot() + "/" + archivePackage);
             try {
                 boolean foundServerEntry = false;
+                boolean foundWarFileEntry = false;
                 for (Enumeration<? extends ZipEntry> en = zipFile.entries(); en.hasMoreElements();) {
                     ZipEntry entry = en.nextElement();
-                    foundServerEntry |= entry.getName().contains("MyRoot/servers/com.ibm.ws.kernel.boot.root.fat/");
+                    // For Minify, there should be /usr in the structure with server-root option
+                    foundServerEntry |= entry.getName().contains("MyRoot/usr/servers/com.ibm.ws.kernel.boot.root.fat");
+                    foundWarFileEntry |= entry.getName().contains("MyRoot/usr/servers/com.ibm.ws.kernel.boot.root.fat/apps/AppsLooseWeb.war");
                 }
-                assertTrue("The package did not contain MyRoot/servers/com.ibm.ws.kernel.boot.root.fat as expected.", foundServerEntry);
+                assertTrue("The package did not contain MyRoot/usr/servers/com.ibm.ws.kernel.boot.root.fat as expected.", foundServerEntry);
+                assertTrue("The package did not contain MyRoot/usr/servers/com.ibm.ws.kernel.boot.root.fat/apps/AppsLooseWeb.war as expected.", foundWarFileEntry);
             } finally {
                 try {
                     zipFile.close();
@@ -308,7 +445,236 @@ public class PackageCommandTest {
         } catch (FileNotFoundException ex) {
             assumeTrue(false); // the directory does not exist, so we skip this test.
         }
+    }
 
+    /**
+     * This tests that when --include=runnable is supplied, and --archive is supplied with
+     * a file extension not ending with .jar that an error is returned.
+     *
+     */
+    @Test
+    public void testCorrectErrorMessageWhenRunnableAndNonJARArchiveSpecified() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+
+        try {
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Make sure we have the /wlp/etc/extension directory which indicates Product Extensions are installed
+            File prodExtensionDir = null;
+            try {
+                server.getFileFromLibertyInstallRoot("etc/extension/");
+            } catch (FileNotFoundException ex) {
+                // The /etc/extension directory does not exist - so create it for this test.
+                String pathToProdExt = server.getInstallRoot() + "/etc" + "/extension/";
+                prodExtensionDir = new File(pathToProdExt);
+                prodExtensionDir.mkdirs();
+            }
+
+            String[] cmd = new String[] { "--archive=" + archivePackage,
+                                          "--include=runnable" };
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+
+            assertTrue("Did not find expected failure message, CWWKE0950E.  STDOUT = " + stdout, stdout.contains("CWWKE0950E"));
+
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that when the --archive value has no extension, and --include=runnable
+     * that a .jar archive is created by default.
+     */
+    @Test
+    public void testDefaultingToJar() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+
+        try {
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Make sure we have the /wlp/etc/extension directory which indicates Product Extensions are installed
+            File prodExtensionDir = null;
+            try {
+                server.getFileFromLibertyInstallRoot("etc/extension/");
+            } catch (FileNotFoundException ex) {
+                // The /etc/extension directory does not exist - so create it for this test.
+                String pathToProdExt = server.getInstallRoot() + "/etc" + "/extension/";
+                prodExtensionDir = new File(pathToProdExt);
+                prodExtensionDir.mkdirs();
+            }
+
+            String[] cmd = new String[] { "--archive=" + archivePackageNoExtension,
+                                          "--include=runnable" };
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+
+            assertTrue("Did not find expected 'package complete' success message.  STDOUT = " + stdout, stdout.contains("package complete"));
+            assertTrue("Did not find expected .jar archive.  STDOUT = " + stdout, stdout.contains(archivePackageNoExtension + ".jar"));
+
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that when the --archive value has no extension, and --include != runnable
+     * that a .zip archive is created by default.
+     */
+    @Test
+    public void testDefaultingToZip() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+
+        try {
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Make sure we have the /wlp/etc/extension directory which indicates Product Extensions are installed
+            File prodExtensionDir = null;
+            try {
+                server.getFileFromLibertyInstallRoot("etc/extension/");
+            } catch (FileNotFoundException ex) {
+                // The /etc/extension directory does not exist - so create it for this test.
+                String pathToProdExt = server.getInstallRoot() + "/etc" + "/extension/";
+                prodExtensionDir = new File(pathToProdExt);
+                prodExtensionDir.mkdirs();
+            }
+
+            String[] cmd = new String[] { "--archive=" + archivePackageNoExtension,
+                                          "--include=usr" };
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+
+            assertTrue("Did not find expected 'package complete' success message.  STDOUT = " + stdout, stdout.contains("package complete"));
+            assertTrue("Did not find expected .zip archive.  STDOUT = " + stdout, stdout.contains(archivePackageNoExtension + ".zip"));
+
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that a .tar.gz file type is created when specified by --archive.
+     */
+    @Test
+    public void testTarGz() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+
+        try {
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Make sure we have the /wlp/etc/extension directory which indicates Product Extensions are installed
+            File prodExtensionDir = null;
+            try {
+                server.getFileFromLibertyInstallRoot("etc/extension/");
+            } catch (FileNotFoundException ex) {
+                // The /etc/extension directory does not exist - so create it for this test.
+                String pathToProdExt = server.getInstallRoot() + "/etc" + "/extension/";
+                prodExtensionDir = new File(pathToProdExt);
+                prodExtensionDir.mkdirs();
+            }
+
+            String[] cmd = new String[] { "--archive=" + archivePackageTarGzExtension,
+                                          "--include=usr" };
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+
+            assertTrue("Did not find expected 'package complete' success message.  STDOUT = " + stdout, stdout.contains("package complete"));
+            assertTrue("Did not find expected .tar.gz archive.  STDOUT = " + stdout, stdout.contains(archivePackageTarGzExtension));
+
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * This tests that when --include=usr is supplied, and --archive is supplied with
+     * a file extension ending with .jar that an error is returned.
+     *
+     */
+    @Test
+    public void testCorrectErrorMessageWhenUsrandJARArchiveSpecified() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer(serverName);
+
+        try {
+            server.getFileFromLibertyInstallRoot("lib/extract");
+
+            // Make sure we have the /wlp/etc/extension directory which indicates Product Extensions are installed
+            File prodExtensionDir = null;
+            try {
+                server.getFileFromLibertyInstallRoot("etc/extension/");
+            } catch (FileNotFoundException ex) {
+                // The /etc/extension directory does not exist - so create it for this test.
+                String pathToProdExt = server.getInstallRoot() + "/etc" + "/extension/";
+                prodExtensionDir = new File(pathToProdExt);
+                prodExtensionDir.mkdirs();
+            }
+
+            String[] cmd = new String[] { "--archive=" + archivePackageJarExtension,
+                                          "--include=usr" };
+            String stdout = server.executeServerScript("package", cmd).getStdout();
+
+            assertTrue("Did not find expected failure message, CWWKE0951E.  STDOUT = " + stdout, stdout.contains("CWWKE0951E"));
+
+        } catch (FileNotFoundException ex) {
+            assumeTrue(false); // the directory does not exist, so we skip this test.
+        }
+    }
+
+    /**
+     * Verify the embedded server instance launched by the package command does not corrupt
+     * the feature cache of the packaged (target) server.
+     */
+    @Test
+    public void testMinifyDoesNotCorruptServerFeatureCache() throws Exception {
+
+        LibertyServer server = LibertyServerFactory.getLibertyServer("com.ibm.ws.kernel.bootstrap.fat");
+        String jarFileName = server.getServerName() + ".jar";
+        ServerConfiguration config = null;
+        Set<String> features = null;
+        try {
+            config = server.getServerConfiguration();
+            features = config.getFeatureManager().getFeatures();
+            features.addAll(new HashSet<>(Arrays.asList("mpFaultTolerance-1.1", "mpMetrics-1.1", "jsp-2.3")));
+            server.updateServerConfiguration(config);
+
+            server.startServer(true); // --clean
+            String installedFeaturesBefore = server.findStringsInLogs("CWWKF0012I:.*").get(0);
+            System.out.println("installedFeaturesBefore: " + installedFeaturesBefore);
+            server.stopServer();
+
+            String stdout = server.executeServerScript("package", new String[] { "--archive=" + jarFileName, "--include=minify" }).getStdout();
+            System.out.println("Server package command output: " + stdout);
+            assertTrue("Server package command launched an embedded server that computed a feature set : ", stdout.contains("CWWKF0012I:"));
+
+            server.startServer(); // Not --clean
+            String installedFeaturesAfter = server.findStringsInLogs("CWWKF0012I:.*").get(0);
+            System.out.println("installedFeaturesAfter: " + installedFeaturesAfter);
+
+            int i = installedFeaturesBefore.indexOf("CWWKF0012I:"); // Ignore the timestamp
+            int j = installedFeaturesAfter.indexOf("CWWKF0012I:");
+            assertTrue("Server package command did not change the packaged server's feature cache: ",
+                       i > 0 && j > 0 && installedFeaturesBefore.substring(i).equals(installedFeaturesAfter.substring(j)));
+            //Expected: "CWWKF0012I: The server installed the following features: [cdi-1.2, concurrent-1.0, distributedMap-1.0, el-3.0, jndi-1.0, json-1.0, jsp-2.3, mpConfig-1.3, mpFaultTolerance-1.1, mpMetrics-1.1, servlet-3.1, ssl-1.0, timedExit-1.0]";
+        } finally {
+            if (server.isStarted()) {
+                try {
+                    server.stopServer();
+                } catch (Exception e1) {
+                    e1.printStackTrace(System.out);
+                }
+            }
+            // Help tidy up, but likely redundant as getLibertyServer() will reset the server configuration.
+            if (!features.isEmpty() && features.contains("mpFaultTolerance-1.1")) {
+                features.removeAll(new HashSet<>(Arrays.asList("mpFaultTolerance-1.1", "mpMetrics-1.1", "jsp-2.3")));
+                try {
+                    server.updateServerConfiguration(config);
+                } catch (Exception e2) {
+                    e2.printStackTrace(System.out);
+                }
+            }
+
+        }
     }
 
 }

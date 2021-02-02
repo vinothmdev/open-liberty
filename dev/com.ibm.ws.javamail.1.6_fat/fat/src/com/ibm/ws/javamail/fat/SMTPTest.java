@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017,2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -25,7 +25,6 @@ import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.omg.CORBA.UserException;
 
 import com.ibm.websphere.simplicity.log.Log;
 import com.icegreen.greenmail.user.GreenMailUser;
@@ -125,7 +124,7 @@ public class SMTPTest {
     }
 
     @BeforeClass
-    public static void startGreenMail() throws UserException, Exception {
+    public static void startGreenMail() throws Exception {
 
         if (server.isStarted() != true) {
             server.startServer();
@@ -140,6 +139,8 @@ public class SMTPTest {
         // Create a ServerSetup with a port and host name and protocol type passed to it
         // which is then used to create the actual GreenMail server
         int smtpPort = Integer.getInteger("smtp_port"); // As per server.xml
+
+        System.out.println("Starting SMTP server on port "+smtpPort);
         ServerSetup smtpSetup = new ServerSetup(smtpPort, "localhost", "smtp");
 
         smtpServer = new GreenMail(smtpSetup);

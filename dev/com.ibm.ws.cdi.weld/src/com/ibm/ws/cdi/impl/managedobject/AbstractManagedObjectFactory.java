@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015, 2018 IBM Corporation and others.
+ * Copyright (c) 2015, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -27,6 +27,7 @@ import org.jboss.weld.manager.api.WeldManager;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.cdi.internal.interfaces.CDIRuntime;
+import com.ibm.ws.cdi.internal.interfaces.CDIUtils;
 import com.ibm.ws.cdi.internal.interfaces.WebSphereBeanDeploymentArchive;
 import com.ibm.ws.cdi.internal.interfaces.WebSphereCDIDeployment;
 import com.ibm.ws.cdi.internal.interfaces.WebSphereInjectionServices;
@@ -140,15 +141,6 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
         return this.bean;
     }
 
-    public String getBeanScope() throws ManagedObjectException {
-        Bean<T> bean = getBean();
-        String beanScope = null;
-        if (bean != null) {
-            beanScope = bean.getScope().getCanonicalName();
-        }
-        return beanScope;
-    }
-
     public ManagedObject<T> existingInstance(T instance) throws ManagedObjectException {
         throw new UnsupportedOperationException();
     }
@@ -230,6 +222,16 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
     @Override
     public final ManagedObject<T> createManagedObject(T instance, ManagedObjectInvocationContext<T> invocationContext) throws ManagedObjectException {
 
+        //In order to avoid creating a second proxy object with a broken internal state we simply wrap any weld proxy we are given in a DummyManagedObject.
+        if (CDIUtils.isWeldProxy(getManagedObjectClass())) {
+            if(instance != null) {
+                return new DummyManagedObject<T>(instance);
+            }
+            else {
+                throw new IllegalArgumentException("when calling createManagedObject on a Managed Object Factory for a weld subclass; please provide an instance of the class");
+            }
+        }
+
         // 1.Obtain a BeanManager instance.
         WeldManager beanManager = getBeanManager();
         if (beanManager == null) {
@@ -244,7 +246,7 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
             WeldCreationalContext<T> creationalContext = getCreationalContext(invocationContext, nonContextual);
 
             // pass the injectionTarget into the MO so that preDestroy can be called during "release"
-            ManagedObject<T> mo = createManagedObject(instance, creationalContext, injectionTarget);
+            ManagedObject<T> mo = createManagedObject(instance, creationalContext, injectionTarget, nonContextual);
             return mo;
         }
     }
@@ -255,7 +257,7 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
         return mo;
     }
 
-    private ManagedObject<T> createManagedObject(T instance, WeldCreationalContext<T> creationalContext, InjectionTarget<T> injectionTarget) throws ManagedObjectException {
+    private ManagedObject<T> createManagedObject(T instance, WeldCreationalContext<T> creationalContext, InjectionTarget<T> injectionTarget, boolean nonContextual) throws ManagedObjectException {
         CDIRuntime cdiRuntime = getCDIRuntime();
         WebSphereCDIDeployment deployment = cdiRuntime.getCurrentDeployment();
         WebSphereInjectionServices webSphereInjectionServices = deployment.getInjectionServices();
@@ -266,7 +268,7 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
         }
 
         // pass the injectionTarget into the MO so that preDestroy can be called during "release"
-        ManagedObject<T> mo = new CDIManagedObject<T>(instance, creationalContext, injectionTarget, getBeanScope(), webSphereInjectionServices);
+        ManagedObject<T> mo = new CDIManagedObject<T>(instance, creationalContext, injectionTarget, getBeanScope(nonContextual), webSphereInjectionServices);
 
         if (managesInjectionAndInterceptors()) {
             mo.inject(referenceContext);
@@ -274,6 +276,17 @@ public abstract class AbstractManagedObjectFactory<T> implements ManagedObjectFa
             injectionTarget.postConstruct(mo.getObject());
         }
         return mo;
+    }
+
+    private String getBeanScope(boolean nonContextual) throws ManagedObjectException {
+        String beanScope = null;
+        if (! nonContextual) { //if nonContextual==true then there is no bean and no beanScope
+            Bean<T> bean = getBean();
+            if (bean != null) {
+                beanScope = bean.getScope().getCanonicalName();
+            }
+        }
+        return beanScope;
     }
 
     private T createInstance(final InjectionTarget<T> injectionTarget, final WeldCreationalContext<T> creationalContext) {

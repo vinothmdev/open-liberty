@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2014, 2017, 2018 IBM Corporation and others.
+ * Copyright (c) 2014, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,11 +10,15 @@
  *******************************************************************************/
 package com.ibm.ws.security.javaeesec.fat;
 
+import org.junit.ClassRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Suite;
 import org.junit.runners.Suite.SuiteClasses;
 
 import componenttest.custom.junit.runner.AlwaysPassesTest;
+import componenttest.rules.repeater.EmptyAction;
+import componenttest.rules.repeater.JakartaEE9Action;
+import componenttest.rules.repeater.RepeatTests;
 
 @RunWith(Suite.class)
 @SuiteClasses({
@@ -33,36 +37,9 @@ import componenttest.custom.junit.runner.AlwaysPassesTest;
                 MultipleIdentityStoreCustomFormPostTest.class,
                 MultipleIdentityStoreApplLoginToContinueTest.class,
                 LoginToContinueELTest.class,
-                HttpAuthenticationMechanismDBTest.class,
-                HttpAuthenticationMechanismDBNoUserTest.class,
-                HttpAuthenticationMechanismDBAuthAliasTest.class,
-                HttpAuthenticationMechanismDBAuthDataTest.class,
-                HttpAuthenticationMechanismDBShortNameTest.class,
-                HttpAuthenticationMechanismDBHashTest.class,
-                HttpAuthenticationMechanismDBHashBeanTest.class,
-                HttpAuthenticationMechanismDBHashNoConfigTest.class,
-                HttpAuthenticationMechanismDBAnnotationTest.class,
-                ProgrammaticTest.class,
-                MultipleModuleNoExpandTest.class,
-                MultipleModuleExpandTest.class,
-                SecurityContextTest.class,
-                SecurityContextJaxRSTest.class,
-                SecurityContextEJBTest.class,
-                DatabaseIdentityStoreDeferredSettingsTest.class,
-                DatabaseIdentityStoreImmediateSettingsTest.class,
-                EJBModuleTestProtectedServlet.class,
+                //EJBModuleTestProtectedServlet.class,
                 EJBModuleTestUnprotectedServlet.class,
-                MultipleModuleGlobalLoginTest.class,
-                MultipleModuleDBRunAsTest.class,
-                ScopedTest.class,
-                MultipleModuleRunAsTest.class,
-                FeatureTest.class,
-                EJBModuleRealmTest.class,
-                CustomIdentityStoreHandlerTest.class,
-                MultipleModuleGlobalClientCertTest.class,
-                MultipleModuleGlobalClientCertFailOverTest.class,
-                NoIdentityStoreTest.class,
-                SSOTest.class
+                FeatureTest.class
 })
 
 /**
@@ -70,4 +47,9 @@ import componenttest.custom.junit.runner.AlwaysPassesTest;
  */
 public class FATSuite {
 
+    /*
+     * Run EE9 tests in LITE mode and run all tests in FULL mode.
+     */
+    @ClassRule
+    public static RepeatTests repeat = RepeatTests.with(new EmptyAction().fullFATOnly()).andWith(new JakartaEE9Action());
 }

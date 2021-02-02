@@ -16,15 +16,9 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
-import java.security.AccessController;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
 import java.security.cert.Certificate;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.jar.Manifest;
-
-import com.ibm.ws.kernel.boot.classloader.URLEncodingUtils;
 
 /**
  */
@@ -44,11 +38,6 @@ public class JarResourceEntry implements ResourceEntry {
     }
 
     @Override
-    public Manifest getManifest() throws IOException {
-        return handler.getManifest();
-    }
-
-    @Override
     public Certificate[] getCertificates() {
         return jarEntry.getCertificates();
     }
@@ -65,21 +54,6 @@ public class JarResourceEntry implements ResourceEntry {
     }
 
     @Override
-    public URL toExternalURL() {
-        URL fileURL = handler.toURL();
-        if (!"file".equals(fileURL.getProtocol())) {
-            return toURL();
-        }
-
-        try {
-            return new URL("jar:" + fileURL + "!/" + URLEncodingUtils.encode(jarEntry.getName()));
-        } catch (MalformedURLException e) {
-            // this is very unexpected
-            throw new Error(e);
-        }
-    }
-
-    @Override
     public URL toURL() {
         /*
          * Regular "jar" url would cause the JarFile to be opened with verification.
@@ -90,20 +64,11 @@ public class JarResourceEntry implements ResourceEntry {
         try {
             final JarEntryURLStreamHandler handler = new JarEntryURLStreamHandler(jarFile, jarEntry);
             final URL url = new URL("jarentry", "", -1, name, handler);
-            AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
-
-                @Override
-                public Void run() throws Exception {
-                    handler.setExpectedURL(url);
-                    return null;
-                }
-            });
+            handler.setExpectedURL(url);
             return url;
         } catch (MalformedURLException e) {
             // this is very unexpected
             throw new Error(e);
-        } catch (PrivilegedActionException e) {
-            throw new Error(e.getCause());
         }
     }
 
@@ -118,7 +83,7 @@ public class JarResourceEntry implements ResourceEntry {
             this.jarEntry = jarEntry;
         }
 
-        private void setExpectedURL(URL expectedURL) {
+        void setExpectedURL(URL expectedURL) {
             this.expectedURL = expectedURL;
         }
 

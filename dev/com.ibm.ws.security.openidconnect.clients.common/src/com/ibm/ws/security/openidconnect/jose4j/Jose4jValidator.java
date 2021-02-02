@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2016, 2018 IBM Corporation and others.
+ * Copyright (c) 2016, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -21,7 +21,6 @@ import org.joda.time.Instant;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwt.JwtClaims;
 import org.jose4j.jwt.NumericDate;
-import org.jose4j.jwt.consumer.InvalidJwtException;
 import org.jose4j.jwt.consumer.InvalidJwtSignatureException;
 import org.jose4j.jwt.consumer.JwtConsumer;
 import org.jose4j.jwt.consumer.JwtConsumerBuilder;
@@ -65,7 +64,7 @@ public class Jose4jValidator {
         this.oidcClientRequest = oidcClientRequest;
     }
 
-    @FFDCIgnore({ InvalidJwtSignatureException.class, InvalidJwtException.class })
+    @FFDCIgnore({ InvalidJwtSignatureException.class })
     public JwtClaims parseJwtWithValidation(String jwtString,
             JwtContext jwtContext,
             JsonWebSignature signature) throws JWTTokenValidationFailedException, IllegalStateException, Exception {
@@ -129,7 +128,7 @@ public class Jose4jValidator {
                 // Let's make it behave the same the old IDToken though why it failed
                 // 221386
                 String errMsg = OidcClientRequest.TYPE_ID_TOKEN.equals(oidcClientRequest.getTokenType()) ? "ID token validation Error[issuer]" : "Json Web Token validation Error[issuer]";
-                throw new InvalidJwtException(errMsg);
+                throw new Exception(errMsg);
             }
             // So far, we only have JWT and IDToken in this code path
             // Do some specific ID Token checking
@@ -174,7 +173,7 @@ public class Jose4jValidator {
             if (issuedAt.isAfter(expiration) ||
                     !JsonTokenUtil.isCurrentTimeInInterval(clockSkewInSeconds, issuedAt.getMillis(), expiration.getMillis())) {
 
-                Object[] objects = new Object[] { this.clientId, new Instant(System.currentTimeMillis()), expiration, issuedAt };
+                Object[] objects = new Object[] { this.clientId, jwtClaims.getSubject(), new Instant(System.currentTimeMillis()), expiration, issuedAt };
 
                 String failMsg = Tr.formatMessage(tc, "OIDC_JWT_VERIFY_STATE_ERR", objects);
                 oidcClientRequest.setRsFailMsg(OidcCommonClientRequest.EXPIRED_TOKEN, failMsg);
@@ -239,7 +238,7 @@ public class Jose4jValidator {
                 throw new JWTTokenValidationFailedException(e.getMessage(), e);
             }
 
-        } catch (InvalidJwtException e) {
+        } catch (Exception e) {
             Throwable cause = getRootCause(e);
             // java.security.InvalidKeyException: No installed provider supports this key: (null)
             if (cause instanceof InvalidKeyException) {

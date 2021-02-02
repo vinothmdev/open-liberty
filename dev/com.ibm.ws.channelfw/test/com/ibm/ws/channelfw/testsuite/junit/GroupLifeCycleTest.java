@@ -18,12 +18,9 @@ import static org.junit.Assert.fail;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-
-import test.common.SharedOutputManager;
+import org.junit.rules.TestRule;
 
 import com.ibm.websphere.channelfw.ChainData;
 import com.ibm.websphere.channelfw.ChainGroupData;
@@ -43,45 +40,16 @@ import com.ibm.wsspi.channelfw.exception.ChainGroupException;
 import com.ibm.wsspi.channelfw.exception.ChainTimerException;
 import com.ibm.wsspi.channelfw.exception.ChannelException;
 
+import test.common.SharedOutputManager;
+
 /**
  * The purpose of this class is to test the group configuration methods
  * in ChannelFrameworkImpl.
  */
 public class GroupLifeCycleTest {
-    private static SharedOutputManager outputMgr;
-
-    /**
-     * Capture stdout/stderr output to the manager.
-     * 
-     * @throws Exception
-     */
-    @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-        outputMgr = SharedOutputManager.getInstance();
-        outputMgr.captureStreams();
-    }
-
-    /**
-     * Final teardown work when class is exiting.
-     * 
-     * @throws Exception
-     */
-    @AfterClass
-    public static void tearDownAfterClass() throws Exception {
-        // Make stdout and stderr "normal"
-        outputMgr.restoreStreams();
-    }
-
-    /**
-     * Individual teardown after each test.
-     * 
-     * @throws Exception
-     */
-    @After
-    public void tearDown() throws Exception {
-        // Clear the output generated after each method invocation
-        outputMgr.resetStreams();
-    }
+    private static SharedOutputManager outputMgr = SharedOutputManager.getInstance();
+    @Rule
+    public TestRule managerRule = outputMgr;
 
     private Map<Object, Object> getTcpProps(String portProp, String defPort) {
         String port = System.getProperty(portProp, defPort);
@@ -178,7 +146,7 @@ public class GroupLifeCycleTest {
     /**
      * Test startGroup method.
      */
-    @Test
+    //SplitStartUp @Test
     public void testStartGroup() {
         try {
             Chain chain1 = null;
@@ -330,6 +298,7 @@ public class GroupLifeCycleTest {
                 assertNull(framework.getRunningChain("chain1fail"));
                 // Clean up after the test.
                 framework.stopChain("chain1", 0);
+
             } catch (ChainGroupException e) {
                 e.printStackTrace();
                 fail("chaingroup exception: " + e.getMessage());

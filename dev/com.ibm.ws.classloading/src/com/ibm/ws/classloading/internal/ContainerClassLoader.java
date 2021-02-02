@@ -56,11 +56,11 @@ import org.osgi.util.tracker.ServiceTrackerCustomizer;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.classloading.configuration.GlobalClassloadingConfiguration;
 import com.ibm.ws.classloading.internal.util.ClassRedefiner;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.kernel.boot.classloader.ClassLoaderHook;
-import com.ibm.ws.kernel.boot.classloader.ClassLoaderHookFactory;
 import com.ibm.ws.kernel.feature.ServerStarted;
 import com.ibm.ws.kernel.security.thread.ThreadIdentityManager;
 import com.ibm.ws.util.CacheHashMap;
@@ -75,6 +75,9 @@ import com.ibm.wsspi.kernel.service.utils.CompositeEnumeration;
 import com.ibm.wsspi.kernel.service.utils.PathUtils;
 
 abstract class ContainerClassLoader extends IdentifiedLoader {
+    static {
+        ClassLoader.registerAsParallelCapable();
+    }
     static final TraceComponent tc = Tr.register(ContainerClassLoader.class);
 
     /**
@@ -111,7 +114,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
 
     private final ClassRedefiner redefiner;
 
-    protected final ClassLoaderHook hook;
+    final String jarProtocol;
 
     /**
      * Util method to totally read an input stream into a byte array.
@@ -165,7 +168,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
              *
              * @return
              */
-            public URL getResourceURL();
+            public URL getResourceURL(String jarProtocol);
 
             /**
              * Obtain the ByteResourceInformation for this resource.
@@ -173,7 +176,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
              * @return
              * @throws IOException if the ByteResourceInformation is unable to be returned.
              */
-            public ByteResourceInformation getByteResourceInformation() throws IOException;
+            public ByteResourceInformation getByteResourceInformation(String className, ClassLoaderHook hook) throws IOException;
 
             /**
              * Get the physical path for this native library resource, extracting
@@ -198,15 +201,77 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
          * Map is keyed by the hashcode of the package string.
          */
         void updatePackageMap(Map<Integer, List<UniversalContainer>> map);
+        
+        /**
+         * Returns a collection of URLs represented by the underlying
+         * Container or ArtifactContainer.  Depending on the instance of
+         * this UniversalContainer, this will return either
+         * <code>Container.getURLs()</code> or 
+         * <code>ArtifactContainer.getURLs()</code>.
+         */
+        Collection<URL> getContainerURLs();
     }
 
-    private static byte[] getClassBytesFromHook(UniversalContainer.UniversalResource resource, String resourceName, ClassLoaderHook hook) {
+    /**
+     * Computes the shared class cache URL from the resource URL.
+     * 
+     * If the URL is a jar protocol URL, then use it as is.
+     * If it is a wsjar protocol URL, then change it to a jar protocol URL.
+     * If it is a file protocol URL, confirm that the URL ends with the
+     * class file name, and return the directory before the package
+     * qualified class file name.
+     * 
+     * @param resourceURL The URL of the location of the class file.
+     * @param resourceName The resource path of the class file. i.e. package/sub/MyClass.class
+     * @return the URL to pass to the shared class cache, or null if protocol is wrong,
+     *         or path doesn't include resourceName.
+     */
+    static URL getSharedClassCacheURL(URL resourceURL, String resourceName) {
+        URL sharedClassCacheURL;
+        if (resourceURL == null) {
+            sharedClassCacheURL = null;
+        } else {
+            String protocol = resourceURL.getProtocol();
+            // Doing the conversion that the shared class cache logic does for jar
+            // URLs in order to do less work while holding a shared class cache monitor.
+            if ("jar".equals(protocol) || "wsjar".equals(protocol)) {
+                try {
+                    sharedClassCacheURL = new URL(resourceURL.getPath());
+                } catch (MalformedURLException e) {
+                    sharedClassCacheURL = null;
+                }
+            } else if (!"file".equals(protocol)) {
+                sharedClassCacheURL = null;
+            } else {
+                String externalForm = resourceURL.toExternalForm();
+                if (externalForm.endsWith(resourceName)) {
+                    try {
+                        sharedClassCacheURL = new URL(externalForm.substring(0, externalForm.length() - resourceName.length()));
+                    } catch (MalformedURLException e) {
+                        sharedClassCacheURL = null;
+                    }
+                } else {
+                    sharedClassCacheURL = null;
+                }
+            }
+        }
+        return sharedClassCacheURL;
+    }
+
+    static byte[] getClassBytesFromHook(UniversalContainer.UniversalResource resource, String className, String resourceName, ClassLoaderHook hook) {
         byte[] bytes = null;
-        if (hook != null && resourceName.endsWith(".class")) {
-            URL resourcePath = resource.getResourceURL();
-            if (resourcePath != null) {
-                String className = resourceName.replace('/','.').substring(0, resourceName.length() - 6);
-                bytes = hook.loadClass(resourcePath, className);
+        if (hook != null) {
+            final URL resourceURL = resource.getResourceURL("jar");
+            URL sharedClassCacheURL = getSharedClassCacheURL(resourceURL, resourceName);
+            if (sharedClassCacheURL != null) {
+                bytes = hook.loadClass(sharedClassCacheURL, className);
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    if (bytes != null) {
+                        Tr.debug(tc, "Found class in shared class cache", new Object[] {className, sharedClassCacheURL});
+                    } else {
+                        Tr.debug(tc, "Did not find class in shared class cache", new Object[] {className, sharedClassCacheURL});
+                    }
+                }
             }
         }
         return bytes;
@@ -219,17 +284,15 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         final Container container;
         final Entry entry;
         final String resourceName;
-        final ClassLoaderHook hook;
 
-        public EntryUniversalResource(Container container, Entry entry, String resourceName, ClassLoaderHook hook) {
+        public EntryUniversalResource(Container container, Entry entry, String resourceName) {
             this.container = container;
             this.entry = entry;
             this.resourceName = resourceName;
-            this.hook = hook;
         }
 
         @Override
-        public URL getResourceURL() {
+        public URL getResourceURL(String jarProtocol) {
             URL url = this.entry.getResource();
             if (url == null) {
                 return null;
@@ -257,18 +320,19 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public ByteResourceInformation getByteResourceInformation() throws IOException {
-            byte[] bytes = ContainerClassLoader.getClassBytesFromHook(this, resourceName, hook);
+        public ByteResourceInformation getByteResourceInformation(String className, ClassLoaderHook hook) throws IOException {
+            byte[] bytes = ContainerClassLoader.getClassBytesFromHook(this, className, resourceName, hook);
 
-            try {
-                if (bytes == null) {
+            boolean foundInClassCache = bytes != null;
+            if (!foundInClassCache) {
+                try {
                     InputStream is = this.entry.adapt(InputStream.class);
                     bytes = ContainerClassLoader.getBytes(is, (int) entry.getSize());
+                } catch (UnableToAdaptException e) {
+                    throw new IOException(e);
                 }
-                return new EntryByteResourceInformation(bytes, this.entry, this.container, resourceName);
-            } catch (UnableToAdaptException e) {
-                throw new IOException(e);
             }
+            return new EntryByteResourceInformation(bytes, this.entry, this.container, resourceName, foundInClassCache);
         }
 
         @Override
@@ -293,17 +357,26 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public URL getResourceURL() {
+        public URL getResourceURL(String jarProtocol) {
             Collection<URL> urls = container.getURLs();
             if (urls.isEmpty())
                 return null;
 
             // best we can do is return the first one
-            return urls.iterator().next();
+            URL result = urls.iterator().next();
+            if ("file".equals(result.getProtocol()) && !(result.getPath().endsWith("/"))) {
+                // TODO can this apply to non file: URLs?
+                try {
+                    return new URL(jarProtocol + result.toExternalForm() + "!/");
+                } catch (MalformedURLException e) {
+                    return result;
+                }
+            }
+            return result;
         }
 
         @Override
-        public ByteResourceInformation getByteResourceInformation() throws IOException {
+        public ByteResourceInformation getByteResourceInformation(String className, ClassLoaderHook hook) throws IOException {
             return null;
         }
 
@@ -319,13 +392,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
     private static class ContainerUniversalContainer implements UniversalContainer {
         private final Container container;
         private final boolean isRoot;
-        private final ClassLoaderHook hook;
         private String debugString;
 
-        public ContainerUniversalContainer(Container container, ClassLoaderHook hook) {
+        public ContainerUniversalContainer(Container container) {
             this.container = container;
             this.isRoot = container.isRoot();
-            this.hook = hook;
         }
 
         @Override
@@ -352,7 +423,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
             //try a lookup for the path in the container.
             Entry e = this.container.getEntry(path);
             if (e != null) {
-                return new EntryUniversalResource(this.container, e, path, hook);
+                return new EntryUniversalResource(this.container, e, path);
             } else {
                 return null;
             }
@@ -396,6 +467,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
+        public Collection<URL> getContainerURLs() {
+            return container == null ? null : container.getURLs();
+        }
+
+        @Override
         public String toString() {
             if (debugString == null) {
                 String physicalPath = this.container.getPhysicalPath();
@@ -415,17 +491,15 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         final ArtifactContainer container;
         final ArtifactEntry entry;
         final String resourceName;
-        final ClassLoaderHook hook;
 
-        public ArtifactEntryUniversalResource(ArtifactContainer container, ArtifactEntry entry, String resourceName, ClassLoaderHook hook) {
+        public ArtifactEntryUniversalResource(ArtifactContainer container, ArtifactEntry entry, String resourceName) {
             this.container = container;
             this.entry = entry;
             this.resourceName = resourceName;
-            this.hook = hook;
         }
 
         @Override
-        public URL getResourceURL() {
+        public URL getResourceURL(String jarProtocol) {
             URL url = this.entry.getResource();
             if (url == null) {
                 return null;
@@ -452,14 +526,15 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public ByteResourceInformation getByteResourceInformation() throws IOException {
-            byte[] bytes = ContainerClassLoader.getClassBytesFromHook(this, resourceName, hook);
+        public ByteResourceInformation getByteResourceInformation(String className, ClassLoaderHook hook) throws IOException {
+            byte[] bytes = ContainerClassLoader.getClassBytesFromHook(this, className, resourceName, hook);
 
-            if (bytes == null) {
+            boolean foundInClassCache = bytes != null;
+            if (!foundInClassCache) {
                 InputStream is = this.entry.getInputStream();
                 bytes = ContainerClassLoader.getBytes(is, (int) entry.getSize());
             }
-            return new ArtifactEntryByteResourceInformation(bytes, this.entry, this.container, resourceName);
+            return new ArtifactEntryByteResourceInformation(bytes, this.entry, this.container, resourceName, foundInClassCache);
         }
 
         @Override
@@ -481,12 +556,10 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
     private static class ArtifactContainerUniversalContainer implements UniversalContainer {
         final ArtifactContainer container;
         final boolean isRoot;
-        final ClassLoaderHook hook;
 
-        public ArtifactContainerUniversalContainer(ArtifactContainer container, ClassLoaderHook hook) {
+        public ArtifactContainerUniversalContainer(ArtifactContainer container) {
             this.container = container;
             this.isRoot = container.isRoot();
-            this.hook = hook;
         }
 
         @Override
@@ -519,7 +592,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
                 //try a lookup for the path in the container.
                 ArtifactEntry e = this.container.getEntry(path);
                 if (e != null) {
-                    return new ArtifactEntryUniversalResource(this.container, e, path, hook);
+                    return new ArtifactEntryUniversalResource(this.container, e, path);
                 } else {
                     return null;
                 }
@@ -560,6 +633,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
             }
             processContainer(container, map, chop);
         }
+        
+        @Override
+        public Collection<URL> getContainerURLs() {
+            return container == null ? null : container.getURLs();
+        }
     }
 
     private static class ArtifactContainerUniversalResource implements UniversalContainer.UniversalResource {
@@ -570,7 +648,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public URL getResourceURL() {
+        public URL getResourceURL(String jarProtocol) {
             Collection<URL> urls = container.getURLs();
             if (urls.isEmpty())
                 return null;
@@ -580,7 +658,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public ByteResourceInformation getByteResourceInformation() throws IOException {
+        public ByteResourceInformation getByteResourceInformation(String className, ClassLoaderHook hook) throws IOException {
             return null;
         }
 
@@ -605,13 +683,15 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
          */
         void addArtifactContainer(ArtifactContainer container);
 
-        ByteResourceInformation getByteResourceInformation(String path) throws IOException;
+        ByteResourceInformation getByteResourceInformation(String className, String path, ClassLoaderHook hook) throws IOException;
 
-        URL getResourceURL(String path);
+        URL getResourceURL(String path, String jarProtocol);
 
-        Collection<URL> getResourceURLs(String path);
+        Collection<URL> getResourceURLs(String path, String jarProtocol);
 
         boolean containsContainer(Container container);
+
+        Collection<Collection<URL>> getClassPath();
     }
 
     /**
@@ -676,7 +756,6 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
     private static class SmartClassPathImpl implements SmartClassPath {
         final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock(true);
         final AtomicInteger outstandingContainers = new AtomicInteger(0);
-        final ClassLoaderHook hook;
 
         final static boolean usePackageMap = !Boolean.getBoolean("com.ibm.ws.classloading.container.disableMap");
         final static Integer maxLastNotFound = Integer.getInteger("com.ibm.ws.classloading.container.lastNotFound", 250);
@@ -723,10 +802,6 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         final Map<Integer, List<UniversalContainer>> packageMap = usePackageMap ? new HashMap<Integer, List<UniversalContainer>>() : null;
 
         final Set<Container> containers = Collections.newSetFromMap(new WeakHashMap<Container, Boolean>());
-
-        SmartClassPathImpl(ClassLoaderHook hook) {
-            this.hook = hook;
-        }
 
         /**
          * Internal method to add a new UniversalContainer to the list.
@@ -786,12 +861,12 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         @Override
         public void addContainer(Container container) {
             containers.add(container);
-            addUniversalContainers(new ContainerUniversalContainer(container, hook));
+            addUniversalContainers(new ContainerUniversalContainer(container));
         }
 
         @Override
         public void addArtifactContainer(ArtifactContainer container) {
-            addUniversalContainers(new ArtifactContainerUniversalContainer(container, hook));
+            addUniversalContainers(new ArtifactContainerUniversalContainer(container));
         }
 
         private List<UniversalContainer> getUniversalContainersForPath(String path, List<UniversalContainer> classpath) {
@@ -852,7 +927,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public ByteResourceInformation getByteResourceInformation(String path) throws IOException {
+        public ByteResourceInformation getByteResourceInformation(String className, String path, ClassLoaderHook hook) throws IOException {
             int idx = 0;
             List<UniversalContainer> locationsToCheck = classPath;
             if (usePackageMap) {
@@ -868,7 +943,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
                     UniversalContainer.UniversalResource ur = uc.getResource(path);
                     if (ur != null) {
                         //got one..
-                        ByteResourceInformation is = ur.getByteResourceInformation();
+                        ByteResourceInformation is = ur.getByteResourceInformation(className, hook);
                         if (is != null) {
                             return is;
                         }
@@ -887,7 +962,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public URL getResourceURL(String path) {
+        public URL getResourceURL(String path, String jarProtocol) {
             //test positive cache 1st.
             URL cached = lastFoundURL.get(path);
             if (cached != null) {
@@ -915,7 +990,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
                     //no hit found, try getResource
                     UniversalContainer.UniversalResource ur = uc.getResource(path);
                     if (ur != null) {
-                        URL url = ur.getResourceURL();
+                        URL url = ur.getResourceURL(jarProtocol);
                         //some resources may not have urls.. ensure we dont return null.
                         if (url != null) {
                             //add url to cache..
@@ -945,7 +1020,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public Collection<URL> getResourceURLs(String path) {
+        public Collection<URL> getResourceURLs(String path, String jarProtocol) {
             List<URL> urls = new ArrayList<URL>();
             if (lastReallyNotFoundURL.containsKey(path)) {
                 return urls;
@@ -963,7 +1038,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
                     //cache did not know this path, attempt getResource
                     UniversalContainer.UniversalResource ur = uc.getResource(path);
                     if (ur != null) {
-                        URL url = ur.getResourceURL();
+                        URL url = ur.getResourceURL(jarProtocol);
                         if (url != null) {
                             urls.add(url);
                         }
@@ -1014,6 +1089,15 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         public boolean containsContainer(Container container) {
             return containers.contains(container);
         }
+
+        @Override
+        public Collection<Collection<URL>> getClassPath() {
+            List<Collection<URL>> containerURLs = new ArrayList<>();
+            for (UniversalContainer uc : classPath) {
+                containerURLs.add(uc.getContainerURLs());
+            }
+            return containerURLs;
+        }
     }
 
     /**
@@ -1025,7 +1109,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         SmartClassPathImpl delegate;
 
         UnreadSmartClassPath() {
-            delegate = new SmartClassPathImpl(hook);
+            delegate = new SmartClassPathImpl();
         }
 
         @Override
@@ -1039,21 +1123,21 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         }
 
         @Override
-        public synchronized ByteResourceInformation getByteResourceInformation(String path) throws IOException {
+        public synchronized ByteResourceInformation getByteResourceInformation(String className, String path, ClassLoaderHook hook) throws IOException {
             unwrap();
-            return delegate.getByteResourceInformation(path);
+            return delegate.getByteResourceInformation(className, path, hook);
         }
 
         @Override
-        public synchronized URL getResourceURL(String path) {
+        public synchronized URL getResourceURL(String path, String jarProtocol) {
             unwrap();
-            return delegate.getResourceURL(path);
+            return delegate.getResourceURL(path, jarProtocol);
         }
 
         @Override
-        public synchronized Collection<URL> getResourceURLs(String path) {
+        public synchronized Collection<URL> getResourceURLs(String path, String jarProtocol) {
             unwrap();
-            return delegate.getResourceURLs(path);
+            return delegate.getResourceURLs(path, jarProtocol);
         }
 
         private void unwrap() {
@@ -1090,6 +1174,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         public boolean containsContainer(Container container) {
             return delegate.containsContainer(container);
         }
+
+        @Override
+        public Collection<Collection<URL>> getClassPath() {
+            return delegate.getClassPath();
+        }
     }
 
     /**
@@ -1125,6 +1214,14 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
          * @return The resource path
          */
         public String getResourcePath();
+
+        /**
+         * Returns whether the class was found in the shared class cache or not.  If it is found in the cache,
+         * there is no need to call the cache to store the class again.
+         * 
+         * @return whether the Class was found in the shared class cache or not.
+         */
+        public boolean foundInClassCache();
     }
 
     /**
@@ -1136,6 +1233,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         private final Entry resourceEntry;
         private final Container resourceContainer;
         private final String resourcePath;
+        private final boolean fromClassCache;
 
         private Manifest manifest;
         private boolean manifestLoaded;
@@ -1144,11 +1242,12 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
          * @param bytes
          * @param resourceUrl
          */
-        EntryByteResourceInformation(byte[] bytes, Entry resourceUrl, Container root, String resourcePath) {
+        EntryByteResourceInformation(byte[] bytes, Entry resourceUrl, Container root, String resourcePath, boolean fromClassCache) {
             this.bytes = bytes;
             this.resourceEntry = resourceUrl;
             this.resourceContainer = root;
             this.resourcePath = resourcePath;
+            this.fromClassCache = fromClassCache;
         }
 
         /**
@@ -1221,6 +1320,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         public String getResourcePath() {
             return this.resourcePath;
         }
+
+        @Override
+        public boolean foundInClassCache() {
+            return fromClassCache;
+        }
     }
 
     /**
@@ -1232,6 +1336,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         private final ArtifactEntry resourceEntry;
         private final ArtifactContainer resourceContainer;
         private final String resourcePath;
+        private final boolean fromClassCache;
 
         private Manifest manifest;
         private boolean manifestLoaded;
@@ -1240,11 +1345,12 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
          * @param bytes
          * @param resourceUrl
          */
-        ArtifactEntryByteResourceInformation(byte[] bytes, ArtifactEntry resourceUrl, ArtifactContainer root, String resourcePath) {
+        ArtifactEntryByteResourceInformation(byte[] bytes, ArtifactEntry resourceUrl, ArtifactContainer root, String resourcePath, boolean fromClassCache) {
             this.bytes = bytes;
             this.resourceEntry = resourceUrl;
             this.resourceContainer = root;
             this.resourcePath = resourcePath;
+            this.fromClassCache = fromClassCache;
         }
 
         /**
@@ -1312,6 +1418,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         public String getResourcePath() {
             return this.resourcePath;
         }
+
+        @Override
+        public boolean foundInClassCache() {
+            return fromClassCache;
+        }
     }
 
     /**
@@ -1321,13 +1432,11 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
      * @param classpath Containers to use as classpath entries.
      * @param parent classloader to act as parent.
      */
-    public ContainerClassLoader(List<Container> classpath, ClassLoader parent, ClassRedefiner redefiner) {
+    public ContainerClassLoader(List<Container> classpath, ClassLoader parent, ClassRedefiner redefiner, GlobalClassloadingConfiguration config) {
         super(parent);
-
+        this.jarProtocol = config.useJarUrls() ? "jar:" : "wsjar:";
         //Temporary, reintroduced until WSJAR is implemented.
         JarCacheDisabler.disableJarCaching();
-
-        hook = ClassLoaderHookFactory.getClassLoaderHook(this);
 
         smartClassPath = new UnreadSmartClassPath();
 
@@ -1347,7 +1456,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         if (url != null) {
             return url;
         }
-        url = smartClassPath.getResourceURL(name);
+        url = smartClassPath.getResourceURL(name, jarProtocol);
 
         //no need to retry smartClassPath with trailing / it already dealt with that.
         if (url == null && !name.endsWith("/")) {
@@ -1363,7 +1472,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
     public CompositeEnumeration<URL> findResources(String name) throws IOException {
         //start by collecting any from super, which checks parent, if any.
         CompositeEnumeration<URL> enumerations = new CompositeEnumeration<URL>(super.findResources(name));
-        Collection<URL> urls = smartClassPath.getResourceURLs(name);
+        Collection<URL> urls = smartClassPath.getResourceURLs(name, jarProtocol);
 
         //no need to retry the smartClassPath with trailing /, it already handled that.
         if (!name.endsWith("/")) {
@@ -1411,10 +1520,10 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
         return null;
     }
 
-    protected ByteResourceInformation findBytes(String resourceName) throws IOException {
+    protected ByteResourceInformation findClassBytes(String className, String resourceName, ClassLoaderHook hook) throws IOException {
         Object token = ThreadIdentityManager.runAsServer();
         try {
-            return smartClassPath.getByteResourceInformation(resourceName);
+            return smartClassPath.getByteResourceInformation(className, resourceName, hook);
         } finally {
             ThreadIdentityManager.reset(token);
         }
@@ -1522,7 +1631,7 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
     }
 
     protected void addNativeLibraryContainer(Container container) {
-        nativeLibraryContainers.add(new ContainerUniversalContainer(container, hook));
+        nativeLibraryContainers.add(new ContainerUniversalContainer(container));
     }
 
     /**
@@ -1724,5 +1833,9 @@ abstract class ContainerClassLoader extends IdentifiedLoader {
                 throw new RuntimeException(cause);
             }
         }
+    }
+
+    Collection<Collection<URL>> getClassPath() {
+        return smartClassPath.getClassPath();
     }
 }

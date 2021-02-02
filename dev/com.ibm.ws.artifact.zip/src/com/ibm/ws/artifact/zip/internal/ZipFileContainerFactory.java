@@ -1,14 +1,13 @@
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2011,2018 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * Copyright IBM Corp. 2011, 2018
- *
- * The source code for this program is not published or otherwise divested
- * of its trade secrets, irrespective of what has been deposited with the
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.artifact.zip.internal;
 
 import java.io.File;
@@ -98,7 +97,8 @@ public class ZipFileContainerFactory implements ArtifactContainerFactoryHelper, 
         this.rootContainerFactory = rootContainerFactory;
     }
 
-    protected synchronized void unsetContainerFactory(
+    @SuppressWarnings("hiding")
+	protected synchronized void unsetContainerFactory(
         ArtifactContainerFactory rootContainerFactory) {
 
         if ( this.rootContainerFactory == rootContainerFactory ) {
@@ -349,8 +349,13 @@ public class ZipFileContainerFactory implements ArtifactContainerFactoryHelper, 
 
             ZipInputStream zipInputStream = new ZipInputStream(entryInputStream);
             try {
-                zipInputStream.getNextEntry();
-                validZip = true;
+                if ( zipInputStream.getNextEntry() == null ) {
+                    // Possibly a script is prepended to the archive.  So there is an additional test
+                    ZipValidator zipValidator = new ZipValidator(getPhysicalPath(artifactEntry));
+                    validZip = zipValidator.isValid();
+                } else {
+                    validZip = true;
+                }
             } catch ( IOException e ) {
                 String entryPath = getPhysicalPath(artifactEntry);
                 Tr.error(tc, "bad.zip.data", entryPath);
@@ -441,7 +446,11 @@ public class ZipFileContainerFactory implements ArtifactContainerFactoryHelper, 
             ZipInputStream zipInputStream = new ZipInputStream(inputStream);
 
             try {
-                zipInputStream.getNextEntry(); // throws IOException
+                if ( zipInputStream.getNextEntry() == null ) { // throws IOException
+                    // Possibly a script is prepended to the archive.  So there is an additional test
+                    ZipValidator zipValidator = new ZipValidator(file.getAbsolutePath());
+                    return zipValidator.isValid();
+                }
                 return true;
             } catch ( IOException e ) {
                 Tr.error(tc, "bad.zip.data", file.getAbsolutePath());

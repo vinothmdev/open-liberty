@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2018 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -9,6 +9,9 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 package com.ibm.ws.ejbcontainer.osgi.internal;
+
+import static com.ibm.ejs.container.ContainerConfigConstants.bindToJavaGlobal;
+import static com.ibm.ejs.container.ContainerConfigConstants.bindToServerRoot;
 
 import java.io.File;
 import java.io.IOException;
@@ -105,6 +108,8 @@ import com.ibm.ws.container.service.metadata.MetaDataException;
 import com.ibm.ws.container.service.metadata.MetaDataService;
 import com.ibm.ws.container.service.metadata.MetaDataSlotService;
 import com.ibm.ws.container.service.metadata.extended.DeferredMetaDataFactory;
+import com.ibm.ws.container.service.naming.EJBLocalNamingHelper;
+import com.ibm.ws.container.service.naming.LocalColonEJBNamingHelper;
 import com.ibm.ws.container.service.state.ApplicationStateListener;
 import com.ibm.ws.container.service.state.StateChangeException;
 import com.ibm.ws.ejbcontainer.EJBComponentMetaData;
@@ -113,6 +118,7 @@ import com.ibm.ws.ejbcontainer.EJBSecurityCollaborator;
 import com.ibm.ws.ejbcontainer.InternalConstants;
 import com.ibm.ws.ejbcontainer.JCDIHelper;
 import com.ibm.ws.ejbcontainer.diagnostics.IntrospectionWriter;
+import com.ibm.ws.ejbcontainer.diagnostics.TrDumpWriter;
 import com.ibm.ws.ejbcontainer.failover.SfFailoverKey;
 import com.ibm.ws.ejbcontainer.jitdeploy.ClassDefiner;
 import com.ibm.ws.ejbcontainer.osgi.EJBAsyncRuntime;
@@ -128,6 +134,7 @@ import com.ibm.ws.ejbcontainer.osgi.internal.metadata.OSGiBeanMetaData;
 import com.ibm.ws.ejbcontainer.osgi.internal.metadata.OSGiEJBApplicationMetaData;
 import com.ibm.ws.ejbcontainer.osgi.internal.metadata.OSGiEJBModuleMetaDataImpl;
 import com.ibm.ws.ejbcontainer.osgi.internal.metadata.WCCMMetaDataImpl;
+import com.ibm.ws.ejbcontainer.osgi.internal.naming.EJBBinding;
 import com.ibm.ws.ejbcontainer.osgi.internal.naming.EJBJavaColonNamingHelper;
 import com.ibm.ws.ejbcontainer.osgi.internal.passivator.StatefulPassivatorImpl;
 import com.ibm.ws.ejbcontainer.runtime.AbstractEJBRuntime;
@@ -138,6 +145,7 @@ import com.ibm.ws.ejbcontainer.runtime.NameSpaceBinder;
 import com.ibm.ws.ejbcontainer.util.ParsedScheduleExpression;
 import com.ibm.ws.exception.RuntimeWarning;
 import com.ibm.ws.exception.WsRuntimeFwException;
+import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.javaee.dd.DeploymentDescriptor;
 import com.ibm.ws.kernel.security.thread.ThreadIdentityManager;
@@ -161,6 +169,7 @@ import com.ibm.wsspi.injectionengine.InjectionEngine;
 import com.ibm.wsspi.injectionengine.ReferenceContext;
 import com.ibm.wsspi.kernel.feature.LibertyFeature;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
+import com.ibm.wsspi.kernel.service.utils.OnErrorUtil.OnError;
 import com.ibm.wsspi.kernel.service.utils.ServerQuiesceListener;
 
 @Component(service = { ApplicationStateListener.class, DeferredMetaDataFactory.class, EJBRuntimeImpl.class, ServerQuiesceListener.class },
@@ -168,6 +177,7 @@ import com.ibm.wsspi.kernel.service.utils.ServerQuiesceListener;
            configurationPolicy = ConfigurationPolicy.REQUIRE,
            property = { "deferredMetaData=EJB" })
 public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationStateListener, DeferredMetaDataFactory, ServerQuiesceListener {
+    private static final String CLASS_NAME = EJBRuntimeImpl.class.getName();
     private static final TraceComponent tc = Tr.register(EJBRuntimeImpl.class);
 
     private static RuntimeException rethrow(Throwable t) {
@@ -203,6 +213,8 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     private final AtomicServiceReference<InjectionEngine> injectionEngineSRRef = new AtomicServiceReference<InjectionEngine>(REFERENCE_INJECTION_ENGINE);
     private EJBSecurityCollaborator<?> securityCollaborator;
     private EJBJavaColonNamingHelper javaColonHelper;
+    private EJBLocalNamingHelper<EJBBinding> ejbLocalNamingHelper;
+    private LocalColonEJBNamingHelper<EJBBinding> localColonNamingHelper;
     private ScheduledExecutorService scheduledExecutorService;
     private ScheduledExecutorService deferrableScheduledExecutorService;
     private J2EENameFactory j2eeNameFactory;
@@ -231,10 +243,17 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     private WSEJBHandlerResolver webServicesHandlerResolver;
     private EJBPMICollaboratorFactory ejbPMICollaboratorFactory;
 
+    private boolean persistentTimerMsgLogged = false;
+
     private static final String CACHE_SIZE = "cacheSize";
     private static final String CACHE_CLEANUP_INTERVAL = "cacheCleanupInterval";
     private static final String POOL_CLEANUP_INTERVAL = "poolCleanupInterval";
     private static final String START_EJBS_AT_APP_START = "startEJBsAtAppStart";
+
+    private static final String BIND_TO_SERVER_ROOT = "bindToServerRoot";
+    private static final String BIND_TO_JAVA_GLOBAL = "bindToJavaGlobal";
+    private static final String DISABLE_SHORT_DEFAULT_BINDINGS = "disableShortDefaultBindings";
+    private static final String CUSTOM_BINDINGS_ON_ERROR = "customBindingsOnError";
 
     @Override
     public void serverStopping() {
@@ -244,6 +263,12 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         EJBPersistentTimerRuntime ejbPersistentTimerRuntime = ejbPersistentTimerRuntimeServiceRef.getService();
         if (ejbPersistentTimerRuntime != null) {
             ejbPersistentTimerRuntime.serverStopping();
+        }
+
+        CountDownLatch remoteLatch = remoteFeatureLatch;
+        if (remoteLatch != null) {
+            remoteFeatureLatch = null;
+            remoteLatch.countDown();
         }
     }
 
@@ -307,6 +332,8 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         long inactivePoolCleanupIntervalSeconds = (Long) properties.get(POOL_CLEANUP_INTERVAL);
         Boolean startEjbsAtAppStart = (Boolean) properties.get(START_EJBS_AT_APP_START);
 
+        processCustomBindingsConfig(properties);
+
         EJSContainer container = new EJSContainer();
 
         EJBRuntimeConfig config = new EJBRuntimeConfig();
@@ -355,6 +382,59 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
             }
         }
         ejbRuntimeActive = true;
+
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            ContainerProperties.introspect(new TrDumpWriter(tc));
+        }
+    }
+
+    private void processCustomBindingsConfig(Map<String, Object> properties) {
+        final boolean isTraceOn = TraceComponent.isAnyTracingEnabled();
+        if (isTraceOn && tc.isEntryEnabled())
+            Tr.entry(tc, "processCustomBindingsConfig");
+
+        // Overwrite the JVM properties if config is set, otherwise we will use the JVM props or the JVM property defaults
+        ContainerProperties.BindToServerRoot = properties.get(BIND_TO_SERVER_ROOT) != null ? (Boolean) properties.get(BIND_TO_SERVER_ROOT) : System.getProperty(bindToServerRoot,
+                                                                                                                                                                "true").equalsIgnoreCase("true");
+        ContainerProperties.BindToJavaGlobal = properties.get(BIND_TO_JAVA_GLOBAL) != null ? (Boolean) properties.get(BIND_TO_JAVA_GLOBAL) : System.getProperty(bindToJavaGlobal,
+                                                                                                                                                                "true").equalsIgnoreCase("true");
+
+        OnError customBindingsOnError = OnError.WARN;
+        try {
+            customBindingsOnError = (OnError) properties.get(CUSTOM_BINDINGS_ON_ERROR);
+        } catch (IllegalArgumentException iae) {
+            //We'll fall back to default
+        }
+        ContainerProperties.customBindingsOnErr = customBindingsOnError;
+
+        String disableShortBindingsProperty = (String) properties.get(DISABLE_SHORT_DEFAULT_BINDINGS);
+        if (disableShortBindingsProperty != null) {
+            if (isTraceOn && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Disable short default bindings string: " + disableShortBindingsProperty);
+            }
+            ArrayList<String> DisableShortDefaultBindings = new ArrayList<String>();
+            if (!disableShortBindingsProperty.contains("*")) {
+                String[] apps = disableShortBindingsProperty.split(":");
+                for (int i = 0; i < apps.length; i++) {
+                    DisableShortDefaultBindings.add(apps[i]);
+                }
+            }
+            // If they pass in * we will have an empty initialized list and then disable for all apps
+
+            // If JVM prop has something set, merge them
+            ContainerProperties.DisableShortDefaultBindings = DisableShortDefaultBindings;
+
+            if (ContainerProperties.DisableShortDefaultBindingsFromJVM != null) {
+                ContainerProperties.DisableShortDefaultBindings.addAll(ContainerProperties.DisableShortDefaultBindingsFromJVM);
+            }
+        } else if (ContainerProperties.DisableShortDefaultBindingsFromJVM != null) {
+            ContainerProperties.DisableShortDefaultBindings = ContainerProperties.DisableShortDefaultBindingsFromJVM;
+        } else {
+            ContainerProperties.DisableShortDefaultBindings = null;
+        }
+
+        if (isTraceOn && tc.isEntryEnabled())
+            Tr.exit(tc, "processCustomBindingsConfig");
     }
 
     private void updateEJSContainerFromRuntimeVersion() {
@@ -370,6 +450,8 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         long inactivePoolCleanupIntervalSeconds = (Long) properties.get(POOL_CLEANUP_INTERVAL);
         Boolean startEjbsAtAppStart = (Boolean) properties.get(START_EJBS_AT_APP_START);
 
+        processCustomBindingsConfig(properties);
+
         container.setPreferredCacheSize(cacheSize);
 
         container.setInactiveCacheCleanupInterval(TimeUnit.MILLISECONDS.convert(cacheSweepIntervalSeconds,
@@ -379,6 +461,10 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
                                                                                TimeUnit.SECONDS));
 
         updateStartEjbsAtAppStart(startEjbsAtAppStart);
+
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            ContainerProperties.introspect(new TrDumpWriter(tc));
+        }
     }
 
     @Deactivate
@@ -534,11 +620,43 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     }
 
     @Override
+    @FFDCIgnore(IllegalStateException.class)
     public void setupTimers(BeanMetaData bmd) {
 
-        EJBPersistentTimerRuntime ejbPersistentTimerRuntime = ejbPersistentTimerRuntimeServiceRef.getService();
-        if (ejbPersistentTimerRuntime != null) {
-            ejbPersistentTimerRuntime.enableDatabasePolling();
+        // No additional setup is required for non-persistent timers, but if the application has
+        // persistent automatic timers or a timeout method (programmatic) which could be persistent
+        // then database polling needs to be enabled in the persistent timer service.
+        //
+        // Note: if the ejbPersistentTimer feature is not enabled, then no setup is performed.
+        //       Persistent automatic timers are ignored; programmatic will fail on creation
+
+        boolean hasPersistentAutomaticTimers = bmd._moduleMetaData.ivHasPersistentAutomaticTimers;
+
+        if (bmd.isTimedObject || hasPersistentAutomaticTimers) {
+            EJBPersistentTimerRuntime ejbPersistentTimerRuntime = ejbPersistentTimerRuntimeServiceRef.getService();
+            if (ejbPersistentTimerRuntime != null) {
+                try {
+                    ejbPersistentTimerRuntime.enableDatabasePolling();
+                } catch (IllegalStateException ex) {
+                    if (hasPersistentAutomaticTimers) {
+                        FFDCFilter.processException(ex, CLASS_NAME + ".setupTimers", "560", this, new Object[] { bmd });
+
+                        // When automatic timers are present, fail application start if the ejbPersistentTimer feature
+                        // is enabled but cannot access the database; unable to automatically create them
+                        Tr.error(tc, "AUTOMATIC_PERSISTENT_TIMERS_NOT_AVAILABLE_CNTR4020E", bmd.j2eeName.getComponent(), bmd.j2eeName.getModule(), bmd.j2eeName.getApplication());
+                        throw ex;
+                    } else {
+                        // When programmatic timers exist, provide an informational message if the ejbPersistentTimer
+                        // feature is enabled but cannot access the database; any previously created timers will not
+                        // run; new ones will fail on programmatic timer create. This is a one time message that occurs
+                        // if at least one programmatic timer application is present.
+                        if (!persistentTimerMsgLogged) {
+                            Tr.info(tc, "PERSISTENT_TIMERS_NOT_AVAILABLE_CNTR4021I");
+                            persistentTimerMsgLogged = true;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -672,7 +790,7 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
 
         // Find all persistent timers for this bean
         EJBPersistentTimerRuntime ejbPersistentTimerRuntime = ejbPersistentTimerRuntimeServiceRef.getService();
-        if (ejbPersistentTimerRuntime != null) {
+        if (ejbPersistentTimerRuntime != null && ejbPersistentTimerRuntime.isConfigured()) {
             timers.addAll(ejbPersistentTimerRuntime.getTimers(beanId));
         }
 
@@ -712,7 +830,7 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
 
         // Find all persistent timers for this module
         EJBPersistentTimerRuntime ejbPersistentTimerRuntime = ejbPersistentTimerRuntimeServiceRef.getService();
-        if (ejbPersistentTimerRuntime != null) {
+        if (ejbPersistentTimerRuntime != null && ejbPersistentTimerRuntime.isConfigured()) {
             timers.addAll(ejbPersistentTimerRuntime.getAllTimers(mmd.ivAppName, mmd.ivName, mmd.ivAllowsCachedTimerData));
         }
 
@@ -766,7 +884,7 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
             NameSpaceBinder<?> binder = osgiMMD.systemModuleNameSpaceBinder;
             return binder != null ? binder : new SystemNameSpaceBinderImpl(ejbRemoteRuntimeServiceRef.getService());
         }
-        return new NameSpaceBinderImpl(mmd, getJavaColonHelper(), ejbRemoteRuntimeServiceRef.getService());
+        return new NameSpaceBinderImpl(mmd, getJavaColonHelper(), getEJBLocalNamingHelper(), getLocalColonEJBNamingHelper(), ejbRemoteRuntimeServiceRef);
     }
 
     @Override
@@ -875,7 +993,9 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
 
     @Override
     protected void fireMetaDataCreated(EJBModuleMetaDataImpl mmd) {
-        // Nothing.  This is done by the application handler.
+        // Nothing (except log metadata dump).  This is done by the application handler.
+        if (TraceComponent.isAnyTracingEnabled() & tc.isDebugEnabled())
+            Tr.debug(tc, mmd.toDumpString());
     }
 
     @Override
@@ -1205,6 +1325,32 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         this.javaColonHelper = jcnh;
     }
 
+    public EJBLocalNamingHelper getEJBLocalNamingHelper() {
+        return this.ejbLocalNamingHelper;
+    }
+
+    @Reference
+    protected void setEJBLocalNamingHelper(EJBLocalNamingHelper ejblocnh) {
+        this.ejbLocalNamingHelper = ejblocnh;
+    }
+
+    protected void unsetEJBLocalNamingHelper(EJBLocalNamingHelper ejblocnh) {
+        this.ejbLocalNamingHelper = ejblocnh;
+    }
+
+    public LocalColonEJBNamingHelper getLocalColonEJBNamingHelper() {
+        return this.localColonNamingHelper;
+    }
+
+    @Reference
+    protected void setLocalColonNamingHelper(LocalColonEJBNamingHelper localnh) {
+        this.localColonNamingHelper = localnh;
+    }
+
+    protected void unsetLocalColonNamingHelper(LocalColonEJBNamingHelper localnh) {
+        this.localColonNamingHelper = localnh;
+    }
+
     @Reference(target = "(&" +
                         "(containerToType=com.ibm.ws.javaee.dd.ejb.EJBJar)" +
                         "(containerToType=com.ibm.ws.javaee.dd.ejbext.EJBJarExt)" +
@@ -1366,14 +1512,14 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     protected void setEJBRemoteRuntime(ServiceReference<EJBRemoteRuntime> ref) {
         this.ejbRemoteRuntimeServiceRef.setReference(ref);
 
-        // bind any Remote interfaces to COS Naming for beans already started
-        bindAllRemoteInterfacesToContextRoot();
-
         CountDownLatch remoteLatch = remoteFeatureLatch;
         if (remoteLatch != null) {
-            remoteLatch.countDown();
             remoteFeatureLatch = null;
+            remoteLatch.countDown();
         }
+
+        // bind any Remote interfaces to COS Naming for beans already started
+        bindAllRemoteInterfacesToContextRoot();
     }
 
     protected void unsetEJBRemoteRuntime(ServiceReference<EJBRemoteRuntime> ref) {
@@ -1390,7 +1536,10 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
             try {
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
                     Tr.debug(tc, "Waiting 30 seconds for EJBRemoteRuntime");
-                remoteLatch.await(30, TimeUnit.SECONDS);
+                if (remoteLatch.await(30, TimeUnit.SECONDS) == false) {
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                        Tr.debug(tc, "EJBRemoteRuntime did not come up within 30 seconds");
+                }
             } catch (InterruptedException e) {
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
                     Tr.debug(tc, "Waiting for EJBRemoteRuntime failed: " + e);
@@ -1510,7 +1659,7 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     protected void setLibertyFeature(ServiceReference<LibertyFeature> feature) {
         // If the remote runtime hasn't come up yet, but remote is configured,
         // then create a latch to support a pause in starting remote EJBs.
-        if (ejbRemoteRuntimeServiceRef.getReference() == null) {
+        if (remoteFeatureLatch == null && ejbRemoteRuntimeServiceRef.getReference() == null) {
             String featureName = (String) feature.getProperty("ibm.featureName");
             if (featureName != null && featureName.startsWith("ejbRemote")) {
                 remoteFeatureLatch = new CountDownLatch(1);
@@ -1525,8 +1674,8 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         if (remoteLatch != null) {
             String featureName = (String) feature.getProperty("ibm.featureName");
             if (featureName != null && featureName.startsWith("ejbRemote")) {
-                remoteLatch.countDown();
                 remoteFeatureLatch = null;
+                remoteLatch.countDown();
             }
         }
     }

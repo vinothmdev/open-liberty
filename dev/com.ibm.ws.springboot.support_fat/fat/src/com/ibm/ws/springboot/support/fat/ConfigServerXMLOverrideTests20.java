@@ -14,8 +14,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.After;
@@ -24,7 +26,7 @@ import org.junit.runner.RunWith;
 
 import com.ibm.websphere.simplicity.config.HttpEndpoint;
 import com.ibm.websphere.simplicity.config.KeyStore;
-import com.ibm.websphere.simplicity.config.SSLConfig;
+import com.ibm.websphere.simplicity.config.SSL;
 import com.ibm.websphere.simplicity.config.ServerConfiguration;
 import com.ibm.websphere.simplicity.config.SpringBootApplication;
 import com.ibm.websphere.simplicity.config.VirtualHost;
@@ -61,6 +63,26 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
     }
 
     @Override
+    public Map<String, String> getBootStrapProperties() {
+        String methodName = testName.getMethodName();
+        Map<String, String> properties = new HashMap<>();
+        if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+            properties.put("bvt.prop.HTTP_default", "-1");
+            properties.put("bvt.prop.HTTP_default.secure", "-1");
+        }
+        return properties;
+    }
+
+    @Override
+    public boolean useDefaultVirtualHost() {
+        String methodName = testName.getMethodName();
+        if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public void modifyAppConfiguration(SpringBootApplication appConfig) {
         List<String> appArgs = appConfig.getApplicationArguments();
         appArgs.add("--server.port=" + REQUESTED_PORT);
@@ -87,7 +109,7 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
         virtualHosts.clear();
         List<HttpEndpoint> endpoints = config.getHttpEndpoints();
         endpoints.clear();
-        List<SSLConfig> ssls = config.getSsls();
+        List<SSL> ssls = config.getSsls();
         ssls.clear();
         List<KeyStore> keystores = config.getKeyStores();
         keystores.clear();
@@ -114,7 +136,7 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
             endpoint.setHttpsPort(Integer.toString(REQUESTED_PORT));
             endpoint.getSslOptions().setSslRef("ssl-test");
 
-            SSLConfig ssl = new SSLConfig();
+            SSL ssl = new SSL();
             ssls.add(ssl);
             ssl.setId("ssl-test");
             ssl.setKeyStoreRef("keystore-test");
@@ -134,7 +156,7 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
         }
 
         else if (methodName.endsWith(OVERRIDE_SSL)) {
-            SSLConfig ssl = new SSLConfig();
+            SSL ssl = new SSL();
             ssls.add(ssl);
             ssl.setId(ID_SSL + REQUESTED_PORT);
             ssl.setKeyStoreRef("keystore-test");
@@ -175,7 +197,12 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
 
     @After
     public void stopOverrideServer() throws Exception {
-        super.stopServer();
+        String methodName = testName.getMethodName();
+        if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+            super.stopServer(true, "CWWKT0015W");
+        } else {
+            super.stopServer();
+        }
     }
 
     @Test
@@ -196,6 +223,16 @@ public class ConfigServerXMLOverrideTests20 extends AbstractSpringTests {
 
     @Test
     public void configureServerXMLOverrideKeyStores() throws Exception {
+        doSSLRequest();
+    }
+
+    @Test
+    public void testDefaultHostWithAppPortconfigureServerXMLOverrideSSL() throws Exception {
+        doSSLRequest();
+    }
+
+    @Test
+    public void testDefaultHostWithAppPortconfigureServerXMLOverrideKeyStores() throws Exception {
         doSSLRequest();
     }
 

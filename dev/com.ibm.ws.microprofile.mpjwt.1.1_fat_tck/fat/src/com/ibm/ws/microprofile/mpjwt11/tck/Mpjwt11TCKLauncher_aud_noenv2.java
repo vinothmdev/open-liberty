@@ -10,6 +10,10 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.mpjwt11.tck;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -36,14 +40,15 @@ public class Mpjwt11TCKLauncher_aud_noenv2 {
         // PrivHelper looked promising for fine grained java2sec exception management but did not work.
         //PrivHelper.generateCustomPolicy(server, "permission java.net.SocketPermission \"127.0.0.1\", \"resolve\"");
         server.startServer();
+        server.waitForStringInLog("CWWKS4105I", 30000); // wait for ltpa keys to be created and service ready, which can happen after startup.
     }
 
     @AfterClass
     public static void tearDown() throws Exception {
         // CWWKZ0014W  - we need app listed in server.xml even when it might not there, so allow this "missing app" error.
         // CWWKE0921W, 12w - the harness generates a java2sec socketpermission error, there's no way to suppress it  by itself in server.xml, so suppress this way
-        //
-        server.stopServer("CWWKS5524E", "CWWKS6023E", "CWWKS5523E", "CWWKS6031E", "CWWKS5524E", "CWWKZ0014W", "CWWKS5604E", "CWWKE0921W", "CWWKE0912W");
+        // CWWKG0014E - intermittently caused by server.xml being momentarily missing during server reconfig
+        server.stopServer("CWWKG0014E", "CWWKS5524E", "CWWKS6023E", "CWWKS5523E", "CWWKS6031E", "CWWKS5524E", "CWWKZ0014W", "CWWKS5604E", "CWWKE0921W", "CWWKE0912W");
     }
 
     @Test
@@ -51,10 +56,10 @@ public class Mpjwt11TCKLauncher_aud_noenv2 {
     public void launchMpjwt11TCKLauncher_aud_noenv2() throws Exception {
         String port = String.valueOf(server.getBvtPort());
         String bucketAndTestName = this.getClass().getCanonicalName();
-        MvnUtils.setSuiteFileName("tck_suite_aud_noenv2.xml", server);
+        Map<String, String> additionalProps = new HashMap<>();
         // need to pass the correct url for PublicKeyAsJWKLocationURLTest
-        MvnUtils.setAdditionalMvnProps(new String[] { "-Dmp.jwt.tck.jwks.baseURL=http://localhost:" + port + "/PublicKeyAsJWKLocationURLTest/" }, server);
-        MvnUtils.runTCKMvnCmd(server, bucketAndTestName, bucketAndTestName);
+        additionalProps.put("mp.jwt.tck.jwks.baseURL", "http://localhost:" + port + "/PublicKeyAsJWKLocationURLTest/");
+        MvnUtils.runTCKMvnCmd(server, bucketAndTestName, bucketAndTestName, "tck_suite_aud_noenv2.xml", additionalProps, Collections.emptySet());
 
     }
 }

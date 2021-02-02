@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2013 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,10 +12,14 @@
 package com.ibm.ws.security.wim;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Future;
 
 import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Activate;
@@ -23,6 +27,7 @@ import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 import org.osgi.service.component.annotations.Deactivate;
 import org.osgi.service.component.annotations.Modified;
+import org.osgi.service.component.annotations.Reference;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -30,8 +35,13 @@ import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.websphere.security.wim.ras.WIMMessageHelper;
 import com.ibm.websphere.security.wim.ras.WIMMessageKey;
 import com.ibm.ws.config.xml.internal.nester.Nester;
+import com.ibm.ws.runtime.update.RuntimeUpdateListener;
+import com.ibm.ws.runtime.update.RuntimeUpdateManager;
+import com.ibm.ws.runtime.update.RuntimeUpdateNotification;
 import com.ibm.ws.security.wim.util.StringUtil;
 import com.ibm.ws.security.wim.util.UniqueNameHelper;
+import com.ibm.ws.threading.FutureMonitor;
+import com.ibm.ws.threading.listeners.CompletionListener;
 import com.ibm.wsspi.security.wim.SchemaConstants;
 import com.ibm.wsspi.security.wim.exception.InvalidArgumentException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
@@ -44,9 +54,9 @@ import com.ibm.wsspi.security.wim.model.PersonAccount;
 
 @Component(configurationPid = "com.ibm.ws.security.wim.core.config",
            configurationPolicy = ConfigurationPolicy.OPTIONAL,
-           service = { ConfigManager.class },
+           service = { ConfigManager.class, RuntimeUpdateListener.class },
            property = { "service.vendor=IBM", "com.ibm.ws.security.registry.type=WIM", "config.id=default-WIM" })
-public class ConfigManager {
+public class ConfigManager implements RuntimeUpdateListener {
 
     private static final TraceComponent tc = Tr.register(ConfigManager.class);
 
@@ -96,6 +106,18 @@ public class ConfigManager {
      */
     private Map<String, Map<String, String[]>> defaultEntityMap = null;
 
+    private RepositoryManager repositoryManager = null;
+
+    /**
+     * Marking whether we were modified (versus only init) allows us to maintain our previous behavior on when
+     * notifyRealmConfigChange is called (which calls VMMService.verifyParticipatingBaseEntries()).
+     */
+    private volatile boolean modified = false;
+
+    // futureMonitor is needed to track the outcome of the configFuture
+    private volatile FutureMonitor _futureMonitor;
+    private volatile RuntimeUpdateManager _runtimeUpdateManager;
+
     @Activate
     protected void activate(ComponentContext cc, Map<String, Object> properties) {
         this.originalConfig = properties;
@@ -106,15 +128,13 @@ public class ConfigManager {
     protected void modify(ComponentContext cc, Map<String, Object> newProperties) {
         this.originalConfig = newProperties;
         config = processConfig();
-        if (listeners != null) {
-            for (RealmConfigChangeListener listener : listeners)
-                listener.notifyRealmConfigChange();
-        }
+        modified = true;
     }
 
     @Deactivate
     protected void deactivate(ComponentContext cc,
                               Map<String, Object> newProperties) {
+        modified = false;
         originalConfig = null;
         config = null;
         listeners.clear();
@@ -277,7 +297,13 @@ public class ConfigManager {
         return isAllowOpIfRepoDown;
     }
 
-    public String getDefaultRealmName() {
+    /**
+     * Get the configured primary realm name. This will return a value only if there is a 'primaryRealm'
+     * configured.
+     *
+     * @return The configured primary realm name, if one is configured. Otherwise; null.
+     */
+    public String getConfiguredPrimaryRealmName() {
         String defaultRealmName = null;
         if (realmNameToRealmConfigMap != null) {
             for (RealmConfig realmCfg : realmNameToRealmConfigMap.values()) {
@@ -294,7 +320,7 @@ public class ConfigManager {
 
     @Trivial
     public RealmConfig getDefaultRealmConfig() {
-        return getRealmConfig(getDefaultRealmName());
+        return getRealmConfig(getConfiguredPrimaryRealmName());
     }
 
     public boolean isUniqueNameInRealm(String uniqueName, String realmName) throws InvalidArgumentException {
@@ -324,12 +350,10 @@ public class ConfigManager {
     }
 
     private void validateRealmName(String realmName) throws InvalidArgumentException {
-        Set realms = getRealmNames();
+        Set<?> realms = getRealmNames();
         if (realmName != null && realms != null && !realms.contains(realmName)) {
-            throw new InvalidArgumentException(WIMMessageKey.INVALID_REALM_NAME, Tr.formatMessage(
-                                                                                                  tc,
-                                                                                                  WIMMessageKey.INVALID_REALM_NAME,
-                                                                                                  WIMMessageHelper.generateMsgParms(realmName)));
+            String msg = Tr.formatMessage(tc, WIMMessageKey.INVALID_REALM_NAME, WIMMessageHelper.generateMsgParms(realmName));
+            throw new InvalidArgumentException(WIMMessageKey.INVALID_REALM_NAME, msg);
         }
     }
 
@@ -348,8 +372,66 @@ public class ConfigManager {
 
     }
 
+    /**
+     * Get all the realm names. This will return a set of one of the following either:
+     *
+     * <ol>
+     * <li>The configured realm names.</li>
+     * <li>The first federated repository's realm name.</li>
+     * <li>The default realm name.</li>
+     * </ol>
+     *
+     * @return The set of valid realm names.
+     * @see #getConfiguredRealmNames()
+     */
     public Set<String> getRealmNames() {
-        return realmNameToRealmConfigMap.keySet();
+
+        Set<String> results = null;
+
+        /*
+         * Were there any realms defined?
+         */
+        Set<String> configuredRealmNames = getConfiguredRealmNames();
+        if (configuredRealmNames != null && !configuredRealmNames.isEmpty()) {
+            results = configuredRealmNames;
+        }
+
+        /*
+         * If no realms were defined, then use the first federated repository's realm name.
+         */
+        if (results == null) {
+            String realmName = null;
+            List<String> repoIds = repositoryManager.getRepoIds();
+            if (repoIds != null && !repoIds.isEmpty()) {
+                Repository repository = repositoryManager.getRepository(repoIds.get(0));
+                if (repository != null) {
+                    realmName = repository.getRealm();
+                }
+            }
+
+            if (realmName != null) {
+                results = new HashSet<String>(Arrays.asList(new String[] { realmName }));
+            }
+        }
+
+        /*
+         * If we still have no realms, use the default realm name.
+         */
+        if (results == null) {
+            results = new HashSet<String>(Arrays.asList(new String[] { ProfileManager.DEFAULT_REALM_NAME }));
+        }
+
+        return results;
+    }
+
+    /**
+     * Get only the configured realm names.
+     *
+     * @return The set of valid realm names.
+     * @see #getRealmNames()
+     */
+    public Set<String> getConfiguredRealmNames() {
+        return Collections.unmodifiableSet(realmNameToRealmConfigMap.keySet());
     }
 
     public void registerRealmConfigChangeListener(RealmConfigChangeListener listener) {
@@ -358,9 +440,18 @@ public class ConfigManager {
     }
 
     /**
+     * Deregister a RealmConfigChangeListener by removing it from the list of listeners.
+     *
+     * @param listener
+     */
+    public void deregisterRealmConfigChangeListener(RealmConfigChangeListener listener) {
+        listeners.remove(listener);
+    }
+
+    /**
      * Gets the default parent node that is for the specified entity type in specified realm.
      *
-     * @param entType The entity type. e.g. Person, Group...
+     * @param entType   The entity type. e.g. Person, Group...
      * @param realmName The name of the realm
      * @return The default parent node.
      */
@@ -370,15 +461,17 @@ public class ConfigManager {
             validateRealmName(realmName);
             String parent = null;
             RealmConfig realmConfig = getRealmConfig(realmName);
-            Map defaultParentsMap = realmConfig.getDefaultParentMapping();
-            if (defaultParentsMap != null) {
-                parent = (String) defaultParentsMap.get(entType);
-                if (parent != null) {
-                    defaultParent = parent;
+            if (realmConfig != null) {
+                Map<String, String> defaultParentsMap = realmConfig.getDefaultParentMapping();
+                if (defaultParentsMap != null) {
+                    parent = defaultParentsMap.get(entType);
+                    if (parent != null) {
+                        defaultParent = parent;
+                    }
                 }
-            }
-            if (parent == null && !isUniqueNameInRealm(defaultParent, realmName)) {
-                defaultParent = null;
+                if (parent == null && !isUniqueNameInRealm(defaultParent, realmName)) {
+                    defaultParent = null;
+                }
             }
         }
         return defaultParent;
@@ -418,4 +511,96 @@ public class ConfigManager {
         else
             return DEFAULT_PAGE_CACHE_TIMEOUT;
     }
+
+    /**
+     * Set the {@link RepositoryManager} instance.
+     *
+     * @param repositoryManager The {@link RepositoryManager} instance.
+     */
+    void setRepositoryManager(RepositoryManager repositoryManager) {
+        this.repositoryManager = repositoryManager;
+    }
+
+    /**
+     * Set service to capture completed configuration checks
+     */
+    @Reference(service = FutureMonitor.class)
+    protected void setFutureMonitor(FutureMonitor futureMonitor) {
+        _futureMonitor = futureMonitor;
+    }
+
+    /**
+     * Unset service to capture completed configuration checks
+     */
+    protected void unsetFutureMonitor(FutureMonitor futureMonitor) {
+        _futureMonitor = null;
+    }
+
+    /**
+     * Set service to capture runtime updates like Feature updates
+     *
+     * @param runtimeUpdateManager
+     */
+    @Reference(service = RuntimeUpdateManager.class)
+    protected void setRuntimeUpdateManager(RuntimeUpdateManager runtimeUpdateManager) {
+        _runtimeUpdateManager = runtimeUpdateManager;
+    }
+
+    /**
+     * Unset service to capture runtime updates like Featuer updates
+     *
+     * @param runtimeUpdateManager
+     */
+    protected void unsetRuntimeUpdateManager(RuntimeUpdateManager runtimeUpdateManager) {
+        _runtimeUpdateManager = null;
+    }
+
+    /**
+     * After a configuration modification, run a RealConfigChange check which will verify the participatingBaseEntries.
+     *
+     * We used to do this directly from the modify command, but timing change during startup/modify and we would process the check
+     * before the user registries activated, leading to misleading error messages being printed.
+     *
+     * We also need to check whether a feature update is complete, as custom user registries and repositories are processed in
+     * as features. ConfigRefresher will complete the CONFIG_UPDATES_DELIVERED before FEATURE_UPDATES_COMPLETED is completed.
+     */
+    @Trivial
+    @Override
+    public void notificationCreated(RuntimeUpdateManager updateManager, RuntimeUpdateNotification notification) {
+        if (RuntimeUpdateNotification.CONFIG_UPDATES_DELIVERED.equals(notification.getName())) {
+            _futureMonitor.onCompletion(notification.getFuture(), new CompletionListener<Boolean>() {
+                @Override
+                public void successfulCompletion(Future<Boolean> future, Boolean result) {
+                    if (modified) {
+                        RuntimeUpdateNotification featureUpdatesCompleted = _runtimeUpdateManager.getNotification(RuntimeUpdateNotification.FEATURE_UPDATES_COMPLETED);
+                        if (featureUpdatesCompleted != null) {
+                            if (tc.isDebugEnabled()) {
+                                Tr.debug(this, tc, "Waiting on any feature updates to process potentional Custom Users Registries or Repositories");
+                            }
+                            featureUpdatesCompleted.waitForCompletion();
+                        }
+
+                        if (tc.isDebugEnabled()) {
+                            Tr.debug(this, tc, "RuntimeUpdate completed on config update, calling notifyRealmConfigChange. " + notification.getName());
+                        }
+                        if (listeners != null) {
+                            for (RealmConfigChangeListener listener : listeners)
+                                listener.notifyRealmConfigChange();
+                        }
+                    }
+                }
+
+                @Override
+                public void failedCompletion(Future<Boolean> future, Throwable t) {
+                    if (tc.isDebugEnabled()) {
+                        Tr.debug(this, tc, "RuntimeUpdate completed with error on config update, not calling notifyRealmConfigChange, "
+                                           + notification.getName());
+                    }
+                }
+
+            });
+
+        }
+    }
+
 }

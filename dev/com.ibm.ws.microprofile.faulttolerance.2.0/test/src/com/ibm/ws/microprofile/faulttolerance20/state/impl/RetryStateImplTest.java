@@ -10,7 +10,6 @@
  *******************************************************************************/
 package com.ibm.ws.microprofile.faulttolerance20.state.impl;
 
-import static java.time.temporal.ChronoUnit.MILLENNIA;
 import static java.time.temporal.ChronoUnit.YEARS;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThan;
@@ -30,17 +29,22 @@ import java.util.concurrent.TimeUnit;
 import org.junit.Test;
 
 import com.ibm.ws.microprofile.faulttolerance.impl.policy.RetryPolicyImpl;
+import com.ibm.ws.microprofile.faulttolerance.spi.MetricRecorder;
+import com.ibm.ws.microprofile.faulttolerance.utils.DummyMetricRecorder;
 import com.ibm.ws.microprofile.faulttolerance20.impl.MethodResult;
 import com.ibm.ws.microprofile.faulttolerance20.state.RetryState.RetryResult;
 
+@SuppressWarnings("restriction") // Unit test accesses non-exported *PolicyImpl classes
 public class RetryStateImplTest {
+
+    private static MetricRecorder dummyMetrics = DummyMetricRecorder.get();
 
     @Test
     public void testMaxRetries() {
         RetryPolicyImpl retryPolicy = new RetryPolicyImpl();
         retryPolicy.setMaxRetries(3);
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
 
         // Should retry three times
@@ -55,7 +59,7 @@ public class RetryStateImplTest {
         RetryPolicyImpl retryPolicy = new RetryPolicyImpl();
         retryPolicy.setMaxRetries(3);
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
 
         // Should not retry because execution was successful
@@ -68,19 +72,19 @@ public class RetryStateImplTest {
         retryPolicy.setMaxRetries(3);
         retryPolicy.setRetryOn(TestExceptionA.class, TestExceptionB.class);
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionAsubclass())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionB())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionC())).shouldRetry());
     }
@@ -91,19 +95,19 @@ public class RetryStateImplTest {
         retryPolicy.setMaxRetries(3);
         retryPolicy.setAbortOn(TestExceptionA.class, TestExceptionB.class);
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionAsubclass())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionB())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionC())).shouldRetry());
     }
@@ -118,19 +122,19 @@ public class RetryStateImplTest {
         retryPolicy.setRetryOn(TestExceptionA.class, TestExceptionB.class);
         retryPolicy.setAbortOn(TestExceptionAsubclass.class);
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionAsubclass())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionB())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionC())).shouldRetry());
 
@@ -141,19 +145,19 @@ public class RetryStateImplTest {
         retryPolicy.setRetryOn(TestExceptionAsubclass.class, TestExceptionB.class);
         retryPolicy.setAbortOn(TestExceptionA.class);
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionAsubclass())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionB())).shouldRetry());
 
-        retryState = new RetryStateImpl(retryPolicy);
+        retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertFalse(retryState.recordResult(MethodResult.failure(new TestExceptionC())).shouldRetry());
     }
@@ -164,7 +168,7 @@ public class RetryStateImplTest {
         retryPolicy.setMaxRetries(3);
         retryPolicy.setMaxDuration(Duration.ofMillis(200));
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
 
@@ -179,7 +183,7 @@ public class RetryStateImplTest {
         retryPolicy.setDelay(Duration.ofMillis(200));
         retryPolicy.setJitter(Duration.ofMillis(0));
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
         RetryResult result = retryState.recordResult(MethodResult.failure(new TestExceptionA()));
         assertTrue(result.shouldRetry());
@@ -199,7 +203,7 @@ public class RetryStateImplTest {
 
         Set<Long> delayTimes = new HashSet<>();
 
-        RetryStateImpl retryState = new RetryStateImpl(retryPolicy);
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
         retryState.start();
 
         // Test 10 iterations
@@ -216,32 +220,6 @@ public class RetryStateImplTest {
 
         // Assert that getDelay didn't always return the same result
         assertThat(delayTimes.size(), greaterThan(1));
-    }
-
-    @Test
-    public void testClampedNanos() {
-        Duration tinyDuration = Duration.ofNanos(100);
-        assertEquals(tinyDuration.toNanos(), RetryStateImpl.asClampedNanos(tinyDuration));
-
-        Duration smallDuration = Duration.ofSeconds(5);
-        assertEquals(smallDuration.toNanos(), RetryStateImpl.asClampedNanos(smallDuration));
-
-        Duration mediumDuration = Duration.ofDays(5000);
-        assertEquals(mediumDuration.toNanos(), RetryStateImpl.asClampedNanos(mediumDuration));
-
-        // Note: Duration.of(500, YEARS) is not permitted because years don't have an exact duration
-        // We're happy with an estimated duration, so we're using this alternative construction for our very large durations
-        Duration largeDuration = YEARS.getDuration().multipliedBy(500);
-        assertEquals(Long.MAX_VALUE, RetryStateImpl.asClampedNanos(largeDuration));
-
-        Duration hugeDuration = MILLENNIA.getDuration().multipliedBy(7000);
-        assertEquals(Long.MAX_VALUE, RetryStateImpl.asClampedNanos(hugeDuration));
-
-        Duration negativeDuration = Duration.ofSeconds(-5);
-        assertEquals(negativeDuration.toNanos(), RetryStateImpl.asClampedNanos(negativeDuration));
-
-        Duration largeNegativeDuration = YEARS.getDuration().multipliedBy(-500);
-        assertEquals(Long.MIN_VALUE, RetryStateImpl.asClampedNanos(largeNegativeDuration));
     }
 
     @Test
@@ -289,12 +267,49 @@ public class RetryStateImplTest {
         assertThat(values, hasSize(greaterThan(10)));
     }
 
-    private class TestExceptionA extends Exception {}
+    @Test
+    public void testMaxRetriesForever() {
+        // Test a policy with maxRetries = -1 -> no retry count limit
+        RetryPolicyImpl retryPolicy = new RetryPolicyImpl();
+        retryPolicy.setMaxRetries(-1);
+        retryPolicy.setJitter(Duration.ZERO);
 
-    private class TestExceptionB extends Exception {}
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
+        retryState.start();
 
-    private class TestExceptionC extends Exception {}
+        // Should retry forever
+        for (int i = 0; i < 100; i++) {
+            assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
+        }
+    }
 
-    private class TestExceptionAsubclass extends TestExceptionA {}
+    @Test
+    public void testMaxDurationForever() throws InterruptedException {
+        // Test a policy with maxDuration = 0 -> no retry time limit
+        RetryPolicyImpl retryPolicy = new RetryPolicyImpl();
+        retryPolicy.setMaxDuration(Duration.ZERO);
+
+        RetryStateImpl retryState = new RetryStateImpl(retryPolicy, dummyMetrics);
+        retryState.start();
+
+        assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
+
+        // Unfortunately, the default value is 3 minutes, we're not going to wait longer than that in a unit test
+        // Just check that we're not treating zero as "never retry"
+        Thread.sleep(300);
+        assertTrue(retryState.recordResult(MethodResult.failure(new TestExceptionA())).shouldRetry());
+    }
+
+    private class TestExceptionA extends Exception {
+    }
+
+    private class TestExceptionB extends Exception {
+    }
+
+    private class TestExceptionC extends Exception {
+    }
+
+    private class TestExceptionAsubclass extends TestExceptionA {
+    }
 
 }

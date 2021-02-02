@@ -14,9 +14,10 @@ bVersion=1.0
 Bundle-Name: JMS Connection Factory and Destination Resource Definition
 Bundle-SymbolicName: com.ibm.ws.jca.resourcedefinition.jms.2.0
 Bundle-Description: Enables JMSConnectionFactory and JMSDestination Resource Definition; version=${bVersion}
-Require-Capability: osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=1.7))"
 
 WS-TraceGroup: JMSRD
+
+jakartaeeMe: true
 
 Private-Package: \
     com.ibm.ws.jca.processor.jms.service, \

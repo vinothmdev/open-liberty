@@ -236,7 +236,7 @@ fi
 
 # Set a default file encoding if needed
 if [ -n "$defaultFileEncoding" ]; then
-  if ! expr "${JVM_ARGS} ${IBM_JAVA_OPTIONS}" : '.*\(-Dfile\.encoding\=[^[:space:]]\)' > /dev/null; then
+  if ! expr "${JVM_ARGS} ${OPENJ9_JAVA_OPTIONS}" : '.*\(-Dfile\.encoding\=[^[:space:]]\)' > /dev/null; then
     JVM_ARGS="${JVM_ARGS} -Dfile.encoding=$defaultFileEncoding"
   fi
 fi
@@ -249,6 +249,15 @@ fi
 # Prevent the Java invocation appearing as an application on a mac
 # Setting on all platforms to avoid cross platform bugs
 JVM_ARGS="-Djava.awt.headless=true ${JVM_ARGS}"
+
+# Do not create a SCC
+if [ -n "${IBM_JAVA_OPTIONS}" ]; then
+  IBM_JAVA_OPTIONS="${IBM_JAVA_OPTIONS} -Xshareclasses:none"
+fi
+
+if [ -n "${OPENJ9_JAVA_OPTIONS}" ]; then
+  OPENJ9_JAVA_OPTIONS="${OPENJ9_JAVA_OPTIONS} -Xshareclasses:none"
+fi
 
 # Execute the tool script or JAR.
 if [ -f "${WLP_INSTALL_DIR}"/lib/tools-internal/@TOOL_SCRIPT@ ]; then

@@ -11,8 +11,10 @@
 package com.ibm.ws.springboot.support.fat;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.After;
@@ -21,7 +23,7 @@ import org.junit.runner.RunWith;
 
 import com.ibm.websphere.simplicity.config.HttpEndpoint;
 import com.ibm.websphere.simplicity.config.KeyStore;
-import com.ibm.websphere.simplicity.config.SSLConfig;
+import com.ibm.websphere.simplicity.config.SSL;
 import com.ibm.websphere.simplicity.config.ServerConfiguration;
 import com.ibm.websphere.simplicity.config.SpringBootApplication;
 import com.ibm.websphere.simplicity.config.VirtualHost;
@@ -60,6 +62,17 @@ public class ConfigActuatorXMLOverrideTests20 extends AbstractSpringTests {
     }
 
     @Override
+    public Map<String, String> getBootStrapProperties() {
+        String methodName = testName.getMethodName();
+        Map<String, String> properties = new HashMap<>();
+        if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+            properties.put("bvt.prop.HTTP_default", "-1");
+            properties.put("bvt.prop.HTTP_default.secure", "-1");
+        }
+        return properties;
+    }
+
+    @Override
     public boolean useDefaultVirtualHost() {
         String methodName = testName.getMethodName();
         if (methodName == null) {
@@ -87,7 +100,8 @@ public class ConfigActuatorXMLOverrideTests20 extends AbstractSpringTests {
 
         if (methodName.equals(DEFAULT_MAIN_CONFIG_ACTUATOR) || //
             methodName.equals(CONFIG_MAIN_CONFIG_ACTUATOR) || //
-            methodName.equals(OVERRIDE_MAIN_OVERRIDE_ACTUATOR)) {
+            methodName.equals(OVERRIDE_MAIN_OVERRIDE_ACTUATOR) ||
+            methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
             appArgs.add("--management.server.port=" + APP_ACTUATOR_PORT);
         }
     }
@@ -102,7 +116,7 @@ public class ConfigActuatorXMLOverrideTests20 extends AbstractSpringTests {
         virtualHosts.clear();
         List<HttpEndpoint> endpoints = config.getHttpEndpoints();
         endpoints.clear();
-        List<SSLConfig> ssls = config.getSsls();
+        List<SSL> ssls = config.getSsls();
         ssls.clear();
         List<KeyStore> keystores = config.getKeyStores();
         keystores.clear();
@@ -136,8 +150,13 @@ public class ConfigActuatorXMLOverrideTests20 extends AbstractSpringTests {
     }
 
     @After
-    public void stopOverrideServer() throws Exception {
-        super.stopServer();
+    public void stopTestServer() throws Exception {
+        String methodName = testName.getMethodName();
+        if (methodName != null && methodName.contains(DEFAULT_HOST_WITH_APP_PORT)) {
+            super.stopServer(true, "CWWKT0015W");
+        } else {
+            super.stopServer();
+        }
     }
 
     @Test
@@ -151,6 +170,15 @@ public class ConfigActuatorXMLOverrideTests20 extends AbstractSpringTests {
     @Test
     public void useDefaultHostForMainConfigActuatorPorts() throws Exception {
         server.setHttpDefaultPort(DEFAULT_HTTP_PORT);
+        HttpUtils.findStringInUrl(server, "", "HELLO SPRING BOOT!!");
+
+        server.setHttpDefaultPort(APP_ACTUATOR_PORT);
+        HttpUtils.findStringInUrl(server, "actuator/health", "UP");
+    }
+
+    @Test
+    public void useDefaultHostWithAppPortForMainConfigActuatorPorts() throws Exception {
+        server.setHttpDefaultPort(APP_MAIN_PORT);
         HttpUtils.findStringInUrl(server, "", "HELLO SPRING BOOT!!");
 
         server.setHttpDefaultPort(APP_ACTUATOR_PORT);

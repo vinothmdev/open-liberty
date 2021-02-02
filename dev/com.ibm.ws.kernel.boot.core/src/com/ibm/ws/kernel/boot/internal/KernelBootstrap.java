@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2016 IBM Corporation and others.
+ * Copyright (c) 2013, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,7 +14,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
-import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -26,6 +26,7 @@ import java.security.PrivilegedExceptionAction;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -39,6 +40,7 @@ import com.ibm.ws.kernel.boot.LaunchException;
 import com.ibm.ws.kernel.boot.Launcher;
 import com.ibm.ws.kernel.boot.ReturnCode;
 import com.ibm.ws.kernel.boot.security.WLPDynamicPolicy;
+import com.ibm.ws.kernel.boot.utils.SequenceNumber;
 import com.ibm.ws.kernel.internal.classloader.BootstrapChildFirstJarClassloader;
 import com.ibm.ws.kernel.internal.classloader.BootstrapChildFirstURLClassloader;
 import com.ibm.ws.kernel.productinfo.DuplicateProductInfoException;
@@ -48,7 +50,6 @@ import com.ibm.ws.kernel.productinfo.ProductInfoReplaceException;
 import com.ibm.ws.kernel.provisioning.NameBasedLocalBundleRepository;
 import com.ibm.ws.kernel.provisioning.ServiceFingerprint;
 import com.ibm.ws.kernel.provisioning.VersionUtility;
-import com.ibm.ws.logging.utils.SequenceNumber;
 
 /**
  * Bootstrap the runtime: Resolve the few jar files required to construct the nested
@@ -154,6 +155,8 @@ public class KernelBootstrap {
             boolean logVersionInfo = (logLevel == null || !logLevel.equalsIgnoreCase("off"));
             processVersion(bootProps, "info.serverLaunch", kernelVersion, productInfo, logVersionInfo);
             if (logVersionInfo) {
+                // if serial filter agent is loaded, log the information.
+                logSerialFilterMessage();
                 List<String> cmdArgs = bootProps.getCmdArgs();
                 if (cmdArgs != null && !cmdArgs.isEmpty()) {
                     System.out.println("\t" + MessageFormat.format(BootstrapConstants.messages.getString("info.cmdArgs"), cmdArgs));
@@ -185,7 +188,6 @@ public class KernelBootstrap {
             if (!libertyBoot) {
                 // Add bootstrap jar(s)
                 bootProps.addBootstrapJarURLs(urlList);
-
                 // Add OSGi framework, log provider, and/or os extension "boot.jar" elements
                 resolver.addBootJars(urlList);
             }
@@ -282,9 +284,20 @@ public class KernelBootstrap {
      * @throws InterruptedException
      */
     public ReturnCode shutdown() throws InterruptedException {
+        return shutdown(false);
+    }
+
+    /**
+     * Force stop the server. This emulates the path that the server stop action takes:
+     * it calls shutdown on the LauncherDelegate, and then waits until it can obtain
+     * the server lock to ensure the server has stopped.
+     *
+     * @throws InterruptedException
+     */
+    public ReturnCode shutdown(boolean force) throws InterruptedException {
         delegateCreated.await();
-        // If we have a delegate, call shutdown to stop the server
-        if (launcherDelegate != null && launcherDelegate.shutdown()) {
+        // If we have a delegate, call shutdown with force flag to stop the server
+        if (launcherDelegate != null && launcherDelegate.shutdown(force)) {
             // if shutdown stopped the server, we need to wait until we can obtain
             // the server lock (the serverLock is released in the finally block of
             // the go() method.. )
@@ -427,7 +440,6 @@ public class KernelBootstrap {
         if (bootProps.get(BootstrapConstants.JAVA_2_SECURITY_PROPERTY) != null) {
 
             NameBasedLocalBundleRepository repo = new NameBasedLocalBundleRepository(bootProps.getInstallRoot());
-
             File bestMatchFile = repo.selectBundle("com.ibm.ws.org.eclipse.equinox.region",
                                                    VersionUtility.stringToVersionRange("[1.0,1.0.100)"));
             if (bestMatchFile == null) {
@@ -441,7 +453,6 @@ public class KernelBootstrap {
                     throw new LaunchException("Failure to set the default Security Manager due to exception ", BootstrapConstants.messages.getString("error.set.securitymanager"), e);
                 }
             }
-
             Policy wlpPolicy = new WLPDynamicPolicy(Policy.getPolicy(), urlList);
             Policy.setPolicy(wlpPolicy);
         }
@@ -458,15 +469,15 @@ public class KernelBootstrap {
         try {
             bootManifest = BootstrapManifest.readBootstrapManifest(Boolean.parseBoolean(bootProps.get(BootstrapConstants.LIBERTY_BOOT_PROPERTY)));
             String kernelVersion = bootManifest.getBundleVersion();
-            String productInfo = getProductInfoDisplayName();
+            String productDisplayName = getProductInfoDisplayName();
 
-            processVersion(bootProps, "info.serverVersion", kernelVersion, productInfo, true);
+            processVersion(bootProps, "info.serverVersion", kernelVersion, productDisplayName, true);
         } catch (IOException e) {
             throw new LaunchException("Could not read the jar manifest", BootstrapConstants.messages.getString("error.unknown.kernel.version"), e);
         }
     }
 
-    private static void processVersion(BootstrapConfig bootProps, String msgKey, String kernelVersion, String productInfo, boolean printVersion) {
+    private static void processVersion(BootstrapConfig bootProps, String msgKey, String kernelVersion, String productDisplayName, boolean printVersion) {
         // Two keys, mostly the same parameters (3rd is ignored in one case):
         // info.serverLaunch=Launching {3} ({0}) on {1}, version {2}
         // info.serverVersion={0} on {1}, version {2}
@@ -478,15 +489,19 @@ public class KernelBootstrap {
         final String launchString;
         final String versionString;
 
-        String consoleFormat = System.getenv("WLP_LOGGING_CONSOLE_FORMAT");
+        String bsConsoleFormat = bootProps.get("com.ibm.ws.logging.console.format");
+        String envConsoleFormat = System.getenv("WLP_LOGGING_CONSOLE_FORMAT");
 
-        if (productInfo == null) {
+        //boostrap format should take precedence
+        String consoleFormat = bsConsoleFormat != null ? bsConsoleFormat : envConsoleFormat;
+
+        if (productDisplayName == null) {
             // RARE/CORNER-CASE: All bets are off, we don't have product info anyway... :(
             launchString = "WebSphere Application Server/" + kernelVersion;
             versionString = "WebSphere Application Server (" + kernelVersion + ")";
         } else {
-            launchString = productInfo + "/" + kernelVersion;
-            versionString = productInfo + " (" + kernelVersion + ")";
+            launchString = productDisplayName + "/" + kernelVersion;
+            versionString = productDisplayName + " (" + kernelVersion + ")";
         }
         String consoleLogHeader = MessageFormat.format(BootstrapConstants.messages.getString(msgKey),
                                                        "info.serverLaunch".equals(msgKey) ? launchString : versionString,
@@ -501,9 +516,40 @@ public class KernelBootstrap {
                 System.out.println(consoleLogHeader);
             }
         }
+
+        displayWarningIfBeta(bootProps, consoleFormat);
+
         // Store the product version in the map for use by log providers
         bootProps.put(BootstrapConstants.BOOTPROP_PRODUCT_INFO, versionString);
 
+    }
+
+    /**
+     * Display a warning in the console.log for each product that is early access ( determined by properties files
+     * in the lib/versions directory, with property com.ibm.websphere.productEdition=EARLY_ACCESS ).
+     *
+     *
+     * @param bootProps
+     * @param consoleFormat
+     */
+    private static void displayWarningIfBeta(BootstrapConfig bootProps, String consoleFormat) {
+        try {
+            final Map<String, ProductInfo> productInfos = ProductInfo.getAllProductInfo();
+            for (ProductInfo info : productInfos.values()) {
+                if (info.isBeta()) {
+                    String message = MessageFormat.format(BootstrapConstants.messages.getString("warning.earlyRelease"),
+                                                          info.getName());
+                    if ("json".equals(consoleFormat)) {
+                        String jsonMessage = constructJSONHeader(message, bootProps);
+                        System.out.println(jsonMessage);
+                    } else {
+                        System.out.println(message);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            //FFDC and move on ... assume not early access
+        }
     }
 
     private static String constructJSONHeader(String consoleLogHeader, BootstrapConfig bootProps) {
@@ -513,25 +559,59 @@ public class KernelBootstrap {
         String serverHostName = getServerHostName();
         String datetime = getDatetime();
         String sequenceNumber = getSequenceNumber();
-        //construct json header
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"type\":\"liberty_message\"");
-        sb.append(",\"host\":\"");
-        sb = jsonEscape(sb, serverHostName);
-        sb.append("\",\"ibm_userDir\":\"");
-        sb = jsonEscape(sb, wlpUserDir);
-        sb.append("\",\"ibm_serverName\":\"");
-        sb = jsonEscape(sb, serverName);
-        sb.append("\",\"message\":\"");
-        sb = jsonEscape(sb, consoleLogHeader);
-        sb.append("\",\"ibm_datetime\":\"");
-        sb = jsonEscape(sb, datetime);
-        sb.append("\",\"ibm_sequence\":\"");
-        sb = jsonEscape(sb, sequenceNumber);
-        sb.append("\"}");
 
-        return sb.toString();
+        //header field names and values
+        List<String> headerFieldNames = new ArrayList<>(Arrays.asList("type", "host", "ibm_userDir", "ibm_serverName", "message", "ibm_datetime", "ibm_sequence"));
+        final String[] headerFieldValues = { "liberty_message", serverHostName, wlpUserDir, serverName, consoleLogHeader, datetime, sequenceNumber };
 
+        final String OMIT_FIELDS_STRING = "@@@OMIT@@@";
+
+        //bootstrap fieldMappings should take precedence
+        String bsFieldMappings = bootProps.get("com.ibm.ws.logging.json.field.mappings");
+        String envFieldMappings = System.getenv("WLP_LOGGING_JSON_FIELD_MAPPINGS");
+        String fieldMappings = bsFieldMappings != null ? bsFieldMappings : envFieldMappings;
+
+        if (fieldMappings != null && !fieldMappings.isEmpty() && fieldMappings != "") {
+            String[] keyValuePairs = fieldMappings.split(",");
+            for (String pair : keyValuePairs) {
+                pair = pair.trim();
+                if (pair.endsWith(":"))
+                    pair = pair + OMIT_FIELDS_STRING;
+
+                String[] entry = pair.split(":");
+                entry[0] = entry[0].trim();
+
+                if (entry.length == 2) {
+                    entry[1] = entry[1].trim();
+                    if (headerFieldNames.contains(entry[0]))
+                        headerFieldNames.set(headerFieldNames.indexOf(entry[0]), entry[1]);
+
+                } else if (entry.length == 3 && entry[0].equals("message")) {
+                    entry[1] = entry[1].trim();
+                    entry[2] = entry[2].trim();
+                    if (headerFieldNames.contains(entry[1]))
+                        headerFieldNames.set(headerFieldNames.indexOf(entry[1]), entry[2]);
+                }
+            }
+        }
+
+        StringBuilder jsonHeader = new StringBuilder("{");
+        int currentValue = 0;
+        Boolean isFirstField = true;
+
+        for (String name : headerFieldNames) {
+            if (!name.equals(OMIT_FIELDS_STRING)) {
+                if (!isFirstField)
+                    jsonHeader.append(",");
+                jsonHeader.append("\"" + name + "\":\"");
+                jsonHeader = jsonEscape(jsonHeader, headerFieldValues[currentValue]);
+                jsonHeader.append("\"");
+                isFirstField = false;
+            }
+            currentValue++;
+        }
+
+        return jsonHeader.append("}").toString();
     }
 
     private static String getSequenceNumber() {
@@ -656,19 +736,42 @@ public class KernelBootstrap {
      * Fetch the BootstrapAgent instrumentation instance from the BootstrapAgent
      * in the system classloader.
      *
-     * @return Instrumentation instance initialized by the Launcher, may be
-     *         null.
+     * @return Instrumentation instance initialized by the Launcher, may be null.
      */
     protected Instrumentation getInstrumentation() {
         ClassLoader cl = ClassLoader.getSystemClassLoader();
-        Class<?> agentClass;
+        Instrumentation i = findInstrumentation(cl, "com.ibm.ws.kernel.instrument.BootstrapAgent");
+        if (i == null)
+            i = findInstrumentation(cl, "wlp.lib.extract.agent.BootstrapAgent");
+        return i;
+    }
+
+    private Instrumentation findInstrumentation(ClassLoader cl, String clazz) {
         try {
-            agentClass = cl.loadClass("com.ibm.ws.kernel.instrument.BootstrapAgent");
-            Field instField = agentClass.getDeclaredField("instrumentation");
-            instField.setAccessible(true);
-            return (Instrumentation) instField.get(null);
+            Class<?> agentClass = cl.loadClass(clazz);
+            Method getInstrumentation = agentClass.getMethod("getInstrumentation");
+            return (Instrumentation) getInstrumentation.invoke(null);
         } catch (Exception t) { /* Eat the issue and rely on users to report */
         }
         return null;
+    }
+
+    private void logSerialFilterMessage() {
+        if (isSerialFilterLoaded()) {
+            System.out.println(BootstrapConstants.messages.getString("info.serialFilterLoaded"));
+        }
+    }
+
+    private boolean isSerialFilterLoaded() {
+        String activeSerialFilter = AccessController.doPrivileged(new PrivilegedAction<String>() {
+            @Override
+            public String run() {
+                return System.getProperty("com.ibm.websphere.serialfilter.active");
+            }
+        });
+        if ("true".equalsIgnoreCase(activeSerialFilter)) {
+            return true;
+        }
+        return false;
     }
 }

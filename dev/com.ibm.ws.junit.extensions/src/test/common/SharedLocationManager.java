@@ -17,8 +17,6 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.ibm.ws.staticvalue.StaticValue;
-
 /**
  * The SharedLocationManager primes the configured locations used by
  * the WsLocationAdmin service and the WsLocationAdminManager. When used in
@@ -48,14 +46,14 @@ public class SharedLocationManager {
      * Directories will not be accessed/created until requested.
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @param map
-     *            String-to-Object map containing additional properties that should
-     *            be passed to the location service. The following properties are
-     *            set by this method (and will be overwritten): wlp.install.dir,
-     *            wlp.user.dir, wlp.lib.dir, wlp.server.name
+     *                       String-to-Object map containing additional properties that should
+     *                       be passed to the location service. The following properties are
+     *                       set by this method (and will be overwritten): wlp.install.dir,
+     *                       wlp.user.dir, wlp.lib.dir, wlp.server.name
      *
      * @return the configured WsLocationAdmin instance.
      */
@@ -72,16 +70,16 @@ public class SharedLocationManager {
      * Directories will not be accessed/created until requested.
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @param map
-     *            String-to-Object map containing additional properties that should
-     *            be passed to the location service. The following properties are
-     *            set by this method (and will be overwritten): wlp.install.dir,
-     *            wlp.user.dir, wlp.lib.dir, wlp.server.name
+     *                       String-to-Object map containing additional properties that should
+     *                       be passed to the location service. The following properties are
+     *                       set by this method (and will be overwritten): wlp.install.dir,
+     *                       wlp.user.dir, wlp.lib.dir, wlp.server.name
      * @param isClient
-     *            boolean value to determine whether this call is used for client or server.
+     *                       boolean value to determine whether this call is used for client or server.
      *
      * @return the configured WsLocationAdmin instance.
      */
@@ -112,6 +110,7 @@ public class SharedLocationManager {
         // Defined in BootstrapConstants.PROCESS_TYPE_SERVER
         map.put("wlp.process.type", isClient ? "client" : "server");
 
+        map.put("wlp.svc.binding.root", usr.getAbsolutePath() + File.separator + "bindings");
         Class<?> impl = getLocServiceImpl();
         resetWsLocationAdmin();
 
@@ -143,9 +142,9 @@ public class SharedLocationManager {
      * need to exist).
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @param serverName
-     *            Name of server
+     *                       Name of server
      *
      * @return the configured WsLocationAdmin instance.
      * @see #createDefaultLocations(String, String, Map)
@@ -162,7 +161,7 @@ public class SharedLocationManager {
      * not need to exist).
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      *
      * @return the configured WsLocationAdmin instance.
      * @see #createDefaultLocations(String, String, Map)
@@ -196,12 +195,12 @@ public class SharedLocationManager {
      * Directories will not be accessed/created until requested.
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @param map
-     *            String-to-Object map containing additional properties that should
-     *            be passed to the location service.
+     *                       String-to-Object map containing additional properties that should
+     *                       be passed to the location service.
      * @return the configured WsLocationAdmin instance.
      */
     public static Object createLocations(String rootDirStr, String serverName, Map<String, Object> map) {
@@ -253,9 +252,9 @@ public class SharedLocationManager {
      * (does not need to exist).
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @return the configured WsLocationAdmin instance.
      * @see #createLocations(String, String, Map)
      */
@@ -271,7 +270,7 @@ public class SharedLocationManager {
      * "rootDir/defaultServer/server.xml" (does not need to exist).
      *
      * @param rootDirStr
-     *            Root directory for structure shown above
+     *                       Root directory for structure shown above
      * @see #createLocations(String, String, Map)
      */
     public static Object createLocations(String rootDirStr) {
@@ -284,10 +283,10 @@ public class SharedLocationManager {
      * property so that the test clients can check for the presence of files, etc.
      *
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @param map
-     *            String-to-Object map containing additional properties that should
-     *            be passed to the location service.
+     *                       String-to-Object map containing additional properties that should
+     *                       be passed to the location service.
      * @return the configured WsLocationAdmin instance.
      */
     public static Object createImageLocations(String serverName, Map<String, Object> map) {
@@ -354,7 +353,7 @@ public class SharedLocationManager {
      * </ul>
      *
      * @param serverName
-     *            Name of server
+     *                       Name of server
      * @return the configured WsLocationAdmin instance.
      * @see #createImageLocations(String, String)
      */
@@ -372,7 +371,7 @@ public class SharedLocationManager {
         try {
             f = impl.getDeclaredField("instance");
             f.setAccessible(true);
-            f.set(null, StaticValue.mutateStaticValue((StaticValue<?>) f.get(null), null));
+            f.set(null, null);
         } catch (Exception e) {
             System.err.println("Woops! Something is amiss; could not reset test locations");
             e.printStackTrace();

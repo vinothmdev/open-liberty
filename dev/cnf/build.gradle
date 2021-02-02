@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -17,9 +17,9 @@ dependencies {
     binaries "com.ibm.ws.componenttest:mantis-collections:2.5.0"
     binaries "com.ibm.ws.componenttest:mantis-nls-standalone:2.5.0"
     binaries "com.ibm.ws.componenttest:infra.buildtasks-core:4.0.0"
-    binaries "com.fasterxml.jackson.core:jackson-annotations:2.2.3"
-    binaries "com.fasterxml.jackson.core:jackson-core:2.2.3"
-    binaries "com.fasterxml.jackson.core:jackson-databind:2.2.3"
+    binaries "com.fasterxml.jackson.core:jackson-annotations:2.11.2"
+    binaries "com.fasterxml.jackson.core:jackson-core:2.11.2"
+    binaries "com.fasterxml.jackson.core:jackson-databind:2.11.2"
     binaries "org.osgi:org.osgi.core:6.0.0"
     binaries "org.apache.aries:org.apache.aries.util:1.1.3"
     binaries "commons-io:commons-io:2.4"
@@ -30,8 +30,6 @@ dependencies {
     binaries "org.jsoup:jsoup:1.7.2"
     binaries "com.ibm.ws.javax.j2ee:servlet:3.1"
     binaries "org.jmockit:jmockit:1.25"
-    binaries "biz.aQute.bnd:biz.aQute.bnd:4.0.0"
-    binaries "biz.aQute.bnd:biz.aQute.bnd.annotation:4.0.0"
     binaries "org.apache.maven:maven-model:3.5.0"
     binaries "javax.json:javax.json-api:1.1.2"
     binaries "org.glassfish:javax.json:1.1.2"
@@ -39,15 +37,98 @@ dependencies {
     binaries "org.apache.ant:ant:1.9.6"
 }
 
+//TODO: move this function somewhere common
+void sortAlphabetical(String filename){
+  def list = []
+  def orig = file(filename)
+  orig.eachLine { line ->
+      line = line.trim()
+      list << line
+  }
+  orig.delete()
+  
+  println("Sorting "+filename)
+  def newfile = file(filename)
+  list.sort()
+  for(String line:list){
+    newfile << line
+    newfile << "\n"
+  }
+  
+}
+
+//TODO: move this function somewhere common
+void assertAlphabetical(String filename) {
+  def prev = ""
+  def lines = file(filename).readLines()
+  for(String line:lines){
+      line = line.trim()
+      if(line.compareTo(prev) < 0){
+          println(filename+' is not alphabetical. \"' + prev + '\" should be after \"' +line+ '\"')
+          sortAlphabetical(filename)
+          break;
+      }
+      prev = line
+  }
+}
+
+task checkAlphabetical() {
+  assertAlphabetical('oss_dependencies.maven')
+  assertAlphabetical('oss_source_dependencies.maven')
+  assertAlphabetical('oss_ibm.maven')
+  assertAlphabetical('ibm_java.maven')
+}
+
 task copyMavenLibs(type: Copy) {
     from configurations.binaries
     into project.file('mavenlibs')
+}
+
+task dependabotGenerate() {
+  dependsOn checkAlphabetical
+  inputs.file('oss_dependencies.maven')
+  inputs.file('oss_source_dependencies.maven')
+  outputs.file('cnf/dependabot/check_this_in_if_it_changes/pom.xml')
+  ArrayList inputFiles = [file('oss_dependencies.maven'),file('oss_source_dependencies.maven')]
+  doLast {
+    // Generate pom.xml
+    File pom = rootProject.file('cnf/dependabot/check_this_in_if_it_changes/pom.xml')
+    pom.delete()
+      
+    // First generate header content
+    pom << "<?xml version='1.0' encoding='utf-8'?>\n"
+    pom << "<project xmlns=\"http://maven.apache.org/POM/4.0.0\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd\">\n\n"
+    pom << "  <modelVersion>4.0.0</modelVersion>\n"
+    pom << "  <groupId>io.openliberty</groupId>\n"
+    pom << "  <artifactId>dummy-pom</artifactId>\n"
+    pom << "  <version>1.0-SNAPSHOT</version>\n\n"
+    pom << "  <!-- GENERATED FILE, DO NOT HAND EDIT! -->\n\n"
+    pom << "  <!-- If changes are generated from the build, check in the changes -->\n\n"
+    pom << "  <dependencies>\n"
+    
+    inputFiles.each { aFile ->  
+        aFile.eachLine { line ->
+          line = line.trim()
+          if (line.startsWith('#') || line.isEmpty())
+            return;
+          def (g,a,v) = line.split(':').collect { it.trim() }
+          pom << "    <dependency>\n"
+          pom << "      <groupId>"    + g + "</groupId>\n"
+          pom << "      <artifactId>" + a + "</artifactId>\n"
+          pom << "      <version>"    + v + "</version>\n"
+          pom << "    </dependency>\n"
+        }
+    }
+    pom << "  </dependencies>\n"
+    pom << "</project>\n"
+  }
 }
 
 def pluginsProject = project(':wlp-bndPlugins')
 
 task updatePluginClasses(type: Copy) {
     dependsOn ':wlp-bndPlugins:jar'
+    dependsOn dependabotGenerate
     from zipTree(bnd('build.bnd.plugins.jar'))
     into project.file('bndplugins/classes')
     doLast {
@@ -63,6 +144,14 @@ task updatePluginClasses(type: Copy) {
     }
 }
 
+
+task cleanPublishedOutputs(type: Delete) {
+	doLast {
+		println rootProject.file(rootProject.ext.get('published.outputs'))
+		rootProject.delete rootProject.file(rootProject.ext.get('published.outputs'))
+	}
+}
+
 task cleanRepos(type: Delete) {
     doLast {
         project.delete('release')
@@ -75,6 +164,7 @@ task cleanRepos(type: Delete) {
 
 task initialize {
     dependsOn cleanRepos
+	dependsOn cleanPublishedOutputs
     dependsOn copyMavenLibs
     dependsOn updatePluginClasses
     doLast {
@@ -84,6 +174,7 @@ task initialize {
 
 clean {
     dependsOn cleanRepos
+	dependsOn cleanPublishedOutputs
 }
 
 classes {
@@ -159,15 +250,25 @@ task createGradleBootstrap {
             }
         }
 
-        depsList.add('    compile \'' + org + ':openliberty-MavenArtifact:' + getVersionFromReleaseRepo('dev', 'openliberty-MavenArtifact') + '@zip\'')
-        depsList.add('    compile \'' + org + ':openliberty-singleJson:' + getVersionFromReleaseRepo('dev', 'openliberty-singleJson') + '@json\'')
+        if (isAutomatedBuild) {
+            depsList.add('    compile \'' + org + ':openliberty-MavenArtifact:' + getVersionFromReleaseRepo('dev', 'openliberty-MavenArtifact') + '@zip\'')
+            depsList.add('    compile \'' + org + ':openliberty-singleJson:' + getVersionFromReleaseRepo('dev', 'openliberty-singleJson') + '@json\'')
+        }
         depsList.add('    compile \'' + org + ':openliberty-modifiedgaFeatureList:' + getVersionFromReleaseRepo('dev', 'openliberty-modifiedgaFeatureList') + '@txt\'')
 
         File dependenciesFile = new File(project.buildDir, 'dependencies.gradle')
         dependenciesFile.createNewFile()
+        def deps = ""
+        def sortedDeps = depsList.sort()
+        for(def i=0;i<sortedDeps.size;i++){
+          deps+=sortedDeps.get(i)+"\n"
+          if(i%100==0){
+            deps+="}\ndependencies {"
+          }
+        }
         dependenciesFile.text = """dependencies {
-${depsList.sort().join('\n')}
-}"""
+           ${deps}
+        }"""
     }
 }
 
@@ -297,12 +398,41 @@ task zipGradleBootstrap(type: Zip) {
     }
 }
 
+task libertyReleaseVersions {
+  inputs.file('resources/bnd/liberty-release.props')
+  outputs.file('build/liberty-versions.props')
+  doLast {
+    def releaseVersion = bnd('libertyRelease') + '-' + rootProject.userProps.getProperty('version.qualifier')
+    println 'releaseVersion = ' + releaseVersion
+    def libertyVersionsProps = new Properties()
+    libertyVersionsProps.setProperty('libertyBaseVersion', bnd('libertyBaseVersion'))
+    libertyVersionsProps.setProperty('libertyFixpackVersion', bnd('libertyFixpackVersion'))
+    libertyVersionsProps.setProperty('libertyServiceVersion', bnd('libertyServiceVersion'))
+    libertyVersionsProps.setProperty('libertyBetaVersion', bnd('libertyBetaVersion'))
+    libertyVersionsProps.setProperty('libertyRelease', bnd('libertyRelease'))
+    libertyVersionsProps.setProperty('libertyBundleMicroVersion', bnd('libertyBundleMicroVersion'))
+    libertyVersionsProps.setProperty('buildID', bnd('buildID'))
+    libertyVersionsProps.setProperty('releaseVersion', releaseVersion)
+    File libertyVersionsPropsFile = file('build/liberty-versions.props')
+    libertyVersionsProps.store(libertyVersionsPropsFile.newWriter(), null)
+  }
+}
+
+publish {
+  dependsOn libertyReleaseVersions
+}
+
 publishing {
   publications {
     gradle(MavenPublication) {
         artifactId 'gradle-bootstrap'
         version project.version
         artifact zipGradleBootstrap
+    }
+    libertyVersions(MavenPublication) {
+        artifactId 'liberty-versions'
+        version project.version
+        artifact project.file('build/liberty-versions.props')
     }
   }
 }
@@ -374,6 +504,105 @@ task printProjectDependencies() {
             }
         }
     }
+}
+
+task checkForUpdates() {
+  doLast {
+    def xmlParser = new XmlSlurper()
+    int totalArtifacts = 0
+    int possibleUpdates = 0
+    file('oss_dependencies.maven').eachLine { line ->
+      line = line.trim()
+      if (line.startsWith('#'))
+        return;
+      totalArtifacts++
+      def (g,a,v) = line.split(':').collect { it.trim() }
+      g = g.replace('.','/')
+      //println '### g=' + g + '   a=' + a + '  v=' + v
+      //println '  checking http://central.maven.org/maven2/' + g + '/' + a + '/maven-metadata.xml'
+      def response = new URL('http://central.maven.org/maven2/' + g + '/' + a + '/maven-metadata.xml').text
+      def mavenMetadata = xmlParser.parseText(response)
+      VersionString currentVersion = new VersionString(v)
+      VersionString possibleUpdate = currentVersion;
+      // Look for a MINOR or MICRO version update (within current MAJOR version)
+      mavenMetadata.versioning.versions.version.each { rawVersion ->
+         VersionString version = new VersionString(rawVersion.text())
+         if (currentVersion.major == version.major && version.isNewerThan(possibleUpdate)) {
+           possibleUpdate = version;
+         }
+      }
+      if (!possibleUpdate.raw.equals(currentVersion.raw)) {
+        println(sprintf("%-60s --> %s", line, possibleUpdate.raw))
+        possibleUpdates++;
+      }
+    }
+    println 'Found ' + possibleUpdates + ' possible MINOR/MICRO version updates out of ' + totalArtifacts + ' total artifacts.'
+  }
+}
+
+task updateArtifact() {
+  doLast {
+    String mavenCoords = System.getProperty('mavenCoords');
+    String toVersion = System.getProperty('toVersion');
+     if (mavenCoords == null || System.getProperty('toVersion') == null) {
+       throw new InvalidUserDataException('Missing required arguments.\nExample usage:\n' +
+         './gradlew cnf:updateArtifact -DmavenCoords=org.apache.commons:commons-lang3:1.0 -DtoVersion=2.0');
+     }
+     def (group, artifact, version) = mavenCoords.split(':').collect { it.trim() }
+     println 'Updating GROUP=' + group + '  ARTIFACT=' + artifact + '  VERSION=' + version + ' --> ' + toVersion
+     // Update maven, gradle, and bnd files
+     String regex = '((' + group + '[\\.:]' + artifact + '):?;?(version=)?)(' + version + ')'
+     println 'Using regex: ' + regex
+     rootProject.fileTree(dir: '.', includes: ['**/*.maven', '**/*.gradle', '**/*.bnd', '**/bnd.*']).each{file ->
+       ant.replaceregexp(match: regex,
+                         replace: '\\1' + toVersion, 
+                         file: file, flags: 'g', byline: true)
+     }
+     // Update BND files
+     //rootProject.fileTree(dir: '.', includes: []).each{file ->
+     //  ant.replaceregexp(match: group + ':' + artifact + ';' + version, replace: group + ':' + artifact + ';' + toVersion, file: file, flags: 'g', byline: true)
+     //  ant.replaceregexp(match: group + ':' + artifact + ';version=' + version, replace: group + ':' + artifact + ';version=' + toVersion, file: file, flags: 'g', byline: true)
+    // }
+  }
+}
+
+class VersionString {
+
+  String raw
+  Integer major = 0
+  Integer minor = 0
+  Integer micro = 0
+  String qualifier = ''
+
+  VersionString(String version) {
+    raw = version
+    def versionParts = version.split('\\.')
+    major = parseVersion(versionParts[0])
+    if (versionParts.length > 1)
+      minor = parseVersion(versionParts[1])
+    if (versionParts.length > 2)
+      micro = parseVersion(versionParts[2])
+    if (versionParts.length > 3)
+      qualifier = versionParts[3]
+  }
+
+  Integer parseVersion(String versionPart) {
+    try {
+      return Integer.valueOf(versionPart)
+    } catch (NumberFormatException e) {
+      return 0;
+    }
+  }
+
+  boolean isNewerThan(VersionString other) {
+    if (major > other.major)
+      return true;
+    if (major == other.major && minor > other.minor)
+      return true;
+    if (major == other.major && minor == other.minor && micro > other.micro)
+      return true;
+    return false;
+  }
 }
 
 List nextPivot(Map dependencyMap, Set seenProjects) {

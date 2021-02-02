@@ -18,12 +18,12 @@ import java.text.MessageFormat;
 import java.util.List;
 import java.util.zip.GZIPOutputStream;
 
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
-import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 
 import com.ibm.ws.kernel.boot.archive.UnixModeHelper;
 import com.ibm.ws.kernel.boot.cmdline.Utils;
@@ -60,18 +60,16 @@ public class ZipArchive extends AbstractArchive {
         String fileName = archiveFile.getName().toLowerCase();
         FileOutputStream fOut = new FileOutputStream(archiveFile);
 
-        if (fileName.endsWith(".zip")) {
-          this.archiveOutputStream = new ZipArchiveOutputStream(fOut);
-        } else if (fileName.endsWith(".tar.gz")) {
-          this.archiveOutputStream = new TarArchiveOutputStream(new GZIPOutputStream(fOut));
+        if (fileName.endsWith(".tar.gz")) {
+            this.archiveOutputStream = new TarArchiveOutputStream(new GZIPOutputStream(fOut));
         } else if (fileName.endsWith(".tar")) {
-          this.archiveOutputStream = new TarArchiveOutputStream(fOut);
-        } else {
-          throw new IllegalArgumentException(fileName);
+            this.archiveOutputStream = new TarArchiveOutputStream(fOut);
+        } else { // zip,jar,tmp,etc
+            this.archiveOutputStream = new ZipArchiveOutputStream(fOut);
         }
 
         if (archiveOutputStream instanceof TarArchiveOutputStream) {
-          ((TarArchiveOutputStream) archiveOutputStream).setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+            ((TarArchiveOutputStream) archiveOutputStream).setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
         }
     }
 
@@ -117,10 +115,12 @@ public class ZipArchive extends AbstractArchive {
 
         if (helper != null) {
             int mode = helper.getUnixMode(sourceFile);
-            if (entry instanceof ZipArchiveEntry) {
-              ((ZipArchiveEntry)entry).setUnixMode(mode);
-            } else if (entry instanceof TarArchiveEntry) {
-              ((TarArchiveEntry)entry).setMode(mode);
+            if (mode != -1) {
+                if (entry instanceof ZipArchiveEntry) {
+                    ((ZipArchiveEntry) entry).setUnixMode(mode);
+                } else if (entry instanceof TarArchiveEntry) {
+                    ((TarArchiveEntry) entry).setMode(mode);
+                }
             }
         }
         archiveOutputStream.putArchiveEntry(entry);

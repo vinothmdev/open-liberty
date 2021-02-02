@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2018 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -15,12 +15,16 @@ import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.enterprise.inject.spi.BeanManager;
+import javax.enterprise.inject.spi.Extension;
 
 import org.jboss.weld.bootstrap.WeldBootstrap;
 import org.jboss.weld.bootstrap.api.Environments;
@@ -56,6 +60,9 @@ import com.ibm.wsspi.injectionengine.InjectionMetaData;
 import com.ibm.wsspi.injectionengine.InjectionMetaDataListener;
 import com.ibm.wsspi.injectionengine.ReferenceContext;
 import com.ibm.wsspi.kernel.service.utils.ServiceAndServiceReferencePair;
+import com.ibm.wsspi.kernel.service.utils.ServiceReferenceUtils;
+
+import io.openliberty.cdi.spi.CDIExtensionMetadata;
 
 /**
  * The main CDI entry point. Handles starting up and shutting down CDI in response to applications starting and stopping. Implements {@link CDIService} to provide information about
@@ -73,7 +80,9 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
 
     private static final String EXTENSION_API_CLASSES_SEPARATOR = ";";
 
-    private Set<ExtensionArchive> runtimeExtensionSet = null;
+    //This is a map from OSGi Service ID (of the extension) to a ExtensionArchive
+    private final Map<Long, ExtensionArchive> runtimeExtensionMap = new HashMap<>();
+    private ExtensionArchive probeExtensionArchive = null;
 
     private final ThreadLocal<WebSphereCDIDeployment> currentDeployment = new ThreadLocal<WebSphereCDIDeployment>();
     private final CDIRuntime cdiRuntime;
@@ -116,7 +125,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
     public WebSphereCDIDeployment startInitialization(Application application) throws CDIException {
         try {
             //first create the deployment object which has the full structure of BDAs inside
-            WebSphereCDIDeployment webSphereCDIDeployment = createWebSphereCDIDeployment(application, getExtensionArchives());
+            WebSphereCDIDeployment webSphereCDIDeployment = createWebSphereCDIDeployment(application);
             currentDeployment.set(webSphereCDIDeployment);
 
             //scan for beans
@@ -161,7 +170,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
             }
 
         } finally {
-            currentDeployment.set(null);
+            currentDeployment.remove();
         }
 
     }
@@ -173,7 +182,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
                 currentDeployment.set(webSphereCDIDeployment);
                 weldBootstrap.endInitialization();
             } finally {
-                currentDeployment.set(null);
+                currentDeployment.remove();
             }
         }
     }
@@ -197,8 +206,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
      * @return
      * @throws CDIException
      */
-    private WebSphereCDIDeployment createWebSphereCDIDeployment(Application application,
-                                                                Set<ExtensionArchive> extensionArchives) throws CDIException {
+    private WebSphereCDIDeployment createWebSphereCDIDeployment(Application application) throws CDIException {
         WebSphereCDIDeployment webSphereCDIDeployment = new WebSphereCDIDeploymentImpl(application, cdiRuntime);
 
         DiscoveredBdas discoveredBdas = new DiscoveredBdas(webSphereCDIDeployment);
@@ -234,7 +242,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
      * Create a BDA for each runtime extension and add it to the deployment.
      *
      * @param webSphereCDIDeployment
-     * @param excludedBdas a set of application BDAs which should not be visible to runtime extensions
+     * @param excludedBdas           a set of application BDAs which should not be visible to runtime extensions
      * @throws CDIException
      */
     private void addRuntimeExtensions(WebSphereCDIDeployment webSphereCDIDeployment,
@@ -254,6 +262,16 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
                 }
             }
         }
+        //allow extensions which can see application BDAs to also see other extensions
+        for (WebSphereBeanDeploymentArchive extBDA : extensions) {
+            if (extBDA.extensionCanSeeApplicationBDAs()) {
+                for (WebSphereBeanDeploymentArchive otherBDA : extensions) {
+                    if (extBDA != otherBDA) {
+                        extBDA.addBeanDeploymentArchive(otherBDA);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -267,7 +285,7 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
 
         Set<WebSphereBeanDeploymentArchive> extensionBdas = new HashSet<WebSphereBeanDeploymentArchive>();
 
-        Set<ExtensionArchive> extensions = getExtensionArchives();
+        Set<ExtensionArchive> extensions = getExtensionArchives(applicationContext);
 
         if (extensions != null) {
             for (ExtensionArchive extArchive : extensions) {
@@ -547,64 +565,153 @@ public class CDIContainerImpl implements CDIContainer, InjectionMetaDataListener
      * @return
      * @throws CDIException
      */
-    private synchronized Set<ExtensionArchive> getExtensionArchives() throws CDIException {
+    private Set<ExtensionArchive> getExtensionArchives(WebSphereCDIDeployment applicationContext) throws CDIException {
 
-        if (runtimeExtensionSet == null) {
-            runtimeExtensionSet = new HashSet<ExtensionArchive>();
-            // get hold of the container for extension bundle
-            //add create the bean deployment archive from the container
-            Iterator<ServiceAndServiceReferencePair<WebSphereCDIExtension>> extensions = cdiRuntime.getExtensionServices();
-            while (extensions.hasNext()) {
-                ServiceAndServiceReferencePair<WebSphereCDIExtension> extension = extensions.next();
-                ServiceReference<WebSphereCDIExtension> sr = extension.getServiceReference();
+        Set<ExtensionArchive> extensionSet = new HashSet<>();
 
-                Bundle bundle = null;
-                if (sr == null) {
-                    continue;
-                }
+        // get hold of the container for extension bundle
+        //add create the bean deployment archive from the container
+        Iterator<ServiceAndServiceReferencePair<WebSphereCDIExtension>> extensions = cdiRuntime.getExtensionServices();
+        while (extensions.hasNext()) {
+            ServiceAndServiceReferencePair<WebSphereCDIExtension> extension = extensions.next();
+            ServiceReference<WebSphereCDIExtension> sr = extension.getServiceReference();
+            if (sr != null) {
+                Long serviceID = ServiceReferenceUtils.getId(sr);
+                ExtensionArchive extensionArchive = null;
+                synchronized (this) {
+                    extensionArchive = runtimeExtensionMap.get(serviceID);
 
-                bundle = sr.getBundle();
-
-                String extra_classes_blob = (String) sr.getProperty(EXTENSION_API_CLASSES);
-                Set<String> extra_classes = new HashSet<String>();
-                //parse the list
-                if (extra_classes_blob != null) {
-
-                    String[] classes = extra_classes_blob.split(EXTENSION_API_CLASSES_SEPARATOR);
-                    if ((classes != null) && (classes.length > 0)) {
-                        Collections.addAll(extra_classes, classes);
+                    if (extensionArchive == null) {
+                        extensionArchive = newExtensionArchive(sr);
+                        runtimeExtensionMap.put(serviceID, extensionArchive);
                     }
                 }
-
-                String extraAnnotationsBlob = (String) sr.getProperty(EXTENSION_BEAN_DEFINING_ANNOTATIONS);
-                Set<String> extraAnnotations = new HashSet<String>();
-                if (extraAnnotationsBlob != null) {
-                    String[] annotations = extraAnnotationsBlob.split(EXTENSION_API_CLASSES_SEPARATOR);
-                    if ((annotations != null) && (annotations.length > 0)) {
-                        Collections.addAll(extraAnnotations, annotations);
-                    }
-                }
-
-                String applicationBDAsVisibleStr = (String) sr.getProperty(EXTENSION_APP_BDAS_VISIBLE);
-                boolean applicationBDAsVisible = Boolean.parseBoolean(applicationBDAsVisibleStr);
-
-                String extClassesOnlyStr = (String) sr.getProperty(EXTENSION_CLASSES_ONLY_MODE);
-                boolean extClassesOnly = Boolean.parseBoolean(extClassesOnlyStr);
-
-                ExtensionArchive extensionArchive = cdiRuntime.getExtensionArchiveForBundle(bundle, extra_classes, extraAnnotations,
-                                                                                            applicationBDAsVisible,
-                                                                                            extClassesOnly);
-                runtimeExtensionSet.add(extensionArchive);
-
-            }
-            if (CDIUtils.isDevelopementMode()) {
-
-                //add the probeExcension
-                runtimeExtensionSet.add(new ProbeExtensionArchive(cdiRuntime, null));
+                extensionSet.add(extensionArchive);
             }
         }
 
-        return runtimeExtensionSet;
+        //Now do the exact same thing for extensions coming from the SPI
+        Iterator<ServiceAndServiceReferencePair<CDIExtensionMetadata>> spiExtensions = cdiRuntime.getSPIExtensionServices();
+        while (spiExtensions.hasNext()) {
+            ServiceAndServiceReferencePair<CDIExtensionMetadata> extensionMetaData = spiExtensions.next();
+            ServiceReference<CDIExtensionMetadata> sr = extensionMetaData.getServiceReference();
+            if (sr != null) {
+                Long serviceID = ServiceReferenceUtils.getId(sr);
+                ExtensionArchive extensionArchive = null;
+                synchronized (this) {
+                    extensionArchive = runtimeExtensionMap.get(serviceID);
+
+                    if (extensionArchive == null) {
+                        extensionArchive = newSPIExtensionArchive(sr, extensionMetaData.getService(), applicationContext);
+                        runtimeExtensionMap.put(serviceID, extensionArchive);
+                    } 
+                }
+                extensionSet.add(extensionArchive);
+            }
+        }
+
+        if (CDIUtils.isDevelopementMode()) {
+            //add the probeExcension
+            extensionSet.add(getProbeExtensionArchive());
+        }
+
+        return extensionSet;
+    }
+
+    private ExtensionArchive getProbeExtensionArchive() {
+        synchronized (this) {
+            if (this.probeExtensionArchive == null) {
+                this.probeExtensionArchive = new ProbeExtensionArchive(cdiRuntime, null);
+            }
+        }
+        return this.probeExtensionArchive;
+    }
+
+    private ExtensionArchive newSPIExtensionArchive(ServiceReference<CDIExtensionMetadata> sr,
+                                                    CDIExtensionMetadata webSphereCDIExtensionMetaData, WebSphereCDIDeployment applicationContext) throws CDIException {
+        Bundle bundle = sr.getBundle();
+
+        Set<Class<? extends Extension>> extensionClasses = webSphereCDIExtensionMetaData.getExtensions();
+        Set<Class<?>> beanClasses = webSphereCDIExtensionMetaData.getBeanClasses();
+
+        for (Iterator<Class<? extends Extension>> i = extensionClasses.iterator(); i.hasNext();) {
+            Class extensionClass = i.next();
+            if (extensionClass.getClassLoader() != webSphereCDIExtensionMetaData.getClass().getClassLoader()) {
+                i.remove();
+                Tr.error(tc, "spi.extension.class.in.different.bundle.CWOWB1011E", extensionClass.getCanonicalName());
+            }
+        }
+
+        for (Iterator<Class<?>> i = beanClasses.iterator(); i.hasNext();) {
+            Class beanClass = i.next();
+            if (beanClass.getClassLoader() != webSphereCDIExtensionMetaData.getClass().getClassLoader()) {
+                i.remove();
+                Tr.error(tc, "spi.extension.class.in.different.bundle.CWOWB1011E", beanClass.getCanonicalName());
+            }
+        }
+
+        Set<String> extensionClassNames = extensionClasses.stream().map(clazz -> clazz.getCanonicalName()).collect(Collectors.toSet());
+
+        //The simpler SPI does not offer these properties.
+        Set<String> extra_classes = beanClasses.stream().map(clazz -> clazz.getCanonicalName()).collect(Collectors.toSet());
+        Set<String> extraAnnotations = Collections.emptySet();
+        boolean applicationBDAsVisible = false;
+        boolean extClassesOnly = false;
+
+        ExtensionArchive extensionArchive = cdiRuntime.getExtensionArchiveForBundle(bundle, extra_classes, extraAnnotations,
+                                                                                    applicationBDAsVisible,
+                                                                                    extClassesOnly, extensionClassNames);
+
+        return extensionArchive;
+    }
+
+    private ExtensionArchive newExtensionArchive(ServiceReference<WebSphereCDIExtension> sr) throws CDIException {
+        Bundle bundle = sr.getBundle();
+
+        String extra_classes_blob = (String) sr.getProperty(EXTENSION_API_CLASSES);
+        Set<String> extra_classes = new HashSet<String>();
+        //parse the list
+        if (extra_classes_blob != null) {
+
+            String[] classes = extra_classes_blob.split(EXTENSION_API_CLASSES_SEPARATOR);
+            if ((classes != null) && (classes.length > 0)) {
+                Collections.addAll(extra_classes, classes);
+            }
+        }
+
+        String extraAnnotationsBlob = (String) sr.getProperty(EXTENSION_BEAN_DEFINING_ANNOTATIONS);
+        Set<String> extraAnnotations = new HashSet<String>();
+        if (extraAnnotationsBlob != null) {
+            String[] annotations = extraAnnotationsBlob.split(EXTENSION_API_CLASSES_SEPARATOR);
+            if ((annotations != null) && (annotations.length > 0)) {
+                Collections.addAll(extraAnnotations, annotations);
+            }
+        }
+
+        String applicationBDAsVisibleStr = (String) sr.getProperty(EXTENSION_APP_BDAS_VISIBLE);
+        boolean applicationBDAsVisible = Boolean.parseBoolean(applicationBDAsVisibleStr);
+
+        String extClassesOnlyStr = (String) sr.getProperty(EXTENSION_CLASSES_ONLY_MODE);
+        boolean extClassesOnly = Boolean.parseBoolean(extClassesOnlyStr);
+
+        ExtensionArchive extensionArchive = cdiRuntime.getExtensionArchiveForBundle(bundle, extra_classes, extraAnnotations,
+                                                                                    applicationBDAsVisible, extClassesOnly, Collections.emptySet());
+
+        return extensionArchive;
+    }
+
+    public void removeRuntimeExtensionArchive(ServiceReference<WebSphereCDIExtension> sr) {
+        synchronized (this) {
+            Long serviceID = ServiceReferenceUtils.getId(sr);
+            this.runtimeExtensionMap.remove(serviceID);
+        }
+    }
+
+    public void removeRuntimeExtensionArchiveMetaData(ServiceReference<CDIExtensionMetadata> sr) {
+        synchronized (this) {
+            Long serviceID = ServiceReferenceUtils.getId(sr);
+            this.runtimeExtensionMap.remove(serviceID);
+        }
     }
 
     /** {@inheritDoc} */

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2014 IBM Corporation and others.
+ * Copyright (c) 2014, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,16 +24,16 @@ import org.junit.Test;
 import org.osgi.framework.ServiceReference;
 import org.osgi.service.component.ComponentContext;
 
-import test.common.ComponentContextMockery;
-import test.common.SharedOutputManager;
-
 import com.ibm.ejs.container.BeanMetaData;
 import com.ibm.ejs.csi.EJBApplicationMetaData;
 import com.ibm.ejs.csi.EJBModuleMetaDataImpl;
 import com.ibm.ws.container.service.metadata.internal.J2EENameImpl;
 import com.ibm.ws.jca.service.AdminObjectService;
 import com.ibm.ws.jca.service.EndpointActivationService;
-import com.ibm.ws.kernel.feature.ServerStarted;
+import com.ibm.ws.kernel.feature.ServerStartedPhase2;
+
+import test.common.ComponentContextMockery;
+import test.common.SharedOutputManager;
 
 public class MDBRuntimeImplTest {
     @SuppressWarnings("serial")
@@ -121,7 +121,8 @@ public class MDBRuntimeImplTest {
         }
     }
 
-    private static final class ServerStartedImpl implements ServerStarted {}
+    private static final class ServerStartedPhase2Impl implements ServerStartedPhase2 {
+    }
 
     @Rule
     public final SharedOutputManager outputMgr = SharedOutputManager.getInstance();
@@ -179,7 +180,7 @@ public class MDBRuntimeImplTest {
     @Test
     public void testAddRemoveEndpointActivationService() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
+        runtime.activate(null, cc);
 
         ServiceReference<EndpointActivationService> easSR = mockEASSR("as");
         runtime.addEndPointActivationService(easSR);
@@ -189,8 +190,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpoint() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
@@ -202,8 +203,8 @@ public class MDBRuntimeImplTest {
     @Test(expected = ResourceException.class)
     public void testActivateEndpointException() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
@@ -215,8 +216,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointNoEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as", null));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
@@ -230,8 +231,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointBeforeEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
@@ -245,8 +246,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointExceptionBeforeEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
@@ -261,7 +262,7 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointBeforeEASAndServerStarted() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
+        runtime.activate(null, cc);
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
@@ -269,33 +270,33 @@ public class MDBRuntimeImplTest {
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         mef.allowActivate = true;
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         mef.assertActivated();
     }
 
     @Test
     public void testActivateEndpointBeforeServerStarted() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
+        runtime.activate(null, cc);
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
 
         mef.allowActivate = true;
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         mef.assertActivated();
     }
 
     @Test
     public void testActivateEndpointBeforeServerStartedAndEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
+        runtime.activate(null, cc);
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
 
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
 
         mef.allowActivate = true;
         runtime.addEndPointActivationService(mockEASSR("as"));
@@ -305,8 +306,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpoint() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
@@ -322,8 +323,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointViaEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         ServiceReference<EndpointActivationService> easSR = mockEASSR("as");
         runtime.addEndPointActivationService(easSR);
 
@@ -340,8 +341,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointViaReplaceEAS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         ServiceReference<EndpointActivationService> easSR = mockEASSR("as");
         runtime.addEndPointActivationService(easSR);
 
@@ -363,8 +364,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointBeforeActivate() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as");
         runtime.activateEndpoint(mef);
@@ -377,7 +378,7 @@ public class MDBRuntimeImplTest {
     @Test
     public void testAddRemoveAdminObjectService() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
+        runtime.activate(null, cc);
 
         ServiceReference<AdminObjectService> aosSR = mockAOSSR("dest", null);
         runtime.addAdminObjectService(aosSR);
@@ -395,8 +396,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointWithDestinationId() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         runtime.addAdminObjectService(mockAOSSR("dest", null));
         runtime.addAdminObjectService(mockAOSSR("dest", null));
@@ -410,8 +411,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointWithDestinationJndiName() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         runtime.addAdminObjectService(mockAOSSR("dest", "destjn"));
 
@@ -424,8 +425,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeActivateEndpointWithDestination() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         runtime.addAdminObjectService(mockAOSSR("dest", null));
 
@@ -442,8 +443,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testActivateEndpointBeforeAOS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
 
         TestMessageEndpointFactory mef = new TestMessageEndpointFactory("as", "dest");
@@ -458,8 +459,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testAddRemoveAdminObjectServiceNoop() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         runtime.addAdminObjectService(mockAOSSR("dest", null));
 
@@ -476,8 +477,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointViaAOS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         ServiceReference<AdminObjectService> aosSR = mockAOSSR("dest", null);
         runtime.addAdminObjectService(aosSR);
@@ -495,8 +496,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointViaReplaceAOS() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         ServiceReference<AdminObjectService> aosSR = mockAOSSR("dest", null);
         ServiceReference<AdminObjectService> aosSR2 = mockAOSSR("dest", null);
@@ -527,8 +528,8 @@ public class MDBRuntimeImplTest {
     @Test
     public void testDeactivateEndpointViaReplaceAOSIdVsJndiName() throws Exception {
         MDBRuntimeImpl runtime = new MDBRuntimeImpl();
-        runtime.activate(cc);
-        runtime.setServerStarted(new ServerStartedImpl());
+        runtime.activate(null, cc);
+        runtime.setServerStartedPhase2(new ServerStartedPhase2Impl());
         runtime.addEndPointActivationService(mockEASSR("as"));
         ServiceReference<AdminObjectService> aosSR = mockAOSSR("destid", "destjn");
         ServiceReference<AdminObjectService> aosSR2 = mockAOSSR("destjn", null);

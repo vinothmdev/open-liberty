@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2015 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,9 +24,6 @@ import com.ibm.ws.security.registry.RegistryException;
 import com.ibm.ws.security.wim.registry.dataobject.IDAndRealm;
 import com.ibm.wsspi.security.wim.SchemaConstants;
 import com.ibm.wsspi.security.wim.exception.EntityNotFoundException;
-import com.ibm.wsspi.security.wim.exception.EntityNotInRealmScopeException;
-import com.ibm.wsspi.security.wim.exception.InvalidIdentifierException;
-import com.ibm.wsspi.security.wim.exception.InvalidUniqueNameException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
 import com.ibm.wsspi.security.wim.model.Context;
 import com.ibm.wsspi.security.wim.model.Control;
@@ -202,26 +199,19 @@ public class SecurityNameBridge {
                 if (entity != null) {
                     // d115256
                     if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
-                        returnValue = (String) entity.get(outputAttrName);
+                        Object value = entity.get(outputAttrName);
+                        if (value instanceof List<?>) {
+                            returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                        } else {
+                            returnValue = BridgeUtils.getStringValue(value);
+                        }
                     } else {
                         returnValue = (String) entity.getIdentifier().get(outputAttrName);
                     }
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, methodName + " " + toCatch.getMessage(), toCatch);
-            }
-
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof EntityNotInRealmScopeException
-                || toCatch instanceof InvalidUniqueNameException || toCatch instanceof InvalidIdentifierException) {
-                // the user was not found
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            } else {
-                // other cases
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
         return returnValue;
     }
@@ -329,29 +319,18 @@ public class SecurityNameBridge {
                 if (!this.mappingUtils.isIdentifierTypeProperty(outputAttrName)) {
                     Object value = group.get(outputAttrName);
 
-                    if (value instanceof String)
-                        returnValue = (String) value;
-                    else
-                        returnValue = String.valueOf(((List<?>) value).get(0));
+                    if (value instanceof List<?>) {
+                        returnValue = BridgeUtils.getStringValue(((List<?>) value).get(0));
+                    } else {
+                        returnValue = BridgeUtils.getStringValue(value);
+                    }
 
                 } else {
                     returnValue = (String) group.getIdentifier().get(outputAttrName);
                 }
             }
         } catch (WIMException toCatch) {
-            // log the Exception
-            if (tc.isDebugEnabled()) {
-                Tr.debug(tc, methodName + " " + toCatch.getMessage(), toCatch);
-            }
-
-            if (toCatch instanceof EntityNotFoundException || toCatch instanceof EntityNotInRealmScopeException
-                || toCatch instanceof InvalidUniqueNameException || toCatch instanceof InvalidIdentifierException) {
-                // the group was not found
-                throw new EntryNotFoundException(toCatch.getMessage(), toCatch);
-            } else {
-                // other cases
-                throw new RegistryException(toCatch.getMessage(), toCatch);
-            }
+            BridgeUtils.handleExceptions(toCatch);
         }
         return returnValue;
     }

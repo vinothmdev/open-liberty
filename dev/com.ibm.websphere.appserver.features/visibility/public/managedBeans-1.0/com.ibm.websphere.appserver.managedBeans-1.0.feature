@@ -1,5 +1,6 @@
 -include= ~${workspace}/cnf/resources/bnd/feature.props
 symbolicName=com.ibm.websphere.appserver.managedBeans-1.0
+WLP-DisableAllFeatures-OnConflict: false
 visibility=public
 IBM-App-ForceRestart: install, \
  uninstall
@@ -14,3 +15,4 @@ Subsystem-Name: Java EE Managed Bean 1.0
  dev/api/ibm/schema/ibm-managed-bean-bnd_1_1.xsd
 kind=ga
 edition=core
+WLP-Activation-Type: parallel

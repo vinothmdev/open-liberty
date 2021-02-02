@@ -20,7 +20,6 @@ import com.ibm.websphere.simplicity.RemoteFile;
 import com.ibm.websphere.simplicity.log.Log;
 import com.ibm.websphere.soe_reporting.SOEHttpPostUtil;
 
-import componenttest.custom.junit.runner.FATRunner;
 import componenttest.exception.NoStringFoundInLogException;
 import componenttest.topology.impl.LibertyFileManager.LogSearchResult;
 
@@ -36,8 +35,10 @@ public class LogMonitor {
     /** How frequently we poll the logs when waiting for something to happen */
     protected static final int WAIT_INCREMENT = 300; //milliseconds
 
+    protected static final boolean FAT_TEST_LOCALRUN = Boolean.getBoolean("fat.test.localrun");
+
     /** Default wait period for log search requests **/
-    protected static final long LOG_SEARCH_TIMEOUT = FATRunner.FAT_TEST_LOCALRUN ? 12 * 1000 : 120 * 1000;
+    protected static final long LOG_SEARCH_TIMEOUT = FAT_TEST_LOCALRUN ? 12 * 1000 : 120 * 1000;
 
     //Used for keeping track of mark positions of log files
     protected HashMap<String, Long> logMarks = new HashMap<String, Long>();
@@ -58,7 +59,7 @@ public class LogMonitor {
     public void resetLogMarks() {
         client.lmcResetLogOffsets();
         logMarks = new HashMap<String, Long>(originMarks);
-        Log.info(c, "resetLogMarks", "Reset log offsets " + logMarks);
+        Log.finest(c, "resetLogMarks", "Reset log offsets " + logMarks);
     }
 
     /**
@@ -147,9 +148,9 @@ public class LogMonitor {
      * server.waitForStringInLogUsingMark("CWWKZ0009I");<br/>
      * </p></tt></p>
      *
-     * @param regexp a regular expression to search for
-     * @return the matching line in the log, or null if no matches
-     *         appear before the timeout expires
+     * @param  regexp a regular expression to search for
+     * @return        the matching line in the log, or null if no matches
+     *                appear before the timeout expires
      */
     public String waitForStringInLogUsingMark(String regexp) {
         return waitForStringInLogUsingMark(regexp, LOG_SEARCH_TIMEOUT);
@@ -163,8 +164,8 @@ public class LogMonitor {
      * might take a ridiculously long time (like five minutes),
      * consider using the method which takes a default timeout, {@link }
      *
-     * @param regexp
-     * @param timeout a timeout, in milliseconds
+     * @param  regexp
+     * @param  timeout a timeout, in milliseconds
      * @return
      */
     public String waitForStringInLogUsingMark(String regexp, long timeout) {
@@ -180,11 +181,11 @@ public class LogMonitor {
      * Wait for the specified regexp in the default logs from the last mark.
      * The offset is also incremented every time this method is called.
      *
-     * @param regexp a regular expression to search for
-     * @param intendedTimeout a timeout, in milliseconds, within which the wait should complete. Exceeding this is a soft fail.
-     * @param extendedTimeout a timeout, in milliseconds, within which the wait must complete. Exceeding this is a hard fail.
-     * @param outputFile file to check
-     * @return line that matched the regexp
+     * @param  regexp          a regular expression to search for
+     * @param  intendedTimeout a timeout, in milliseconds, within which the wait should complete. Exceeding this is a soft fail.
+     * @param  extendedTimeout a timeout, in milliseconds, within which the wait must complete. Exceeding this is a hard fail.
+     * @param  outputFile      file to check
+     * @return                 line that matched the regexp
      */
     protected String waitForStringInLogUsingMark(String regexp, long intendedTimeout, long extendedTimeout, RemoteFile outputFile) {
         final String METHOD_NAME = "waitForStringInLogUsingMark";
@@ -247,12 +248,15 @@ public class LogMonitor {
      * and verify that the regex does not show up in the logs during the
      * specfied duration.
      *
-     * @param timeout Timeout (in milliseconds)
-     * @return line that matched the regexp
+     * @param  regexp          a regular expression to search for
+     * @param  intendedTimeout a timeout, in milliseconds, within which the wait should complete. Exceeding this is a soft fail.
+     * @param  extendedTimeout a timeout, in milliseconds, within which the wait must complete. Exceeding this is a hard fail.
+     * @param  outputFile      file to check
+     * @return                 line that matched the regexp
      */
-    public String verifyStringNotInLogUsingMark(String regexToSearchFor, long timeout) {
+    public String verifyStringNotInLogUsingMark(String regexp, long timeout) {
         try {
-            return verifyStringNotInLogUsingMark(regexToSearchFor, timeout, client.lmcGetDefaultLogFile());
+            return waitForStringInLogUsingMarkWithException(regexp, timeout, timeout * 2, client.lmcGetDefaultLogFile());
         } catch (Exception ex) {
             if (ex instanceof NoStringFoundInLogException) {
                 return null;
@@ -267,8 +271,8 @@ public class LogMonitor {
      * and verify that the regex does not show up in the logs during the
      * specfied duration.
      *
-     * @param timeout Timeout (in milliseconds)
-     * @return line that matched the regexp
+     * @param  timeout Timeout (in milliseconds)
+     * @return         line that matched the regexp
      */
     public String verifyStringNotInLogUsingMark(String regexToSearchFor, long timeout, RemoteFile logFileToSearch) {
         try {
@@ -290,11 +294,11 @@ public class LogMonitor {
      * checks. Remove this method and update the verifyStringNotInLogUsingMark method to use
      * the waitForStringInLogUsingMark method eventually.
      *
-     * @param regexp a regular expression to search for
-     * @param intendedTimeout a timeout, in milliseconds, within which the wait should complete. Exceeding this is a soft fail.
-     * @param extendedTimeout a timeout, in milliseconds, within which the wait must complete. Exceeding this is a hard fail.
-     * @param outputFile file to check
-     * @return line that matched the regexp
+     * @param  regexp          a regular expression to search for
+     * @param  intendedTimeout a timeout, in milliseconds, within which the wait should complete. Exceeding this is a soft fail.
+     * @param  extendedTimeout a timeout, in milliseconds, within which the wait must complete. Exceeding this is a hard fail.
+     * @param  outputFile      file to check
+     * @return                 line that matched the regexp
      */
     protected String waitForStringInLogUsingMarkWithException(String regexp, long intendedTimeout, long extendedTimeout, RemoteFile outputFile) {
         final String METHOD_NAME = "waitForStringInLogUsingMarkWithException";
@@ -359,11 +363,11 @@ public class LogMonitor {
     /**
      * Check for multiple instances of the regex in log using mark
      *
-     * @param numberOfMatches number of matches required
-     * @param regexp a regular expression to search for
-     * @param timeout a timeout, in milliseconds
-     * @param outputFile file to check
-     * @return number of matches found
+     * @param  numberOfMatches number of matches required
+     * @param  regexp          a regular expression to search for
+     * @param  timeout         a timeout, in milliseconds
+     * @param  outputFile      file to check
+     * @return                 number of matches found
      */
     public int waitForMultipleStringsInLogUsingMark(int numberOfMatches, String regexp, long timeout, RemoteFile outputFile) {
         long startTime = System.currentTimeMillis();

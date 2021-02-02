@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2008 IBM Corporation and others.
+ * Copyright (c) 1997, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -60,7 +61,6 @@ import com.ibm.ws.container.Container;
 import com.ibm.ws.container.DeployedModule;
 import com.ibm.ws.javaee.dd.webext.WebExt;
 import com.ibm.websphere.security.audit.context.AuditManager;
-import com.ibm.websphere.security.audit.context.AuditThreadContext;
 import com.ibm.ws.util.WSThreadLocal;
 import com.ibm.ws.webcontainer.async.AsyncContextFactory;
 import com.ibm.ws.webcontainer.async.AsyncContextImpl;
@@ -138,6 +138,7 @@ public abstract class WebContainer extends BaseContainer {
     private static TraceNLS nls = TraceNLS.getTraceNLS(WebContainer.class, "com.ibm.ws.webcontainer.resources.Messages");
 
     protected static final AtomicReference<WebContainer> self = new AtomicReference<WebContainer>();
+    protected static volatile CountDownLatch selfInit = new CountDownLatch(1);
 
     // 112102 - add HashMap to hold cipher suite to bit size mapping
     private HashMap _cipherToBit = new HashMap();
@@ -165,9 +166,6 @@ public abstract class WebContainer extends BaseContainer {
     
     protected AuditManager auditManager;
 
-    private static ThreadLocal<AuditThreadContext> threadLocal = new ThreadLocal<AuditThreadContext>();
-
-
     private static int invocationCacheSize = 500;
     static {
         servletContainerInitializers = ServiceLoader.load(ServletContainerInitializer.class, WebContainer.class.getClassLoader());
@@ -192,8 +190,6 @@ public abstract class WebContainer extends BaseContainer {
                                                                  + WebContainer.class.getClassLoader());
 
     }
-
-    protected static boolean decodePlusSign = true; //default to not decoding the plus sign per URL Spec
 
     protected final static ConcurrentMap _cacheMap = new ConcurrentHashMap(invocationCacheSize);
     final private static AtomicInteger _cacheSize = new AtomicInteger();
@@ -610,6 +606,19 @@ public abstract class WebContainer extends BaseContainer {
      * @return WebContainer
      */
     public static WebContainer getWebContainer() {
+        WebContainer selfInstance = self.get();
+        if (selfInstance != null) {
+            return selfInstance;
+        }
+        CountDownLatch currentLatch = selfInit;
+        try {
+            currentLatch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            // auto-FFDC
+            Thread.currentThread().interrupt();
+        }
+ 
+        currentLatch.countDown(); // don't wait again
         return self.get();
     }
 
@@ -795,7 +804,7 @@ public abstract class WebContainer extends BaseContainer {
             // Begin 293696 ServletRequest.getPathInfo() fails WASCC.web.webcontainer
             String reqURI = req.getRequestURI();
             String decodedReqURI = null;
-            if (decodePlusSign) {
+            if (WCCustomProperties.DECODE_URL_PLUS_SIGN) {
                 decodedReqURI = URLDecoder.decode(reqURI, encoding);
             } else {
                 decodedReqURI = WSURLDecoder.decode(reqURI, encoding);
@@ -1169,10 +1178,6 @@ public abstract class WebContainer extends BaseContainer {
         }
     }
 
-    public boolean getDecodePlusSign() {
-        return WebContainer.decodePlusSign;
-    }
-
     /**
      * Method getWebContainerProperties.
      * 
@@ -1224,7 +1229,7 @@ public abstract class WebContainer extends BaseContainer {
         String cacheKeyStr = cacheKey.toString();
         // Servlet 4.0 : Use CacheServletWrapperFactory
         CacheServletWrapper wrapper =  cacheServletWrapperFactory.createCacheServletWrapper((IServletWrapper) s, req, cacheKeyStr, app);
-        if (_cacheMap.putIfAbsent(cacheKeyStr, wrapper) != null) {
+        if (_cacheMap.containsKey(cacheKeyStr) || _cacheMap.putIfAbsent(cacheKeyStr, wrapper) != null) {
             if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) //306998.15
             {
                 logger.logp(Level.FINE, CLASS_NAME, "addToCache", "Already cached cacheKey --> " + cacheKey);

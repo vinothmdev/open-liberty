@@ -1,14 +1,13 @@
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2014,2020 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * WLP Copyright IBM Corp. 2014
- *
- * The source code for this program is not published or otherwise divested 
- * of its trade secrets, irrespective of what has been deposited with the 
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.artifact.zip.internal;
 
 import static org.junit.Assert.assertNotNull;
@@ -28,11 +27,11 @@ import org.junit.Test;
 import org.osgi.framework.BundleContext;
 import org.osgi.service.url.URLStreamHandlerSetter;
 
-import test.common.SharedOutputManager;
-
 import com.ibm.ws.artifact.url.internal.WSJarURLStreamHandler;
 import com.ibm.ws.artifact.zip.cache.ZipCachingService;
 import com.ibm.wsspi.artifact.factory.ArtifactContainerFactory;
+
+import test.common.SharedOutputManager;
 
 /**
  * TODO: this class could be simplified by using the java.nio.file package
@@ -76,12 +75,12 @@ public class ZipFileContainerTest {
 
     /**
      * Capture stdout/stderr output to the manager.
-     * 
+     *
      * @throws Exception
      */
     @BeforeClass
     public static void setUpBeforeClass() throws Exception {
-        // There are variations of this constructor: 
+        // There are variations of this constructor:
         // e.g. to specify a log location or an enabled trace spec. Ctrl-Space for suggestions
         outputMgr = SharedOutputManager.getInstance();
         outputMgr.captureStreams();
@@ -130,7 +129,7 @@ public class ZipFileContainerTest {
 
     /**
      * Final teardown work when class is exiting.
-     * 
+     *
      * @throws Exception
      */
     @AfterClass
@@ -141,7 +140,7 @@ public class ZipFileContainerTest {
 
     /**
      * Individual teardown after each test.
-     * 
+     *
      * @throws Exception
      */
     @After
@@ -156,7 +155,7 @@ public class ZipFileContainerTest {
         try {
             f = File.createTempFile("testSpaceInPathToJar", ".zip"); // used for zfc ctor to avoid NPE
             ZipFileContainer zfc = new ZipFileContainer(null, f, MOCK_CFH);
-            URI uri = zfc.createEntryUri("/META-INF/somefile.txt", SOME_JAR_IN_DIR_WITH_SPACES);
+            URI uri = zfc.createEntryUri("/META-INF/somefile.txt", SOME_JAR_IN_DIR_WITH_SPACES.toURI());
 
             URL wsjarUrl = uri.toURL();
             URLConnection conn = HANDLER.openConnection(wsjarUrl);
@@ -174,7 +173,7 @@ public class ZipFileContainerTest {
         try {
             f = File.createTempFile("testSpaceInJarEntry", ".zip"); // used for zfc ctor to avoid NPE
             ZipFileContainer zfc = new ZipFileContainer(null, f, MOCK_CFH);
-            URI uri = zfc.createEntryUri("/META-INF/some file with spaces.txt", SOME_JAR);
+            URI uri = zfc.createEntryUri("/META-INF/some file with spaces.txt", SOME_JAR.toURI());
 
             URL wsjarUrl = uri.toURL();
             URLConnection conn = HANDLER.openConnection(wsjarUrl);

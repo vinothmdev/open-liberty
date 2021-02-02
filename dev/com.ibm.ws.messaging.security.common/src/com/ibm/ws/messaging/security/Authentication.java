@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012 IBM Corporation and others.
+ * Copyright (c) 2012, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -40,16 +40,24 @@ public class Authentication {
 			MSTraceConstants.MESSAGING_SECURITY_RESOURCE_BUNDLE);
 
 	// Absolute class name along with the package used for tracing
-	private static final String CLASS_NAME = "com.ibm.ws.messaging.security.Authentication";
+	private static final String CLASS_NAME = "com.ibm.ws.messaging.security.Authentication.";
 
-	/* Authentication Service for messaging, exists only if security for
-	   messaging is enabled */
+	/* Authentication Service for messaging, exists only if security for messaging is enabled. */
 	private MessagingAuthenticationService messagingAuthenticationService = null;
 
-	/* RuntimeSecurityService is a singleton instance and used to query if
-	   Messaging Security is enabled or not */
-	private RuntimeSecurityService runtimeSecurityService = RuntimeSecurityService.SINGLETON_INSTANCE;
+	private final RuntimeSecurityService runtimeSecurityService;
 
+	Authentication (RuntimeSecurityService runtimeSecurityService) {
+	    final String methodName = "Authentication";	
+	    if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+                SibTr.entry(tc, methodName, new Object[] { this, runtimeSecurityService });
+	    
+	    this.runtimeSecurityService = runtimeSecurityService;
+	    
+	    if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
+                SibTr.exit(tc, methodName);
+	}
+	
 	/**
 	 * Login method to authenticate a user based on UserName and Password sent
 	 * <ul>

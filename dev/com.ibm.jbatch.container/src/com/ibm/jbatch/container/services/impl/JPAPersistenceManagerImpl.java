@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2015 IBM Corporation and others.
+ * Copyright (c) 2015, 2020 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,6 +13,7 @@ package com.ibm.jbatch.container.services.impl;
 import java.io.Writer;
 import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -57,12 +58,14 @@ import com.ibm.jbatch.container.exception.PersistenceException;
 import com.ibm.jbatch.container.execution.impl.RuntimeStepExecution;
 import com.ibm.jbatch.container.persistence.jpa.JobExecutionEntity;
 import com.ibm.jbatch.container.persistence.jpa.JobExecutionEntityV2;
+import com.ibm.jbatch.container.persistence.jpa.JobExecutionEntityV3;
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntity;
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntityV2;
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntityV3;
 import com.ibm.jbatch.container.persistence.jpa.RemotablePartitionEntity;
 import com.ibm.jbatch.container.persistence.jpa.RemotablePartitionKey;
 import com.ibm.jbatch.container.persistence.jpa.StepThreadExecutionEntity;
+import com.ibm.jbatch.container.persistence.jpa.StepThreadExecutionEntityV2;
 import com.ibm.jbatch.container.persistence.jpa.StepThreadInstanceEntity;
 import com.ibm.jbatch.container.persistence.jpa.StepThreadInstanceKey;
 import com.ibm.jbatch.container.persistence.jpa.TopLevelStepExecutionEntity;
@@ -70,16 +73,21 @@ import com.ibm.jbatch.container.persistence.jpa.TopLevelStepInstanceEntity;
 import com.ibm.jbatch.container.persistence.jpa.TopLevelStepInstanceKey;
 import com.ibm.jbatch.container.services.IJPAQueryHelper;
 import com.ibm.jbatch.container.services.IPersistenceManagerService;
+import com.ibm.jbatch.container.util.WSPartitionStepAggregateImpl;
 import com.ibm.jbatch.container.util.WSStepThreadExecutionAggregateImpl;
 import com.ibm.jbatch.container.validation.IdentifierValidator;
 import com.ibm.jbatch.container.ws.BatchLocationService;
 import com.ibm.jbatch.container.ws.InstanceState;
-import com.ibm.jbatch.container.ws.RemotablePartitionState;
+import com.ibm.jbatch.container.ws.JobInstanceNotQueuedException;
+import com.ibm.jbatch.container.ws.WSPartitionStepAggregate;
 import com.ibm.jbatch.container.ws.WSPartitionStepThreadExecution;
+import com.ibm.jbatch.container.ws.WSRemotablePartitionExecution;
+import com.ibm.jbatch.container.ws.WSRemotablePartitionState;
 //import com.ibm.jbatch.container.ws.WSSearchObject;
 import com.ibm.jbatch.container.ws.WSStepThreadExecutionAggregate;
 import com.ibm.jbatch.container.ws.impl.WSStartupRecoveryServiceImpl;
 import com.ibm.jbatch.spi.services.IBatchConfig;
+import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.LocalTransaction.LocalTransactionCoordinator;
 import com.ibm.ws.LocalTransaction.LocalTransactionCurrent;
 import com.ibm.ws.Transaction.UOWCurrent;
@@ -167,10 +175,16 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     private Integer instanceVersion = null;
 
     /**
+     * Used to cache the result of our remotable partition table check.
+     */
+    private Integer partitionVersion = null;
+
+    /**
      * Most current versions of entities.
      */
-    private static final int MAX_EXECUTION_VERSION = 2;
+    private static final int MAX_EXECUTION_VERSION = 3;
     private static final int MAX_INSTANCE_VERSION = 3;
+    private static final int MAX_PARTITION_VERSION = 2;
 
     /**
      * Declarative Services method for setting the Liberty executor.
@@ -243,10 +257,12 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     /* Interface methods */
 
     @Override
-    public void init(IBatchConfig batchConfig) {}
+    public void init(IBatchConfig batchConfig) {
+    }
 
     @Override
-    public void shutdown() {}
+    public void shutdown() {
+    }
 
     //private static boolean writtenDDL = false;
 
@@ -265,51 +281,45 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     }
 
     /**
-     * Creates a PersistenceServiceUnit using the specified entity versions.
-     */
-    private PersistenceServiceUnit createPsu(int jobInstanceVersion, int jobExecutionVersion) throws Exception {
-        return databaseStore.createPersistenceServiceUnit(getJobInstanceEntityClass(jobInstanceVersion).getClassLoader(),
-                                                          getJobExecutionEntityClass(jobExecutionVersion).getName(),
-                                                          getJobInstanceEntityClass(jobInstanceVersion).getName(),
-                                                          StepThreadExecutionEntity.class.getName(),
-                                                          StepThreadInstanceEntity.class.getName(),
-                                                          TopLevelStepExecutionEntity.class.getName(),
-                                                          TopLevelStepInstanceEntity.class.getName());
-    }
-
-    /**
      * Creates a PersistenceServiceUnit using the most recent entities.
      */
     private PersistenceServiceUnit createLatestPsu() throws Exception {
-        return createPsu(MAX_INSTANCE_VERSION, MAX_EXECUTION_VERSION);
+        return createPsu(MAX_INSTANCE_VERSION, MAX_EXECUTION_VERSION, MAX_PARTITION_VERSION);
     }
 
     /**
-     * @param jobExecutionVersion
-     * @return job execution entity class
+     * Creates a PersistenceServiceUnit using the specified entity versions.
      */
-    @SuppressWarnings("rawtypes")
-    private Class getJobExecutionEntityClass(int jobExecutionVersion) {
-        if (jobExecutionVersion >= 2) {
-            return JobExecutionEntityV2.class;
-        } else {
-            return JobExecutionEntity.class;
+    private PersistenceServiceUnit createPsu(int jobInstanceVersion, int jobExecutionVersion, int partitionVersion) throws Exception {
+        List<String> entityClasses = new ArrayList<String>(Arrays.asList(
+                                                                         StepThreadInstanceEntity.class.getName(),
+                                                                         TopLevelStepExecutionEntity.class.getName(),
+                                                                         TopLevelStepInstanceEntity.class.getName()));
+        if (jobExecutionVersion <= 1) {
+            entityClasses.add(JobExecutionEntity.class.getName());
+        } else if (jobExecutionVersion == 2) {
+            entityClasses.add(JobExecutionEntityV2.class.getName());
+        } else if (jobExecutionVersion >= 3) {
+            entityClasses.add(JobExecutionEntityV3.class.getName());
         }
-    }
 
-    /**
-     * @param jobInstanceVersion
-     * @return job instance entity class
-     */
-    @SuppressWarnings("rawtypes")
-    private Class getJobInstanceEntityClass(int jobInstanceVersion) {
-        if (jobInstanceVersion == 2) {
-            return JobInstanceEntityV2.class;
+        if (jobInstanceVersion <= 1) {
+            JobInstanceEntity.class.getName();
+        } else if (jobInstanceVersion == 2) {
+            entityClasses.add(JobInstanceEntityV2.class.getName());
         } else if (jobInstanceVersion >= 3) {
-            return JobInstanceEntityV3.class;
-        } else {
-            return JobInstanceEntity.class;
+            entityClasses.add(JobInstanceEntityV3.class.getName());
         }
+
+        if (partitionVersion <= 1) {
+            entityClasses.add(StepThreadExecutionEntity.class.getName());
+        } else if (partitionVersion >= 2) {
+            entityClasses.add(StepThreadExecutionEntityV2.class.getName());
+            entityClasses.add(RemotablePartitionEntity.class.getName());
+        }
+
+        return databaseStore.createPersistenceServiceUnit(JobInstanceEntity.class.getClassLoader(),
+                                                          entityClasses.toArray(new String[0]));
     }
 
     /**
@@ -324,28 +334,40 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
 
         // Load the PSU including the most recent entities.
         PersistenceServiceUnit retMe = createLatestPsu();
+        instanceVersion = MAX_INSTANCE_VERSION;
+        executionVersion = MAX_EXECUTION_VERSION;
+        partitionVersion = MAX_PARTITION_VERSION;
 
         // If any tables are not up to the current code level, re-load the PSU with backleveled entities.
-        int instanceVersion = getJobInstanceTableVersion(retMe);
+        setPartitionEntityVersion(retMe);
+        if (partitionVersion < 2) {
+            logger.fine("The REMOTABLEPARTITION table could not be found. The persistence service unit will exclude the remotable partition entity.");
+            retMe.close();
+            retMe = createPsu(instanceVersion, executionVersion, partitionVersion);
+        }
+
+        setJobInstanceEntityVersion(retMe);
         if (instanceVersion < 3) {
             logger.fine("The GROUPNAMES column could not be found. The persistence service unit will exclude the V3 instance entity.");
             retMe.close();
-            retMe = createPsu(instanceVersion, MAX_EXECUTION_VERSION);
+            retMe = createPsu(instanceVersion, executionVersion, partitionVersion);
         }
 
-        int executionVersion = getJobExecutionTableVersion(retMe);
+        setJobExecutionEntityVersion(retMe);
         if (executionVersion < 2) {
             logger.fine("The JOBPARAMETERS table could not be found. The persistence service unit will exclude the V2 execution entity.");
             retMe.close();
-            retMe = createPsu(instanceVersion, executionVersion);
+            retMe = createPsu(instanceVersion, executionVersion, partitionVersion);
         }
-
-        //222050 - Backout 205106 RemotablePartitionEntity.class.getName());
 
         // Perform recovery immediately, before returning from this method, so that
         // other callers won't be able to access the PSU (via getPsu()) until recovery is complete.
-        new WSStartupRecoveryServiceImpl().setIPersistenceManagerService(JPAPersistenceManagerImpl.this).setPersistenceServiceUnit(retMe).recoverLocalJobsInInflightStates();
-        //222050 - Backout 205106 .recoverLocalPartitionsInInflightStates();
+        WSStartupRecoveryServiceImpl startupRecovery = new WSStartupRecoveryServiceImpl().setIPersistenceManagerService(JPAPersistenceManagerImpl.this).setPersistenceServiceUnit(retMe).recoverLocalJobsInInflightStates();
+
+        // Only do this if the RemotablePartition table exists
+        if (partitionVersion >= 2) {
+            startupRecovery.recoverLocalPartitionsInInflightStates();
+        }
 
         // Make sure we assign psu before leaving the synchronized block.
         psu = retMe;
@@ -792,7 +814,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     }
 
     @Override
-    public JobInstanceEntity updateJobInstanceStateOnConsumed(final long jobInstanceId) {
+    public JobInstanceEntity updateJobInstanceStateOnConsumed(final long jobInstanceId) throws BatchIllegalJobStatusTransitionException, JobInstanceNotQueuedException {
         EntityManager em = getPsu().createEntityManager();
         String BASE_UPDATE = "UPDATE JobInstanceEntity x SET x.instanceState = com.ibm.jbatch.container.ws.InstanceState.JMS_CONSUMED";
         if (instanceVersion >= 2) {
@@ -810,16 +832,10 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
         try {
             return new TranRequest<JobInstanceEntity>(em) {
                 @Override
-                public JobInstanceEntity call() {
+                public JobInstanceEntity call() throws JobInstanceNotQueuedException {
                     JobInstanceEntity instance = entityMgr.find(JobInstanceEntity.class, jobInstanceId);/* , LockModeType.PESSIMISTIC_WRITE); */
                     if (instance == null) {
                         throw new NoSuchJobInstanceException("No job instance found for id = " + jobInstanceId);
-                    }
-
-                    try {
-                        verifyStateTransitionIsValid(instance, InstanceState.JMS_CONSUMED);
-                    } catch (BatchIllegalJobStatusTransitionException e) {
-                        throw new PersistenceException(e);
                     }
 
                     Query jpaQuery = entityMgr.createQuery(FINAL_UPDATE);
@@ -834,6 +850,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                         entityMgr.refresh(instance);
                     } else {
                         logger.finer("No match on updateJobInstanceStateOnConsumed query for instance =  " + jobInstanceId);
+                        throw new JobInstanceNotQueuedException();
                     }
                     return instance;
                 }
@@ -1173,7 +1190,9 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     public JobExecutionEntity createJobExecution(final long jobInstanceId, Properties jobParameters, Date createTime) {
         final JobExecutionEntity jobExecution;
 
-        if (executionVersion >= 2) {
+        if (executionVersion >= 3) {
+            jobExecution = new JobExecutionEntityV3();
+        } else if (executionVersion == 2) {
             jobExecution = new JobExecutionEntityV2();
         } else {
             jobExecution = new JobExecutionEntity();
@@ -1274,15 +1293,14 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
         }
     }
 
-    @Override
-    public List<Long> getJobExecutionsRunning(final String jobName) {
+    protected List<Long> getJobInstancesRunning(final String jobName) {
         final EntityManager em = getPsu().createEntityManager();
         try {
             List<Long> exec = new TranRequest<List<Long>>(em) {
 
                 @Override
                 public List<Long> call() throws Exception {
-                    TypedQuery<Long> query = em.createNamedQuery(JobExecutionEntity.GET_JOB_EXECUTIONIDS_BY_NAME_AND_STATUSES_QUERY,
+                    TypedQuery<Long> query = em.createNamedQuery(JobInstanceEntity.GET_JOBINSTANCEIDS_BY_NAME_AND_STATUSES_QUERY,
                                                                  Long.class);
                     query.setParameter("name", jobName);
                     query.setParameter("status", RUNNING_STATUSES);
@@ -1290,6 +1308,43 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     if (result == null) {
                         return new ArrayList<Long>();
                     }
+                    return result;
+                }
+            }.runInNewOrExistingGlobalTran();
+
+            return exec;
+
+        } finally {
+            em.close();
+        }
+    }
+
+    @Override
+    public List<Long> getJobExecutionsRunning(final String jobName) {
+
+        final List<Long> runningInstances = getJobInstancesRunning(jobName);
+
+        final EntityManager em = getPsu().createEntityManager();
+        try {
+            List<Long> exec = new TranRequest<List<Long>>(em) {
+
+                @Override
+                public List<Long> call() throws Exception {
+
+                    List<Long> result = null;
+
+                    if (runningInstances.size() > 0) {
+                        TypedQuery<Long> query = em.createNamedQuery(JobExecutionEntity.GET_JOB_EXECUTIONIDS_BY_JOB_INST_ID,
+                                                                     Long.class);
+                        query.setParameter("instanceList", runningInstances);
+
+                        result = query.getResultList();
+                    }
+
+                    if (result == null) {
+                        return new ArrayList<Long>();
+                    }
+
                     return result;
                 }
             }.runInNewOrExistingGlobalTran();
@@ -1333,6 +1388,37 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
         }
     }
 
+    /** {@inheritDoc} */
+    @Override
+    public List<Integer> getRemotablePartitionsRecoveredForStepExecution(final long topLevelStepExecutionId) {
+        final EntityManager em = psu.createEntityManager();
+
+        // Just ignore if we don't have the remotable partition table
+        if (partitionVersion < 2) {
+            return new ArrayList<Integer>();
+        }
+
+        try {
+            List<Integer> exec = new TranRequest<List<Integer>>(em) {
+                @Override
+                public List<Integer> call() throws Exception {
+                    TypedQuery<Integer> query = em.createNamedQuery(RemotablePartitionEntity.GET_RECOVERED_REMOTABLE_PARTITIONS,
+                                                                    Integer.class);
+                    query.setParameter("topLevelStepExecutionId", topLevelStepExecutionId);
+                    List<Integer> result = query.getResultList();
+                    if (result == null) {
+                        return new ArrayList<Integer>();
+                    }
+                    return result;
+                }
+            }.runInNewOrExistingGlobalTran();
+
+            return exec;
+        } finally {
+            em.close();
+        }
+    }
+
     /**
      * This method is called during recovery processing.
      *
@@ -1340,7 +1426,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      *
      * @return List<RemotablePartitionEntity> of partitions with a "running" status and this server's serverId
      */
-    public List<RemotablePartitionEntity> getPartitionsRunningLocalToServer(PersistenceServiceUnit psu) {
+    public List<RemotablePartitionEntity> getRemotablePartitionsRunningLocalToServer(PersistenceServiceUnit psu) {
 
         final EntityManager em = psu.createEntityManager();
 
@@ -1499,8 +1585,8 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // extra considerations, which we'll have to come back to later (and we can since it
                     // shouldn't affect the table structure).
                     stepInstance.setLatestStepThreadExecution(stepExecution);
-//					jobInstance.getStepThreadInstances().add(stepInstance);
-//					jobExecution.getStepThreadExecutions().add(stepExecution);
+//                                      jobInstance.getStepThreadInstances().add(stepInstance);
+//                                      jobExecution.getStepThreadExecutions().add(stepExecution);
 
                     // 4. Persist
                     entityMgr.persist(stepExecution);
@@ -1519,35 +1605,13 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
     }
 
     @Override
-    public RemotablePartitionEntity updateRemotablePartitionInternalState(final long jobExecId, final String stepName, final int partitionNum,
-                                                                          final RemotablePartitionState internalStatus) {
-        EntityManager em = getPsu().createEntityManager();
-        try {
-            return new TranRequest<RemotablePartitionEntity>(em) {
-                @Override
-                public RemotablePartitionEntity call() {
+    public RemotablePartitionEntity createRemotablePartition(final RemotablePartitionKey remotablePartitionKey) {
 
-                    RemotablePartitionKey partitionKey = new RemotablePartitionKey(jobExecId, stepName, partitionNum);
-                    RemotablePartitionEntity partition = entityMgr.find(RemotablePartitionEntity.class, partitionKey);
-
-                    //For backward compatibility, this can be null
-                    if (partition != null) {
-                        //It can be null because if the partition dispatcher is older version, there won't be any remotable partition
-                        partition.setRestUrl(batchLocationService.getBatchRestUrl());
-                        partition.setServerId(batchLocationService.getServerId());
-                        partition.setInternalStatus(internalStatus);
-                        partition.setLastUpdated(new Date());
-                    }
-                    return partition;
-                }
-            }.runInNewOrExistingGlobalTran();
-        } finally {
-            em.close();
+        // Simply ignore if we don't have the remotable partition table
+        if (partitionVersion < 2) {
+            return null;
         }
-    }
 
-    @Override
-    public RemotablePartitionEntity createRemotablePartition(final long jobExecId, final String stepName, final int partitionNum, final RemotablePartitionState partitionState) {
         //TODO - should we move this inside the tran?
         EntityManager em = getPsu().createEntityManager();
 
@@ -1556,14 +1620,14 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                 @Override
                 public RemotablePartitionEntity call() {
 
-                    final JobExecutionEntity jobExecution = entityMgr.find(JobExecutionEntity.class, jobExecId);
+                    final JobExecutionEntity jobExecution = entityMgr.find(JobExecutionEntity.class, remotablePartitionKey.getJobExec());
                     if (jobExecution == null) {
-                        throw new IllegalStateException("Didn't find JobExecutionEntity associated with value: " + jobExecId);
+                        throw new IllegalArgumentException("Didn't find JobExecutionEntity associated with value: " + remotablePartitionKey.getJobExec());
                     }
 
                     // 2. Construct and initialize new entity instances
-                    final RemotablePartitionEntity remotablePartition = new RemotablePartitionEntity(jobExecution, stepName, partitionNum);
-                    remotablePartition.setInternalStatus(partitionState);
+                    final RemotablePartitionEntity remotablePartition = new RemotablePartitionEntity(jobExecution, remotablePartitionKey);
+                    remotablePartition.setInternalStatus(WSRemotablePartitionState.QUEUED);
                     remotablePartition.setLastUpdated(new Date());
                     entityMgr.persist(remotablePartition);
                     return remotablePartition;
@@ -1607,7 +1671,13 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // 2. Construct and initalize new entity instances
                     //   Note some important initialization (e.g. batch status = STARTING and startcount = 1), is done in the constructors
                     final StepThreadInstanceEntity stepInstance = new StepThreadInstanceEntity(jobInstance, instanceKey.getStepName(), instanceKey.getPartitionNumber());
-                    final StepThreadExecutionEntity stepExecution = new StepThreadExecutionEntity(jobExecution, instanceKey.getStepName(), instanceKey.getPartitionNumber());
+
+                    final StepThreadExecutionEntity stepExecution;
+                    if (partitionVersion >= 2) {
+                        stepExecution = new StepThreadExecutionEntityV2(jobExecution, instanceKey.getStepName(), instanceKey.getPartitionNumber());
+                    } else {
+                        stepExecution = new StepThreadExecutionEntity(jobExecution, instanceKey.getStepName(), instanceKey.getPartitionNumber());
+                    }
 
                     // 3. Update the relationships that didn't get updated in constructors
 
@@ -1616,33 +1686,34 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // shouldn't affect the table structure).
                     stepInstance.setLatestStepThreadExecution(stepExecution);
 
-//					jobInstance.getStepThreadInstances().add(stepInstance);
-//					jobExecution.getStepThreadExecutions().add(stepExecution);
+//                                      jobInstance.getStepThreadInstances().add(stepInstance);
+//                                      jobExecution.getStepThreadExecutions().add(stepExecution);
                     stepExecution.setTopLevelStepExecution(topLevelStepExecution);
                     //topLevelStepExecution.getTopLevelAndPartitionStepExecutions().add(stepExecution);
-                    /*
-                     * 222050 - Backout 205106
-                     * RemotablePartitionEntity remotablePartition = null;
-                     * if (isRemoteDispatch) {
-                     * RemotablePartitionKey remotablePartitionKey = new RemotablePartitionKey(jobExecution.getExecutionId(), instanceKey.getStepName(),
-                     * instanceKey.getPartitionNumber());
-                     * remotablePartition = entityMgr.find(RemotablePartitionEntity.class, remotablePartitionKey);
-                     *
-                     * //It can be null because if the partition dispatcher is older version, there won't be any remotable partition
-                     * if (remotablePartition != null) {
-                     * remotablePartition.setStepExecution(stepExecution);
-                     * }
-                     * }
-                     */
+
+                    RemotablePartitionEntity remotablePartition = null;
+                    if (isRemoteDispatch && partitionVersion >= 2) {
+                        RemotablePartitionKey remotablePartitionKey = new RemotablePartitionKey(jobExecution.getExecutionId(), instanceKey.getStepName(), instanceKey.getPartitionNumber());
+                        remotablePartition = entityMgr.find(RemotablePartitionEntity.class, remotablePartitionKey);
+
+                        //It can be null because if the partition dispatcher is older version, there won't be any remotable partition
+                        if (remotablePartition != null) {
+                            remotablePartition.setStepExecution(stepExecution);
+                            remotablePartition.setRestUrl(batchLocationService.getBatchRestUrl());
+                            remotablePartition.setServerId(batchLocationService.getServerId());
+                            remotablePartition.setInternalStatus(WSRemotablePartitionState.CONSUMED);
+                            remotablePartition.setLastUpdated(new Date());
+                        }
+                    }
+
                     // 4. Persist
                     entityMgr.persist(stepInstance);
                     entityMgr.persist(stepExecution);
-                    /*
-                     * 222050 - Backout 205106
-                     * if (isRemoteDispatch && remotablePartition != null) {
-                     * entityMgr.persist(remotablePartition);
-                     * }
-                     */
+
+                    if (isRemoteDispatch && remotablePartition != null) {
+                        entityMgr.persist(remotablePartition);
+                    }
+
                     return stepExecution;
                 }
             }.runInNewOrExistingGlobalTran();
@@ -1693,7 +1764,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // extra considerations, which we'll have to come back to later (and we can since it
                     // shouldn't affect the table structure).
                     stepInstance.setLatestStepThreadExecution(newStepExecution);
-//					newJobExecution.getStepThreadExecutions().add(newStepExecution);
+//                                      newJobExecution.getStepThreadExecutions().add(newStepExecution);
 
                     // 4. Persist (The order seems to matter unless I did something else wrong)
                     entityMgr.persist(newStepExecution);
@@ -1744,7 +1815,12 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     final TopLevelStepExecutionEntity topLevelStepExecution = query.getSingleResult();
 
                     // 2. Construct and initalize new entity instances
-                    StepThreadExecutionEntity newStepExecution = new StepThreadExecutionEntity(newJobExecution, stepThreadInstance.getStepName(), stepThreadInstance.getPartitionNumber());
+                    StepThreadExecutionEntity newStepExecution;
+                    if (partitionVersion >= 2) {
+                        newStepExecution = new StepThreadExecutionEntityV2(newJobExecution, stepThreadInstance.getStepName(), stepThreadInstance.getPartitionNumber());
+                    } else {
+                        newStepExecution = new StepThreadExecutionEntity(newJobExecution, stepThreadInstance.getStepName(), stepThreadInstance.getPartitionNumber());
+                    }
                     newStepExecution.setPersistentUserDataBytes(lastStepExecution.getPersistentUserDataBytes());
 
                     // 3. Update the relationships that didn't get updated in constructors
@@ -1753,31 +1829,31 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // extra considerations, which we'll have to come back to later (and we can since it
                     // shouldn't affect the table structure).
                     stepThreadInstance.setLatestStepThreadExecution(newStepExecution);
-//					newJobExecution.getStepThreadExecutions().add(newStepExecution);
+//                                      newJobExecution.getStepThreadExecutions().add(newStepExecution);
                     //topLevelStepExecution.getTopLevelAndPartitionStepExecutions().add(newStepExecution);
                     newStepExecution.setTopLevelStepExecution(topLevelStepExecution);
-                    /*
-                     * 222050 - Backout 205106
-                     * RemotablePartitionEntity remotablePartition = null;
-                     * if (isRemoteDispatch) {
-                     * RemotablePartitionKey remotablePartitionKey = new RemotablePartitionKey(newJobExecution.getExecutionId(), stepThreadInstance.getStepName(),
-                     * stepThreadInstance.getPartitionNumber());
-                     * remotablePartition = entityMgr.find(RemotablePartitionEntity.class, remotablePartitionKey);
-                     *
-                     * //It can be null because if the partition dispatcher is older version, there won't be any remotable partition
-                     * if (remotablePartition != null) {
-                     * remotablePartition.setStepExecution(newStepExecution);
-                     * }
-                     * }
-                     */
+
+                    RemotablePartitionEntity remotablePartition = null;
+                    if (isRemoteDispatch) {
+                        RemotablePartitionKey remotablePartitionKey = new RemotablePartitionKey(newJobExecution.getExecutionId(), stepThreadInstance.getStepName(), stepThreadInstance.getPartitionNumber());
+                        remotablePartition = entityMgr.find(RemotablePartitionEntity.class, remotablePartitionKey);
+
+                        //It can be null because if the partition dispatcher is older version, there won't be any remotable partition
+                        if (remotablePartition != null) {
+                            remotablePartition.setStepExecution(newStepExecution);
+                            remotablePartition.setRestUrl(batchLocationService.getBatchRestUrl());
+                            remotablePartition.setServerId(batchLocationService.getServerId());
+                            remotablePartition.setInternalStatus(WSRemotablePartitionState.CONSUMED);
+                            remotablePartition.setLastUpdated(new Date());
+                        }
+                    }
+
                     entityMgr.persist(newStepExecution);
                     entityMgr.merge(stepThreadInstance);
-                    /*
-                     * 222050 - Backout 205106
-                     * if (isRemoteDispatch && remotablePartition != null) {
-                     * entityMgr.persist(remotablePartition);
-                     * }
-                     */
+
+                    if (isRemoteDispatch && remotablePartition != null) {
+                        entityMgr.persist(remotablePartition);
+                    }
 
                     return newStepExecution;
                 }
@@ -1828,7 +1904,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     // extra considerations, which we'll have to come back to later (and we can since it
                     // shouldn't affect the table structure).
                     stepInstance.setLatestStepThreadExecution(newStepExecution);
-//					newJobExecution.getStepThreadExecutions().add(newStepExecution);
+//                                      newJobExecution.getStepThreadExecutions().add(newStepExecution);
 
                     // 4. Persist (The order seems to matter unless I did something else wrong)
                     entityMgr.persist(newStepExecution);
@@ -2016,48 +2092,77 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
             WSStepThreadExecutionAggregateImpl exec = new TranRequest<WSStepThreadExecutionAggregateImpl>(em) {
                 @Override
                 public WSStepThreadExecutionAggregateImpl call() throws Exception {
-                    // 222050 - Backout 205106
-                    // Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_TOP_LEVEL_STEP_EXECUTION_BY_JOB_INSTANCE_JOB_EXEC_NUM_AND_STEP_NAME);
-                    TypedQuery<StepThreadExecutionEntity> query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_TOP_LEVEL_STEP_EXECUTION_BY_JOB_INSTANCE_JOB_EXEC_NUM_AND_STEP_NAME,
-                                                                                      StepThreadExecutionEntity.class);
 
-                    query.setParameter("jobInstanceId", jobInstanceId);
-                    query.setParameter("jobExecNum", jobExecNum);
-                    query.setParameter("stepName", stepName);
-                    // 222050 - Backout 205106
-                    // List<Object[]> stepExecs = query.getResultList();
-                    List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+                    if (partitionVersion >= 2) {
+                        // Remotable partition table exists, so include those in the aggregate
+                        Query query = em.createQuery("SELECT s,r FROM StepThreadExecutionEntity s LEFT JOIN RemotablePartitionEntity r ON r.stepExecutionEntity = s "
+                                                     + "WHERE (s.jobExec.jobInstance.instanceId = :jobInstanceId AND s.jobExec.executionNumberForThisInstance = :jobExecNum AND s.stepName = :stepName) ORDER BY s.partitionNumber ASC ");
+                        query.setParameter("jobInstanceId", jobInstanceId);
+                        query.setParameter("jobExecNum", jobExecNum);
+                        query.setParameter("stepName", stepName);
+                        List<Object[]> stepExecs = query.getResultList();
 
-                    if (stepExecs == null || stepExecs.size() == 0) {
-                        // Trigger NoSuchJobInstanceException
-                        getJobInstance(jobInstanceId);
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            // Trigger NoSuchJobInstanceException
+                            getJobInstance(jobInstanceId);
 
-                        throw new IllegalArgumentException("Didn't find any step thread exec entries at job instance id: " + jobInstanceId + ", job execution number: " + jobExecNum
-                                                           + ", and stepName: " + stepName);
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at job instance id: " + jobInstanceId + ", job execution number: "
+                                                               + jobExecNum
+                                                               + ", and stepName: " + stepName);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job instance id: " + jobInstanceId + ", job execution number: "
+                                                               + jobExecNum
+                                                               + ", and stepName: " + stepName);
+                        }
+
+                        // Go through the list and store the entities properly
+                        List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>(stepExecs.size());
+                        List<WSPartitionStepThreadExecution> partitionLevelStepExecutions = new ArrayList<WSPartitionStepThreadExecution>(stepExecs.size());
+                        for (int i = 1; i < stepExecs.size(); i++) {
+                            WSPartitionStepAggregateImpl partitionStepAggregate = new WSPartitionStepAggregateImpl(stepExecs.get(i));
+                            partitionSteps.add(partitionStepAggregate);
+                            partitionLevelStepExecutions.add(partitionStepAggregate.getPartitionStepThread());
+                        }
+
+                        retVal.setPartitionAggregate(partitionSteps);
+                        retVal.setPartitionLevelStepExecutions(partitionLevelStepExecutions);
+                    } else {
+                        // No remotable partition table, so just get the step thread execs
+                        Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_TOP_LEVEL_STEP_EXECUTION_BY_JOB_INSTANCE_JOB_EXEC_NUM_AND_STEP_NAME);
+
+                        query.setParameter("jobInstanceId", jobInstanceId);
+                        query.setParameter("jobExecNum", jobExecNum);
+                        query.setParameter("stepName", stepName);
+                        List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            // Trigger NoSuchJobInstanceException
+                            getJobInstance(jobInstanceId);
+
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at job instance id: " + jobInstanceId + ", job execution number: "
+                                                               + jobExecNum
+                                                               + ", and stepName: " + stepName);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job instance id: " + jobInstanceId + ", job execution number: "
+                                                               + jobExecNum
+                                                               + ", and stepName: " + stepName);
+                        }
+
+                        retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     }
 
-                    // Verify the first is the top-level.
-                    try {
-                        // 220050 - Backout 205106 TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
-                        TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
-                        retVal.setTopLevelStepExecution(topLevelStepExecution);
-                    } catch (ClassCastException e) {
-                        throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job instance id: " + jobInstanceId + ", job execution number: "
-                                                           + jobExecNum
-                                                           + ", and stepName: " + stepName);
-                    }
-
-                    // Go through the list and store the entities properly
-                    /*
-                     * 222050 - Backout 205106
-                     * List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>();
-                     * for (int i = 1; i < stepExecs.size(); i++) {
-                     * partitionSteps.add(new WSPartitionStepAggregateImpl(stepExecs.get(i)));
-                     * }
-                     *
-                     * retVal.setPartitionAggregate(partitionSteps);
-                     */
-                    retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     return retVal;
                 }
             }.runInNewOrExistingGlobalTran();
@@ -2106,10 +2211,13 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      * This method is called during recovery
      *
      * Set the lastUpdated for the given RemotablePartitionEntity
+     *
+     * There should be no need for locking since this happens as the PSU is initialized on component activation
+     * (which is already locked within the JVM), and since the target partition is already known to be
+     * associated with this very server, (from the query we performed to get the list of partitions to recover).
      */
     public RemotablePartitionEntity updateRemotablePartitionOnRecovery(PersistenceServiceUnit psu,
                                                                        final RemotablePartitionEntity partition) {
-        // TODO Auto-generated method stub
         EntityManager em = psu.createEntityManager();
         try {
             return new TranRequest<RemotablePartitionEntity>(em) {
@@ -2117,6 +2225,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                 public RemotablePartitionEntity call() {
                     RemotablePartitionKey key = new RemotablePartitionKey(partition);
                     RemotablePartitionEntity remotablePartition = entityMgr.find(RemotablePartitionEntity.class, key);
+                    remotablePartition.setInternalStatus(WSRemotablePartitionState.RECOVERED);
                     remotablePartition.setLastUpdated(new Date());
                     return remotablePartition;
                 }
@@ -2203,42 +2312,63 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
             WSStepThreadExecutionAggregate exec = new TranRequest<WSStepThreadExecutionAggregate>(em) {
                 @Override
                 public WSStepThreadExecutionAggregate call() throws Exception {
-                    // 222050 - Backout 205106
-                    // Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_BY_JOB_EXEC_AND_STEP_NAME_SORT_BY_PART_NUM_ASC);
-                    TypedQuery<StepThreadExecutionEntity> query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_BY_JOB_EXEC_AND_STEP_NAME_SORT_BY_PART_NUM_ASC,
-                                                                                      StepThreadExecutionEntity.class);
 
-                    query.setParameter("jobExecId", jobExecutionId);
-                    query.setParameter("stepName", stepName);
-                    // 222050 - Backout 205106
-                    // List<Object[]> stepExecs = query.getResultList();
-                    List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+                    if (partitionVersion >= 2) {
+                        // Remotable partition table exists, so include those in the aggregate
+                        Query query = em.createQuery("SELECT s,r FROM StepThreadExecutionEntity s LEFT JOIN RemotablePartitionEntity r ON r.stepExecutionEntity = s "
+                                                     + "WHERE s.jobExec.jobExecId = :jobExecId AND s.stepName = :stepName  ORDER BY s.partitionNumber ASC");
+                        query.setParameter("jobExecId", jobExecutionId);
+                        query.setParameter("stepName", stepName);
+                        List<Object[]> stepExecs = query.getResultList();
 
-                    if (stepExecs == null || stepExecs.size() == 0) {
-                        throw new IllegalArgumentException("Didn't find any step thread exec entries at job execution id: " + jobExecutionId + ", and stepName: " + stepName);
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at job execution id: " + jobExecutionId + ", and stepName: " + stepName);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job execution id: " + jobExecutionId + ", and stepName: "
+                                                               + stepName);
+                        }
+
+                        // Go through the list and store the entities properly
+                        List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>();
+                        List<WSPartitionStepThreadExecution> partitionLevelStepExecutions = new ArrayList<WSPartitionStepThreadExecution>();
+                        for (int i = 1; i < stepExecs.size(); i++) {
+                            WSPartitionStepAggregateImpl partitionStepAggregate = new WSPartitionStepAggregateImpl(stepExecs.get(i));
+                            partitionSteps.add(partitionStepAggregate);
+                            partitionLevelStepExecutions.add(partitionStepAggregate.getPartitionStepThread());
+                        }
+
+                        retVal.setPartitionAggregate(partitionSteps);
+                        retVal.setPartitionLevelStepExecutions(partitionLevelStepExecutions);
+                    } else {
+                        // No remotable partition table, so just get the step thread execs
+                        Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_BY_JOB_EXEC_AND_STEP_NAME_SORT_BY_PART_NUM_ASC);
+
+                        query.setParameter("jobExecId", jobExecutionId);
+                        query.setParameter("stepName", stepName);
+                        List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at job execution id: " + jobExecutionId + ", and stepName: " + stepName);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job execution id: " + jobExecutionId + ", and stepName: "
+                                                               + stepName);
+                        }
+
+                        retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     }
 
-                    // Verify the first is the top-level.
-                    try {
-                        // 222050 - Backout 205106
-                        // TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
-                        TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
-                        retVal.setTopLevelStepExecution(topLevelStepExecution);
-                    } catch (ClassCastException e) {
-                        throw new IllegalArgumentException("Didn't find top-level step thread exec entry at job execution id: " + jobExecutionId + ", and stepName: " + stepName);
-                    }
-
-                    // Go through the list and store the entities properly
-                    /*
-                     * 222050 - Backout 205106
-                     * List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>();
-                     * for (int i = 1; i < stepExecs.size(); i++) {
-                     * partitionSteps.add(new WSPartitionStepAggregateImpl(stepExecs.get(i)));
-                     * }
-                     *
-                     * retVal.setPartitionAggregate(partitionSteps);
-                     */
-                    retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     return retVal;
                 }
             }.runInNewOrExistingGlobalTran();
@@ -2261,41 +2391,59 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
             WSStepThreadExecutionAggregate exec = new TranRequest<WSStepThreadExecutionAggregate>(em) {
                 @Override
                 public WSStepThreadExecutionAggregate call() throws Exception {
-                    // 222050 - Backout 205106
-                    // Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_SORT_BY_PART_NUM_ASC);
-                    TypedQuery<StepThreadExecutionEntity> query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_SORT_BY_PART_NUM_ASC,
-                                                                                      StepThreadExecutionEntity.class);
 
-                    query.setParameter("topLevelStepExecutionId", topLevelStepExecutionId);
-                    // 222050 - Backout 205106
-                    // List<Object[]> stepExecs = query.getResultList();
-                    List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+                    if (partitionVersion >= 2) {
+                        // Remotable partition table exists, so include those in the aggregate
+                        Query query = em.createQuery("SELECT s,r FROM StepThreadExecutionEntity s LEFT JOIN RemotablePartitionEntity r ON r.stepExecutionEntity = s "
+                                                     + "WHERE s.topLevelStepExecution.stepExecutionId = :topLevelStepExecutionId ORDER BY s.partitionNumber ASC");
+                        query.setParameter("topLevelStepExecutionId", topLevelStepExecutionId);
+                        List<Object[]> stepExecs = query.getResultList();
 
-                    if (stepExecs == null || stepExecs.size() == 0) {
-                        throw new IllegalArgumentException("Didn't find any step thread exec entries at id: " + topLevelStepExecutionId);
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at id: " + topLevelStepExecutionId);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at id: " + topLevelStepExecutionId, e);
+                        }
+
+                        // Go through the list and store the entities properly
+                        List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>(stepExecs.size());
+                        List<WSPartitionStepThreadExecution> partitionLevelStepExecutions = new ArrayList<WSPartitionStepThreadExecution>(stepExecs.size());
+                        for (int i = 1; i < stepExecs.size(); i++) {
+                            WSPartitionStepAggregateImpl partitionStepAggregate = new WSPartitionStepAggregateImpl(stepExecs.get(i));
+                            partitionSteps.add(partitionStepAggregate);
+                            partitionLevelStepExecutions.add(partitionStepAggregate.getPartitionStepThread());
+                        }
+
+                        retVal.setPartitionAggregate(partitionSteps);
+                        retVal.setPartitionLevelStepExecutions(partitionLevelStepExecutions);
+
+                    } else {
+                        // No remotable partition table, so just get the step thread execs
+                        Query query = em.createNamedQuery(TopLevelStepExecutionEntity.GET_ALL_RELATED_STEP_THREAD_EXECUTIONS_SORT_BY_PART_NUM_ASC);
+                        query.setParameter("topLevelStepExecutionId", topLevelStepExecutionId);
+                        List<StepThreadExecutionEntity> stepExecs = query.getResultList();
+
+                        if (stepExecs == null || stepExecs.size() == 0) {
+                            throw new IllegalArgumentException("Didn't find any step thread exec entries at id: " + topLevelStepExecutionId);
+                        }
+
+                        // Verify the first is the top-level.
+                        try {
+                            TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
+                            retVal.setTopLevelStepExecution(topLevelStepExecution);
+                        } catch (ClassCastException e) {
+                            throw new IllegalArgumentException("Didn't find top-level step thread exec entry at id: " + topLevelStepExecutionId, e);
+                        }
+
+                        retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     }
 
-                    // Verify the first is the top-level.
-                    try {
-                        // 222050 - Backout 205106
-                        // TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0)[0];
-                        TopLevelStepExecutionEntity topLevelStepExecution = (TopLevelStepExecutionEntity) stepExecs.get(0);
-                        retVal.setTopLevelStepExecution(topLevelStepExecution);
-                    } catch (ClassCastException e) {
-                        throw new IllegalArgumentException("Didn't find top-level step thread exec entry at id: " + topLevelStepExecutionId, e);
-                    }
-
-                    // Go through the list and store the entities properly
-                    /*
-                     * 222050 - Backout 205106
-                     * List<WSPartitionStepAggregate> partitionSteps = new ArrayList<WSPartitionStepAggregate>();
-                     * for (int i = 1; i < stepExecs.size(); i++) {
-                     * partitionSteps.add(new WSPartitionStepAggregateImpl(stepExecs.get(i)));
-                     * }
-                     *
-                     * retVal.setPartitionAggregate(partitionSteps);
-                     */
-                    retVal.setPartitionLevelStepExecutions(new ArrayList<WSPartitionStepThreadExecution>(stepExecs.subList(1, stepExecs.size())));
                     return retVal;
                 }
             }.runInNewOrExistingGlobalTran();
@@ -2353,160 +2501,168 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      *
      * @see com.ibm.jbatch.container.services.IPersistenceManagerService#createSplitFlowExecution(com.ibm.jbatch.container.persistence.jpa.RemotableSplitFlowKey)
      */
-//	@Override
-//	public RemotableSplitFlowEntity createSplitFlowExecution(final RemotableSplitFlowKey splitFlowKey, final Date createTime) {
+//      @Override
+//      public RemotableSplitFlowEntity createSplitFlowExecution(final RemotableSplitFlowKey splitFlowKey, final Date createTime) {
 //
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotableSplitFlowEntity>(em){
-//				public RemotableSplitFlowEntity call() {
-//					final RemotableSplitFlowEntity splitFlow = new RemotableSplitFlowEntity();
-//					splitFlow.setInternalStatus(BatchStatus.STARTING.ordinal());
-//					splitFlow.setFlowName(splitFlowKey.getFlowName());
-//					splitFlow.setCreateTime(createTime);
-//					splitFlow.setServerId(batchLocationService.getServerId());
-//					splitFlow.setRestUrl(batchLocationService.getBatchRestUrl());
-//					JobExecutionEntity jobExec = entityMgr.find(JobExecutionEntity.class, splitFlowKey.getJobExec());
-//					if (jobExec == null) {
-//						throw new IllegalStateException("Didn't find JobExecutionEntity associated with value: " + splitFlowKey.getJobExec());
-//					}
-//					splitFlow.setJobExecution(jobExec);
-//					jobExec.getSplitFlowExecutions().add(splitFlow);
-//					entityMgr.persist(splitFlow);
-//					return splitFlow;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
-//	}
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      return new TranRequest<RemotableSplitFlowEntity>(em){
+//                              public RemotableSplitFlowEntity call() {
+//                                      final RemotableSplitFlowEntity splitFlow = new RemotableSplitFlowEntity();
+//                                      splitFlow.setInternalStatus(BatchStatus.STARTING.ordinal());
+//                                      splitFlow.setFlowName(splitFlowKey.getFlowName());
+//                                      splitFlow.setCreateTime(createTime);
+//                                      splitFlow.setServerId(batchLocationService.getServerId());
+//                                      splitFlow.setRestUrl(batchLocationService.getBatchRestUrl());
+//                                      JobExecutionEntity jobExec = entityMgr.find(JobExecutionEntity.class, splitFlowKey.getJobExec());
+//                                      if (jobExec == null) {
+//                                              throw new IllegalStateException("Didn't find JobExecutionEntity associated with value: " + splitFlowKey.getJobExec());
+//                                      }
+//                                      splitFlow.setJobExecution(jobExec);
+//                                      jobExec.getSplitFlowExecutions().add(splitFlow);
+//                                      entityMgr.persist(splitFlow);
+//                                      return splitFlow;
+//                              }
+//                      }.runInNewOrExistingGlobalTran();
+//              } finally {
+//                      em.close();
+//              }
+//      }
 //
-//	@Override
-//	public RemotableSplitFlowEntity updateSplitFlowExecution(final RuntimeSplitFlowExecution runtimeSplitFlowExecution, final BatchStatus newBatchStatus, final Date date)
-//		throws IllegalArgumentException {
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotableSplitFlowEntity>(em){
-//				public RemotableSplitFlowEntity call() {
-//					RemotableSplitFlowKey splitFlowKey = new RemotableSplitFlowKey(runtimeSplitFlowExecution.getTopLevelExecutionId(), runtimeSplitFlowExecution.getFlowName());
-//					RemotableSplitFlowEntity splitFlowEntity = entityMgr.find(RemotableSplitFlowEntity.class, splitFlowKey);
-//					if (splitFlowEntity == null) {
-//						throw new IllegalArgumentException("No split flow execution found for key = " + splitFlowKey);
-//					}
-//					splitFlowEntity.setBatchStatus(newBatchStatus);
-//					splitFlowEntity.setExitStatus(runtimeSplitFlowExecution.getExitStatus());
-//					ExecutionStatus executionStatus = runtimeSplitFlowExecution.getFlowStatus();
-//					if (executionStatus != null) {
-//						splitFlowEntity.setInternalStatus(executionStatus.getExtendedBatchStatus().ordinal());
-//					}
-//					if (newBatchStatus.equals(BatchStatus.STARTED)) {
-//						splitFlowEntity.setStartTime(date);
-//					} else if (FINAL_STATUS_SET.contains(newBatchStatus)) {
-//						splitFlowEntity.setEndTime(date);
-//					}
-//					return splitFlowEntity;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
-//	}
+//      @Override
+//      public RemotableSplitFlowEntity updateSplitFlowExecution(final RuntimeSplitFlowExecution runtimeSplitFlowExecution, final BatchStatus newBatchStatus, final Date date)
+//              throws IllegalArgumentException {
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      return new TranRequest<RemotableSplitFlowEntity>(em){
+//                              public RemotableSplitFlowEntity call() {
+//                                      RemotableSplitFlowKey splitFlowKey = new RemotableSplitFlowKey(runtimeSplitFlowExecution.getTopLevelExecutionId(), runtimeSplitFlowExecution.getFlowName());
+//                                      RemotableSplitFlowEntity splitFlowEntity = entityMgr.find(RemotableSplitFlowEntity.class, splitFlowKey);
+//                                      if (splitFlowEntity == null) {
+//                                              throw new IllegalArgumentException("No split flow execution found for key = " + splitFlowKey);
+//                                      }
+//                                      splitFlowEntity.setBatchStatus(newBatchStatus);
+//                                      splitFlowEntity.setExitStatus(runtimeSplitFlowExecution.getExitStatus());
+//                                      ExecutionStatus executionStatus = runtimeSplitFlowExecution.getFlowStatus();
+//                                      if (executionStatus != null) {
+//                                              splitFlowEntity.setInternalStatus(executionStatus.getExtendedBatchStatus().ordinal());
+//                                      }
+//                                      if (newBatchStatus.equals(BatchStatus.STARTED)) {
+//                                              splitFlowEntity.setStartTime(date);
+//                                      } else if (FINAL_STATUS_SET.contains(newBatchStatus)) {
+//                                              splitFlowEntity.setEndTime(date);
+//                                      }
+//                                      return splitFlowEntity;
+//                              }
+//                      }.runInNewOrExistingGlobalTran();
+//              } finally {
+//                      em.close();
+//              }
+//      }
 //
-//	@Override
-//	public RemotableSplitFlowEntity updateSplitFlowExecutionLogDir(final RemotableSplitFlowKey key, final String logDirPath) {
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotableSplitFlowEntity>(em){
-//				public RemotableSplitFlowEntity call() {
-//					RemotableSplitFlowEntity splitFlowEntity = entityMgr.find(RemotableSplitFlowEntity.class, key);
-//					if (splitFlowEntity == null) {
-//						throw new IllegalArgumentException("No split flow execution found for key = " + key);
-//					}
-//					splitFlowEntity.setLogpath(logDirPath);
-//					return splitFlowEntity;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
-//	}
+//      @Override
+//      public RemotableSplitFlowEntity updateSplitFlowExecutionLogDir(final RemotableSplitFlowKey key, final String logDirPath) {
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      return new TranRequest<RemotableSplitFlowEntity>(em){
+//                              public RemotableSplitFlowEntity call() {
+//                                      RemotableSplitFlowEntity splitFlowEntity = entityMgr.find(RemotableSplitFlowEntity.class, key);
+//                                      if (splitFlowEntity == null) {
+//                                              throw new IllegalArgumentException("No split flow execution found for key = " + key);
+//                                      }
+//                                      splitFlowEntity.setLogpath(logDirPath);
+//                                      return splitFlowEntity;
+//                              }
+//                      }.runInNewOrExistingGlobalTran();
+//              } finally {
+//                      em.close();
+//              }
+//      }
 //
-//	@Override
-//	public RemotablePartitionEntity createPartitionExecution(final RemotablePartitionKey partitionKey, final Date createTime) {
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotablePartitionEntity>(em){
-//				public RemotablePartitionEntity call() {
-//					final RemotablePartitionEntity partition = new RemotablePartitionEntity();
-//					partition.setStepName(partitionKey.getStepName());
-//					partition.setPartitionNumber(partitionKey.getPartitionNumber());
-//					partition.setInternalStatus(BatchStatus.STARTING.ordinal());
-//					partition.setCreateTime(createTime);
-//					partition.setServerId(batchLocationService.getServerId());
-//					partition.setRestUrl(batchLocationService.getBatchRestUrl());
-//					JobExecutionEntity jobExec = entityMgr.find(JobExecutionEntity.class, partitionKey.getJobExec());
-//					if (jobExec == null) {
-//						throw new IllegalStateException("Didn't find JobExecutionEntity associated with value: " + partitionKey.getJobExec());
-//					}
-//					partition.setJobExec(jobExec);
-//					jobExec.getPartitionExecutions().add(partition);
-//					entityMgr.persist(partition);
-//					return partition;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
-//	}
+//      @Override
+//      public RemotablePartitionEntity createPartitionExecution(final RemotablePartitionKey partitionKey, final Date createTime) {
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      return new TranRequest<RemotablePartitionEntity>(em){
+//                              public RemotablePartitionEntity call() {
+//                                      final RemotablePartitionEntity partition = new RemotablePartitionEntity();
+//                                      partition.setStepName(partitionKey.getStepName());
+//                                      partition.setPartitionNumber(partitionKey.getPartitionNumber());
+//                                      partition.setInternalStatus(BatchStatus.STARTING.ordinal());
+//                                      partition.setCreateTime(createTime);
+//                                      partition.setServerId(batchLocationService.getServerId());
+//                                      partition.setRestUrl(batchLocationService.getBatchRestUrl());
+//                                      JobExecutionEntity jobExec = entityMgr.find(JobExecutionEntity.class, partitionKey.getJobExec());
+//                                      if (jobExec == null) {
+//                                              throw new IllegalStateException("Didn't find JobExecutionEntity associated with value: " + partitionKey.getJobExec());
+//                                      }
+//                                      partition.setJobExec(jobExec);
+//                                      jobExec.getPartitionExecutions().add(partition);
+//                                      entityMgr.persist(partition);
+//                                      return partition;
+//                              }
+//                      }.runInNewOrExistingGlobalTran();
+//              } finally {
+//                      em.close();
+//              }
+//      }
 //
-//	@Override
-//	public RemotablePartitionEntity updatePartitionExecution(final RuntimePartitionExecution runtimePartitionExecution, final BatchStatus newBatchStatus, final Date date) {
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotablePartitionEntity>(em){
-//				public RemotablePartitionEntity call() {
-//					RemotablePartitionKey partitionKey = new RemotablePartitionKey(runtimePartitionExecution.getTopLevelExecutionId(),
-//							runtimePartitionExecution.getStepName(), runtimePartitionExecution.getPartitionNumber());
-//					RemotablePartitionEntity partitionEntity = entityMgr.find(RemotablePartitionEntity.class, partitionKey);
-//					if (partitionEntity == null) {
-//						throw new IllegalArgumentException("No partition execution found for key = " + partitionKey);
-//					}
-//					partitionEntity.setBatchStatus(newBatchStatus);
-//					partitionEntity.setExitStatus(runtimePartitionExecution.getExitStatus());
-//					partitionEntity.setInternalStatus(runtimePartitionExecution.getBatchStatus().ordinal());
-//					if (newBatchStatus.equals(BatchStatus.STARTED)) {
-//						partitionEntity.setStartTime(date);
-//					} else if (FINAL_STATUS_SET.contains(newBatchStatus)) {
-//						partitionEntity.setEndTime(date);
-//					}
-//					return partitionEntity;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
+//      @Override
+//      public RemotablePartitionEntity updatePartitionExecution(final RuntimePartitionExecution runtimePartitionExecution, final BatchStatus newBatchStatus, final Date date) {
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      return new TranRequest<RemotablePartitionEntity>(em){
+//                              public RemotablePartitionEntity call() {
+//                                      RemotablePartitionKey partitionKey = new RemotablePartitionKey(runtimePartitionExecution.getTopLevelExecutionId(),
+//                                                      runtimePartitionExecution.getStepName(), runtimePartitionExecution.getPartitionNumber());
+//                                      RemotablePartitionEntity partitionEntity = entityMgr.find(RemotablePartitionEntity.class, partitionKey);
+//                                      if (partitionEntity == null) {
+//                                              throw new IllegalArgumentException("No partition execution found for key = " + partitionKey);
+//                                      }
+//                                      partitionEntity.setBatchStatus(newBatchStatus);
+//                                      partitionEntity.setExitStatus(runtimePartitionExecution.getExitStatus());
+//                                      partitionEntity.setInternalStatus(runtimePartitionExecution.getBatchStatus().ordinal());
+//                                      if (newBatchStatus.equals(BatchStatus.STARTED)) {
+//                                              partitionEntity.setStartTime(date);
+//                                      } else if (FINAL_STATUS_SET.contains(newBatchStatus)) {
+//                                              partitionEntity.setEndTime(date);
+//                                      }
+//                                      return partitionEntity;
+//                              }
+//                      }.runInNewOrExistingGlobalTran();
+//              } finally {
+//                      em.close();
+//              }
 //
-//	}
+//      }
 //
-//	@Override
-//	public RemotablePartitionEntity updatePartitionExecutionLogDir(final RemotablePartitionKey key, final String logDirPath) {
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			return new TranRequest<RemotablePartitionEntity>(em){
-//				public RemotablePartitionEntity call() {
-//					RemotablePartitionEntity partitionEntity = entityMgr.find(RemotablePartitionEntity.class, key);
-//					if (partitionEntity == null) {
-//						throw new IllegalArgumentException("No partition execution found for key = " + key);
-//					}
-//					partitionEntity.setLogpath(logDirPath);
-//					return partitionEntity;
-//				}
-//			}.runInNewOrExistingGlobalTran();
-//		} finally {
-//			em.close();
-//		}
-//
-//	}
+    @Override
+    public RemotablePartitionEntity updateRemotablePartitionLogDir(final RemotablePartitionKey key, final String logDirPath) {
+
+        // Simply ignore if we don't have the remotable partition table
+        if (partitionVersion < 2) {
+            return null;
+        }
+
+        EntityManager em = getPsu().createEntityManager();
+        try {
+            return new TranRequest<RemotablePartitionEntity>(em) {
+                @Override
+                public RemotablePartitionEntity call() {
+                    RemotablePartitionEntity partitionEntity = entityMgr.find(RemotablePartitionEntity.class, key);
+                    if (partitionEntity == null) {
+                        return null;
+                        //throw new IllegalArgumentException("No partition execution found for key = " + key);
+                    }
+                    partitionEntity.setLogpath(logDirPath);
+                    return partitionEntity;
+                }
+            }.runInNewOrExistingGlobalTran();
+        } finally {
+            em.close();
+        }
+
+    }
 
     @Override
     public void purgeInGlassfish(String submitter) {
@@ -2542,23 +2698,23 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
 //
 //
 //
-//	@Override
-//	public List<StepThreadExecutionEntity> getStepThreadExecutionsForJobExecutionUnsorted(long execid) throws NoSuchJobExecutionException {
-//		ArrayList<StepThreadExecutionEntity> resultSteps = new ArrayList<StepThreadExecutionEntity>();
-//		EntityManager em = getPsu().createEntityManager();
-//		try {
-//			JobExecutionEntity exec = em.find(JobExecutionEntity.class, execid);
-//			if (exec == null) {
-//				throw new NoSuchJobExecutionException("No job execution found for id = " + execid);
-//			}
-//			for (StepThreadExecutionEntity stepExec : exec.getTopLevelAndPartitionStepExecutions()) {
-//				resultSteps.add(stepExec);
-//			}
-//			return resultSteps;
-//		} finally {
-//			em.close();
-//		}
-//	}
+//      @Override
+//      public List<StepThreadExecutionEntity> getStepThreadExecutionsForJobExecutionUnsorted(long execid) throws NoSuchJobExecutionException {
+//              ArrayList<StepThreadExecutionEntity> resultSteps = new ArrayList<StepThreadExecutionEntity>();
+//              EntityManager em = getPsu().createEntityManager();
+//              try {
+//                      JobExecutionEntity exec = em.find(JobExecutionEntity.class, execid);
+//                      if (exec == null) {
+//                              throw new NoSuchJobExecutionException("No job execution found for id = " + execid);
+//                      }
+//                      for (StepThreadExecutionEntity stepExec : exec.getTopLevelAndPartitionStepExecutions()) {
+//                              resultSteps.add(stepExec);
+//                      }
+//                      return resultSteps;
+//              } finally {
+//                      em.close();
+//              }
+//      }
 
 // probably can do this with one query now
 //    @Override
@@ -2706,6 +2862,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
             throw new PersistenceException(caughtThrowable);
         }
 
+        @Trivial
         protected void resumeAnyExistingLTC() {
             logger.fine("Will resume any LTC");
             if (suspendedLTC != null) {
@@ -2739,7 +2896,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      * @throws Exception
      **/
     @Override
-    public Integer getJobExecutionTableVersionField() {
+    public Integer getJobExecutionEntityVersionField() {
         return executionVersion;
     }
 
@@ -2749,14 +2906,21 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      * @throws Exception
      **/
     @Override
-    public int getJobExecutionTableVersion() throws Exception {
-        return getJobExecutionTableVersion(getPsu());
+    public int getJobExecutionEntityVersion() throws Exception {
+        if (executionVersion != null) {
+            setJobExecutionEntityVersion(getPsu());
+        }
+        return executionVersion;
     }
 
     @FFDCIgnore(PersistenceException.class)
-    private int getJobExecutionTableVersion(PersistenceServiceUnit psu) throws Exception {
-        if (executionVersion != null)
-            return executionVersion;
+    private void setJobExecutionEntityVersion(PersistenceServiceUnit psu) throws Exception {
+
+        // If we have the RemotablePartition table, we're up to date and need the V3 execution entity
+        if (partitionVersion == 2) {
+            executionVersion = 3;
+            return;
+        }
 
         final EntityManager em = psu.createEntityManager();
         try {
@@ -2768,13 +2932,12 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     String queryString = "SELECT COUNT(e.jobParameterElements) FROM JobExecutionEntityV2 e";
                     TypedQuery<Long> query = em.createQuery(queryString, Long.class);
                     query.getSingleResult();
-                    logger.fine("The JOBPARAMETER table exists, job execution table version = 2");
+                    logger.fine("The JOBPARAMETER table exists, job execution entity version = 2");
                     executionVersion = 2;
                     return executionVersion;
                 }
             }.runInNewOrExistingGlobalTran();
 
-            return exec;
         } catch (PersistenceException e) {
             logger.fine("Looking for JobExecutionEntityV2 table support, caught a persistence exception");
             Throwable cause = e.getCause();
@@ -2784,15 +2947,15 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                 logger.fine("Next chained JobExecutionEntityV2 persistence exception: exc class = " + causeClassName + "; causeMsg = " + causeMsg);
                 if ((cause instanceof SQLSyntaxErrorException || causeClassName.contains("SqlSyntaxErrorException")) &&
                     causeMsg != null &&
-                    causeMsg.contains("JOBPARAMETER")) {
+                    (causeMsg.contains("JOBPARAMETER") || causeMsg.contains("ORA-00942"))) {
                     // The table isn't there.
-                    logger.fine("The JOBPARAMETER table does not exist, job execution table version = 1");
+                    logger.fine("The JOBPARAMETER table does not exist, job execution entity version = 1");
                     executionVersion = 1;
-                    return executionVersion;
+                    return;
                 }
                 cause = cause.getCause();
             }
-            logger.fine("Unexpected exception while checking for JobExecutionEntityV2 table version, re-throwing");
+            logger.fine("Unexpected exception while checking for JobExecutionEntityV2 entity version, re-throwing");
             throw e;
         } finally {
             em.close();
@@ -2805,7 +2968,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      * @throws Exception
      **/
     @Override
-    public Integer getJobInstanceTableVersionField() {
+    public Integer getJobInstanceEntityVersionField() {
         return instanceVersion;
     }
 
@@ -2815,15 +2978,15 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
      * @throws Exception
      **/
     @Override
-    public int getJobInstanceTableVersion() throws Exception {
-        return getJobInstanceTableVersion(getPsu());
+    public int getJobInstanceEntityVersion() throws Exception {
+        if (instanceVersion == null) {
+            setJobInstanceEntityVersion(getPsu());
+        }
+        return instanceVersion;
     }
 
     @FFDCIgnore(PersistenceException.class)
-    private int getJobInstanceTableVersion(PersistenceServiceUnit psu) throws Exception {
-        if (instanceVersion != null) {
-            return instanceVersion;
-        }
+    private void setJobInstanceEntityVersion(PersistenceServiceUnit psu) throws Exception {
 
         final EntityManager em = psu.createEntityManager();
 
@@ -2837,7 +3000,7 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                         String queryString = "SELECT COUNT(x.lastUpdatedTime) FROM JobInstanceEntityV2 x";
                         TypedQuery<Long> query = em.createQuery(queryString, Long.class);
                         query.getSingleResult();
-                        logger.fine("The UPDATETIME column exists, job instance table version = 2");
+                        logger.fine("The UPDATETIME column exists, job instance entity version = 2");
                         instanceVersion = 2;
                         return instanceVersion;
                     }
@@ -2851,18 +3014,18 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     logger.fine("Next chained JobInstanceEntityV2 persistence exception: exc class = " + causeClassName + "; causeMsg = " + causeMsg);
                     if ((cause instanceof SQLSyntaxErrorException || causeClassName.contains("SqlSyntaxErrorException")) &&
                         causeMsg != null &&
-                        causeMsg.contains("UPDATETIME")) {
+                        (causeMsg.contains("UPDATETIME") || causeMsg.contains("ORA-00942"))) {
                         // The UPDATETIME column isn't there.
-                        logger.fine("The UPDATETIME column does not exist, job instance table version = 1");
+                        logger.fine("The UPDATETIME column does not exist, job instance entity version = 1");
                         instanceVersion = 1;
-                        return instanceVersion;
+                        return;
                     }
                     cause = cause.getCause();
                 }
 
                 if (instanceVersion == null) {
                     // We did not determine an instance version
-                    logger.fine("Unexpected exception while checking for JobInstanceEntityV2 table version, re-throwing");
+                    logger.fine("Unexpected exception while checking for JobInstanceEntityV2 entity version, re-throwing");
                     throw pe;
                 }
             }
@@ -2876,13 +3039,12 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                         String queryString = "SELECT COUNT(x.groupNames) FROM JobInstanceEntityV3 x";
                         TypedQuery<Long> query = em.createQuery(queryString, Long.class);
                         query.getSingleResult();
-                        logger.fine("The GROUPASSOCIATION table exists, job instance table version = 3");
+                        logger.fine("The GROUPASSOCIATION table exists, job instance entity version = 3");
                         instanceVersion = 3;
                         return instanceVersion;
                     }
                 }.runInNewOrExistingGlobalTran();
 
-                return exec;
             } catch (PersistenceException pe) {
                 logger.fine("Looking for JobInstanceEntityV3 table support, caught a persistence exception");
                 Throwable cause = pe.getCause();
@@ -2892,20 +3054,20 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     logger.fine("Next chained JobInstanceEntityV3 persistence exception: exc class = " + causeClassName + "; causeMsg = " + causeMsg);
                     if ((cause instanceof SQLSyntaxErrorException || causeClassName.contains("SqlSyntaxErrorException")) &&
                         causeMsg != null &&
-                        causeMsg.contains("GROUPASSOCIATION") || causeMsg.contains("GROUPNAMES")) {
+                        (causeMsg.contains("GROUPASSOCIATION") || causeMsg.contains("GROUPNAMES") || causeMsg.contains("ORA-00942"))) {
                         // The GROUPASSOCIATION support isn't there.
-                        logger.fine("The GROUPASSOCIATION table does not exist, job instance table version = 2");
+                        logger.fine("The GROUPASSOCIATION table does not exist, job instance entity version = 2");
                         instanceVersion = 2;
-                        return instanceVersion;
+                        return;
                     }
                     cause = cause.getCause();
                 }
 
-                logger.fine("Unexpected exception while checking for JobInstanceEntityV3 table version, re-throwing");
+                logger.fine("Unexpected exception while checking for JobInstanceEntityV3 entity version, re-throwing");
                 throw pe;
             }
         } finally {
-            logger.fine("determined the job instance table version: " + instanceVersion);
+            logger.fine("determined the job instance entity version: " + instanceVersion);
             em.close();
         }
     }
@@ -2932,6 +3094,116 @@ public class JPAPersistenceManagerImpl extends AbstractPersistenceManager implem
                     return instance;
                 }
             }.runInNewOrExistingGlobalTran();
+        } finally {
+            em.close();
+        }
+    }
+
+    @FFDCIgnore(PersistenceException.class)
+    private void setPartitionEntityVersion(PersistenceServiceUnit psu) throws Exception {
+
+        final EntityManager em = psu.createEntityManager();
+        try {
+
+            Integer exec = new TranRequest<Integer>(em) {
+                @Override
+                public Integer call() throws Exception {
+                    // Verify that REMOTABLEPARTITION exists by running a query against it.
+                    String queryString = "SELECT COUNT(e) FROM RemotablePartitionEntity e";
+                    TypedQuery<Long> query = em.createQuery(queryString, Long.class);
+                    query.getSingleResult();
+                    logger.fine("The REMOTABLEPARTITION table exists, partition entity version = 2");
+                    partitionVersion = 2;
+                    return partitionVersion;
+                }
+            }.runInNewOrExistingGlobalTran();
+
+        } catch (PersistenceException e) {
+            logger.fine("Looking for RemotablePartition table support, caught a persistence exception");
+            Throwable cause = e.getCause();
+            while (cause != null) {
+                final String causeMsg = cause.getMessage();
+                final String causeClassName = cause.getClass().getCanonicalName();
+                logger.fine("Next chained RemotablePartition persistence exception: exc class = " + causeClassName + "; causeMsg = " + causeMsg);
+                if ((cause instanceof SQLSyntaxErrorException || causeClassName.contains("SqlSyntaxErrorException")
+			|| causeClassName.contains("SQLServerException")) &&
+                    causeMsg != null &&
+                    (causeMsg.contains("REMOTABLEPARTITION") || causeMsg.contains("ORA-00942"))) {
+                    // The table isn't there.
+                    logger.fine("The REMOTABLEPARTITION table does not exist, partition entity version = 1");
+                    partitionVersion = 1;
+                    // We need to set this here otherwise we'll try to load execution V3 without remotable partition and blow up
+                    executionVersion = 2;
+                    return;
+                }
+                cause = cause.getCause();
+            }
+            logger.fine("Unexpected exception while checking for RemotablePartition entity version, re-throwing");
+            throw e;
+        } finally {
+            em.close();
+        }
+    }
+
+    // Step thread exec version is tied to partition version with RemotablePartition update, may have to decouple in the future
+    @Override
+    public Integer getStepThreadExecutionEntityVersionField() {
+        return partitionVersion;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public WSRemotablePartitionState getRemotablePartitionInternalState(final RemotablePartitionKey remotablePartitionKey) {
+
+        // Simply ignore if we don't have the remotable partition table
+        if (partitionVersion < 2) {
+            return null;
+        }
+
+        final EntityManager em = getPsu().createEntityManager();
+        try {
+            RemotablePartitionEntity rp = new TranRequest<RemotablePartitionEntity>(em) {
+                @Override
+                public RemotablePartitionEntity call() throws Exception {
+                    RemotablePartitionEntity rp = em.find(RemotablePartitionEntity.class, remotablePartitionKey);
+                    if (rp == null) {
+                        logger.finer("No RemotablePartition found for key = " + remotablePartitionKey
+                                     + ", maybe because it was dispatched from a JVM configured to use the older table/entity versions.");
+                        // This can be null because if the partition dispatcher uses an older version, and so never created the remotable partition
+                        return null;
+                    }
+                    return rp;
+                }
+            }.runInNewOrExistingGlobalTran();
+
+            return rp != null ? rp.getInternalStatus() : null;
+
+        } finally {
+            em.close();
+        }
+    }
+
+    @Override
+    public List<WSRemotablePartitionExecution> getRemotablePartitionsForJobExecution(final long jobExecutionId) {
+        if (partitionVersion < 2) {
+            return null;
+        }
+
+        final EntityManager em = getPsu().createEntityManager();
+        try {
+            JobExecutionEntity exec = new TranRequest<JobExecutionEntity>(em) {
+                @Override
+                public JobExecutionEntity call() {
+                    JobExecutionEntity je = em.find(JobExecutionEntityV3.class, jobExecutionId);
+                    if (je == null) {
+                        logger.finer("No job execution found with execution id = " + jobExecutionId);
+                        return null;
+                    }
+                    return je;
+                }
+            }.runInNewOrExistingGlobalTran();
+
+            return new ArrayList<WSRemotablePartitionExecution>(exec.getRemotablePartitions());
         } finally {
             em.close();
         }

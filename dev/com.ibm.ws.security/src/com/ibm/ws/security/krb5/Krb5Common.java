@@ -1,14 +1,13 @@
-/*
- * IBM Confidential
+/*******************************************************************************
+ * Copyright (c) 2018 IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
  *
- * OCO Source Materials
- *
- * Copyright IBM Corp. 2018
- *
- * The source code for this program is not published or otherwise divested
- * of its trade secrets, irrespective of what has been deposited with the
- * U.S. Copyright Office.
- */
+ * Contributors:
+ *     IBM Corporation - initial API and implementation
+ *******************************************************************************/
 package com.ibm.ws.security.krb5;
 
 import java.util.Map;
@@ -36,20 +35,17 @@ public class Krb5Common {
     // Kerberos mechanism OID
     static public Oid KRB5_MECH_OID;
 
-    // Is JDK 1.8 or higher
-    static public boolean isJdk18OrUp = JavaInfo.majorVersion() >= 8;
-    // Is IBM JDK 1.8 or lower
-    static public boolean isIBMJdk18OrLower = (JavaInfo.vendor() == Vendor.IBM && JavaInfo.majorVersion() <= 8);
+    // Is IBM JDK 1.8
+    static public boolean isIBMJdk18 = (JavaInfo.vendor() == Vendor.IBM && JavaInfo.majorVersion() == 8);
 
-    // Is Oracle JDK 1.8 or higher
-    // static public boolean isOracleJdk18OrHigher = (JavaInfo.vendor() == Vendor.ORACLE && JavaInfo.majorVersion() >= 8);
+    // Is Oracle JDK
+    static public boolean isOracleJdk = (JavaInfo.vendor() == Vendor.ORACLE);
 
     // Is IBM, Oracle and Open JDK 11 or higher
     static private boolean isJdk11OrUp = JavaInfo.majorVersion() >= 11;
 
     // SPNEGO support IBM JDK 8 and lower and JDK 11 and higher
-    //static public boolean isOtherSupportJDKs = isOracleJdk18OrHigher || isJdk11OrUp;
-    static public boolean isOtherSupportJDKs = isJdk11OrUp;
+    static public boolean isOtherSupportJDKs = isOracleJdk || isJdk11OrUp;
 
     // Kerberos KDC host name
     static public final String KRB5_KDC = "java.security.krb5.kdc";
